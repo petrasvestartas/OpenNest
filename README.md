@@ -1,2 +1,2 @@
 # OpenNest
-DeepNestPort implemented in Rhino: https://github.com/fel88/DeepNestPort
+DeepNestPort implemented in Rhino and original of code is made by fel88: https://github.com/fel88/DeepNestPort
