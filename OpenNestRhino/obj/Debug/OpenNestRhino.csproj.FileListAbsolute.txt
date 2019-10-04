@@ -1,0 +1,13 @@
+C:\Users\petra\OneDrive\02_VisualStudio\OpenNest-master\OpenNest-master\OpenNestRhino\bin\OpenNestRhino.dll
+C:\Users\petra\OneDrive\02_VisualStudio\OpenNest-master\OpenNest-master\OpenNestRhino\bin\OpenNestRhino.pdb
+C:\Users\petra\OneDrive\02_VisualStudio\OpenNest-master\OpenNest-master\OpenNestRhino\bin\OpenNestLib.dll
+C:\Users\petra\OneDrive\02_VisualStudio\OpenNest-master\OpenNest-master\OpenNestRhino\bin\OpenNestMinkowskiWrapper.dll
+C:\Users\petra\OneDrive\02_VisualStudio\OpenNest-master\OpenNest-master\OpenNestRhino\bin\OpenNestLib.pdb
+C:\Users\petra\OneDrive\02_VisualStudio\OpenNest-master\OpenNest-master\OpenNestRhino\bin\OpenNestMinkowskiWrapper.pdb
+C:\Users\petra\OneDrive\02_VisualStudio\OpenNest-master\OpenNest-master\OpenNestRhino\obj\Debug\OpenNestRhino.csprojAssemblyReference.cache
+C:\Users\petra\OneDrive\02_VisualStudio\OpenNest-master\OpenNest-master\OpenNestRhino\obj\Debug\OpenNestRhino.csproj.CoreCompileInputs.cache
+C:\Users\petra\OneDrive\02_VisualStudio\OpenNest-master\OpenNest-master\OpenNestRhino\obj\Debug\OpenNestRhino.csproj.CopyComplete
+C:\Users\petra\OneDrive\02_VisualStudio\OpenNest-master\OpenNest-master\OpenNestRhino\obj\Debug\OpenNestRhino.dll
+C:\Users\petra\OneDrive\02_VisualStudio\OpenNest-master\OpenNest-master\OpenNestRhino\obj\Debug\OpenNestRhino.pdb
+C:\Users\petra\AppData\Roaming\Grasshopper\Libraries\OpenNest\OpenNestRhino.dll
+C:\Users\petra\AppData\Roaming\Grasshopper\Libraries\OpenNest\OpenNestRhino.pdb
