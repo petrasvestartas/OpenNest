@@ -1,8 +1,0 @@
-C:\Users\vestarta\AppData\Roaming\Grasshopper\Libraries\OpenNest\OpenNest.dll
-C:\Users\vestarta\AppData\Roaming\Grasshopper\Libraries\OpenNest\OpenNest.pdb
-C:\Libs\Nest\DeepNestPort-master\OpenNest\obj\Debug\DeepNestRhino.csprojResolveAssemblyReference.cache
-C:\Libs\Nest\DeepNestPort-master\OpenNest\obj\Debug\OpenNest.Properties.Resources.resources
-C:\Libs\Nest\DeepNestPort-master\OpenNest\obj\Debug\DeepNestRhino.csproj.GenerateResource.Cache
-C:\Libs\Nest\DeepNestPort-master\OpenNest\obj\Debug\DeepNestRhino.csproj.CoreCompileInputs.cache
-C:\Libs\Nest\DeepNestPort-master\OpenNest\obj\Debug\OpenNest.dll
-C:\Libs\Nest\DeepNestPort-master\OpenNest\obj\Debug\OpenNest.pdb
