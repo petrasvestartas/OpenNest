@@ -1,0 +1,9 @@
+---
+name: OpenNest
+version: 1.3.2
+authors:
+- Petras Vestartas
+description: 2D Packing and Fabrication Utilities
+url: www.petrasvestartas.com
+secret:
+  id: 20563e54-568f-5f1f-b61b-71a1781ef12f
