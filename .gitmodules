@@ -1,0 +1,3 @@
+[submodule "external/nest"]
+	path = external/nest
+	url = https://github.com/petrasvestartas/nest.git
