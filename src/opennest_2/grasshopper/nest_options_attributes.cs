@@ -108,6 +108,7 @@ namespace opennest_2
         const int Pad = 3;
         const int LabelW = 92;    // label column width
         const int CtrlMinW = 64;
+        const int CaretW = 12;    // reserved width for the dropdown caret on Choice rows
 
         private readonly INestOptionsHost _host;
         private RectangleF _runRect = RectangleF.Empty;
@@ -125,26 +126,39 @@ namespace opennest_2
         protected override void Layout()
         {
             base.Layout();
-            if (!HasOptions) { _ctrlRects = new RectangleF[0]; _headerRect = RectangleF.Empty; return; }
+            if (!HasOptions) { _runRect = RectangleF.Empty; _headerRect = RectangleF.Empty; _ctrlRects = new RectangleF[0]; return; }
 
+            // Anchor the whole control band to the natural body bottom captured BEFORE we grow Bounds,
+            // using integer-only math. The previous code positioned rows relative to the *post-grow*
+            // Bounds.Bottom, which assumes base.Layout() produces the same natural body height on every
+            // platform — it does not (macOS Rhino's libgdiplus shim measures the name/param column with
+            // different font metrics), so the band drifted off the body. Capturing the bottom first and
+            // building downward with whole-pixel heights makes the result identical on Windows and macOS.
             int n = RowCount;
-            // Layout (top -> bottom): Run button, Options header, then option rows (when expanded).
-            float extra = RunH + HeaderH + n * RowH + Pad;
+            int bodyBottom = (int)Math.Round(Bounds.Bottom);
+            int left = (int)Math.Round(Bounds.Left);
+            int width = (int)Math.Round(Bounds.Width);
+            int innerW = width - 2 * Pad;
+
+            // extra == the exact sum of every element + gap drawn below the body (so nothing can exceed it).
+            int extra = Pad + RunH + Pad + HeaderH + (n > 0 ? Pad + n * RowH : 0) + Pad;
 
             RectangleF b = Bounds;
-            b.Height += extra;
+            b.Height = bodyBottom - b.Y + extra;   // set (not accumulate) from the captured integer bottom
             Bounds = b;
 
-            float top = Bounds.Bottom - extra + Pad * 0.5f;
-            _runRect = new RectangleF(Bounds.Left + Pad, top, Bounds.Width - 2 * Pad, RunH - 2);
-            _headerRect = new RectangleF(Bounds.Left + Pad, top + RunH, Bounds.Width - 2 * Pad, HeaderH);
+            int y = bodyBottom + Pad;
+            _runRect = new RectangleF(left + Pad, y, innerW, RunH); y += RunH + Pad;
+            _headerRect = new RectangleF(left + Pad, y, innerW, HeaderH); y += HeaderH;
 
             _ctrlRects = new RectangleF[n];
-            float ctrlX = Bounds.Left + Pad + LabelW;
-            float ctrlW = Math.Max(CtrlMinW, Bounds.Width - 2 * Pad - LabelW);
-            float rowsTop = top + RunH + HeaderH;
-            for (int i = 0; i < n; i++)
-                _ctrlRects[i] = new RectangleF(ctrlX, rowsTop + i * RowH + 1, ctrlW, RowH - 2);
+            if (n > 0)
+            {
+                y += Pad;
+                int ctrlX = left + Pad + LabelW;
+                int ctrlW = Math.Max(CtrlMinW, innerW - LabelW);
+                for (int i = 0; i < n; i++) { _ctrlRects[i] = new RectangleF(ctrlX, y, ctrlW, RowH); y += RowH; }
+            }
         }
 
         protected override void Render(GH_Canvas canvas, Graphics g, GH_CanvasChannel channel)
@@ -160,16 +174,11 @@ namespace opennest_2
 
             using (var whiteBrush = new SolidBrush(Color.FromArgb(alpha, Color.White)))
             using (var labelBrush = new SolidBrush(Color.FromArgb(alpha, Color.Black)))
-            using (var sfCenter = new StringFormat
+            // Horizontal-only trimming/wrap control. Vertical centering is done manually in CenteredText
+            // (StringFormat.LineAlignment.Center is unreliable under macOS Rhino's libgdiplus shim).
+            using (var sfText = new StringFormat
             {
-                LineAlignment = StringAlignment.Center,
-                Alignment = StringAlignment.Center,
-                Trimming = StringTrimming.EllipsisCharacter,
-                FormatFlags = StringFormatFlags.NoWrap
-            })
-            using (var sfLabel = new StringFormat
-            {
-                LineAlignment = StringAlignment.Center,
+                LineAlignment = StringAlignment.Near,
                 Alignment = StringAlignment.Near,
                 Trimming = StringTrimming.EllipsisCharacter,
                 FormatFlags = StringFormatFlags.NoWrap
@@ -192,9 +201,13 @@ namespace opennest_2
                     return p;
                 }
 
-                // A raised, glossy button: drop shadow + vertical gradient + top highlight + dark border.
-                void Button(Rectangle r, string s, Color baseCol)
+                // A raised, glossy button: drop shadow + vertical gradient + dark border, with an optional
+                // leading vector icon followed by centered text. Icons are drawn as geometry (not Unicode
+                // glyphs) so layout never depends on per-platform font fallback. `hit` is the full hit-test
+                // rect from Layout(); the capsule is inset 1px vertically for visual breathing room only.
+                void Button(Rectangle hit, string s, Color baseCol, IconKind icon = IconKind.None)
                 {
+                    Rectangle r = Rectangle.Inflate(hit, 0, -1);
                     int rad = Math.Min(3, r.Height / 2);   // less-rounded corners
                     var sm = g.SmoothingMode;
                     g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -217,7 +230,20 @@ namespace opennest_2
                             g.DrawPath(border, path);
                     }
                     g.SmoothingMode = sm;
-                    g.DrawString(s, font, whiteBrush, r, sfCenter);
+
+                    // Center the icon+text group as a unit so they never overlap (mirrors GH_Capsule).
+                    int iconSz = icon == IconKind.None ? 0 : (int)Math.Round(r.Height * 0.45f);
+                    int gap = icon == IconKind.None ? 0 : 4;
+                    float textW = string.IsNullOrEmpty(s) ? 0 : g.MeasureString(s, font, r.Width, sfText).Width;
+                    float groupW = iconSz + gap + textW;
+                    float gx = r.X + Math.Max(0, (r.Width - groupW) / 2f);
+                    if (icon != IconKind.None)
+                    {
+                        var ib = new RectangleF(gx, r.Y + (r.Height - iconSz) / 2f, iconSz, iconSz);
+                        DrawIcon(g, ib, icon, A(Color.White));
+                        gx += iconSz + gap;
+                    }
+                    CenteredText(g, s, font, whiteBrush, new RectangleF(gx, r.Y, r.Right - gx, r.Height), sfText);
                 }
 
                 Color dark = Color.FromArgb(64, 64, 64);
@@ -225,13 +251,12 @@ namespace opennest_2
 
                 // ---- Run button (always visible, above the Options header): BLACK = Run, RED = Stop ----
                 bool busy = _host.IsBusy;
-                Button(GH_Convert.ToRectangle(_runRect), busy ? "■ Stop" : "▶ Run",
-                       busy ? Color.FromArgb(180, 50, 50) : black);
+                Button(GH_Convert.ToRectangle(_runRect), busy ? "Stop" : "Run",
+                       busy ? Color.FromArgb(180, 50, 50) : black, busy ? IconKind.Stop : IconKind.Play);
 
                 // ---- collapsible header ----
                 Rectangle hRect = GH_Convert.ToRectangle(_headerRect);
-                string arrow = _host.OptionsExpanded ? "▾" : "▸";
-                Button(hRect, arrow + " Options", dark);
+                Button(hRect, "Options", dark, _host.OptionsExpanded ? IconKind.ChevronDown : IconKind.ChevronRight);
 
                 if (!_host.OptionsExpanded) return;
 
@@ -241,15 +266,68 @@ namespace opennest_2
                 {
                     var opt = opts[i];
                     Rectangle ctrl = GH_Convert.ToRectangle(_ctrlRects[i]);
-                    var labelRect = new Rectangle((int)(Bounds.Left + Pad), ctrl.Y, LabelW - Pad, ctrl.Height);
+                    var labelRect = new RectangleF(Bounds.Left + Pad, ctrl.Y, LabelW - Pad, ctrl.Height);
 
-                    g.DrawString(opt.Label, font, labelBrush, labelRect, sfLabel);
+                    CenteredText(g, opt.Label, font, labelBrush, labelRect, sfText);
 
-                    string txt = opt.Display();
-                    if (opt.Kind == NestOptionKind.Choice) txt += "  ▼";
-                    Button(ctrl, txt, dark);
+                    Button(ctrl, opt.Display(), dark);
+                    if (opt.Kind == NestOptionKind.Choice)
+                    {
+                        // dropdown caret as geometry at the right edge of the value button
+                        var inner = Rectangle.Inflate(ctrl, 0, -1);
+                        int cs = Math.Min(CaretW - 4, inner.Height - 6);
+                        var cb = new RectangleF(inner.Right - CaretW + (CaretW - cs) / 2f,
+                                                inner.Y + (inner.Height - cs) / 2f, cs, cs);
+                        DrawIcon(g, cb, IconKind.CaretDown, A(Color.White));
+                    }
                 }
             }
+        }
+
+        private enum IconKind { None, Play, Stop, ChevronDown, ChevronRight, CaretDown }
+
+        // Draws a small UI glyph as pure vector geometry inside `box`, so its position/size never depend on
+        // per-platform font fallback (the macOS GDI+ shim substitutes a different font for Unicode arrows,
+        // which shifted the old glyph-based icons). Filled/stroked with `color` (already alpha-faded).
+        private static void DrawIcon(Graphics g, RectangleF box, IconKind kind, Color color)
+        {
+            var sm = g.SmoothingMode;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            float x = box.X, y = box.Y, w = box.Width, h = box.Height;
+            float cx = x + w / 2f, cy = y + h / 2f;
+            using (var brush = new SolidBrush(color))
+            using (var pen = new Pen(color, Math.Max(1f, h * 0.16f)) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+            {
+                switch (kind)
+                {
+                    case IconKind.Play:
+                        g.FillPolygon(brush, new[] { new PointF(x, y), new PointF(x, y + h), new PointF(x + w, cy) });
+                        break;
+                    case IconKind.Stop:
+                        g.FillRectangle(brush, x, y, w, h);
+                        break;
+                    case IconKind.CaretDown:
+                        g.FillPolygon(brush, new[] { new PointF(x, y + h * 0.25f), new PointF(x + w, y + h * 0.25f), new PointF(cx, y + h * 0.75f) });
+                        break;
+                    case IconKind.ChevronDown:
+                        g.DrawLines(pen, new[] { new PointF(x + w * 0.2f, y + h * 0.35f), new PointF(cx, y + h * 0.65f), new PointF(x + w * 0.8f, y + h * 0.35f) });
+                        break;
+                    case IconKind.ChevronRight:
+                        g.DrawLines(pen, new[] { new PointF(x + w * 0.35f, y + h * 0.2f), new PointF(x + w * 0.65f, cy), new PointF(x + w * 0.35f, y + h * 0.8f) });
+                        break;
+                }
+            }
+            g.SmoothingMode = sm;
+        }
+
+        // Draws `s` horizontally per `sf` but vertically centered in `r` by measured height — robust on
+        // macOS where StringFormat.LineAlignment.Center mis-centers under the libgdiplus shim.
+        private static void CenteredText(Graphics g, string s, Font f, Brush br, RectangleF r, StringFormat sf)
+        {
+            if (string.IsNullOrEmpty(s)) return;
+            float th = g.MeasureString(s, f, (int)Math.Ceiling(r.Width), sf).Height;
+            var layout = new RectangleF(r.X, r.Y + (r.Height - th) / 2f, r.Width, th);
+            g.DrawString(s, f, br, layout, sf);
         }
 
         public override GH_ObjectResponse RespondToMouseDown(GH_Canvas canvas, GH_CanvasMouseEvent e)
