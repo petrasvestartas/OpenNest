@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Standalone, Rhino-free demonstration of the two OpenNest engines.
+       It references ONLY the two existing P/Invoke wrappers (which depend on nothing but
+       System.Runtime.InteropServices) and the native solver DLLs - no RhinoCommon, no
+       nest_geo/nest_sheets (those need RhinoDoc.ActiveDoc). See the plan for the design. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>opennest_console</AssemblyName>
+    <RootNamespace>OpenNestConsole</RootNamespace>
+    <!-- The solver DLLs are native x64; force an x64 process so the bare-name P/Invoke binds. -->
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+
+  <!-- Reuse the existing P/Invoke wrappers verbatim (single source of truth for the C ABI). -->
+  <ItemGroup>
+    <Compile Include="..\opennest_2\nest_lib\NfpNestWrapper\NfpNestWrapper.cs" Link="Wrappers\NfpNestWrapper.cs" />
+    <Compile Include="..\opennest_2\nest_lib\NestPhysicsWrapper\NestPhysicsWrapper.cs" Link="Wrappers\NestPhysicsWrapper.cs" />
+  </ItemGroup>
+
+  <!-- Copy whichever native solver DLLs exist next to the exe so the bare-name P/Invoke resolves.
+       nest_physics.dll ships pre-built under opennest_2/; nfp_nest.dll must be built from
+       opennest_cpp (see README) - the console degrades gracefully if it is absent. -->
+  <Target Name="CopyNativeDlls" AfterTargets="Build">
+    <ItemGroup>
+      <NativeDll Include="..\opennest_2\nest_physics.dll" />
+      <NativeDll Include="..\opennest_2\nfp_nest.dll" />
+      <NativeDll Include="..\nest_physics_cpp\build\Release\nest_physics.dll" />
+      <NativeDll Include="..\opennest_cpp\build\Release\nfp_nest.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(NativeDll)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true"
+          Condition="Exists('%(NativeDll.Identity)')" />
+  </Target>
+
+</Project>

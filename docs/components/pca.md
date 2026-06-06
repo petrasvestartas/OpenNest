@@ -1,6 +1,6 @@
 # Principal Component Analysis
 
-Finds the principal axes of a point set and returns the aligned plane and bounding box.
+Returns an oriented bounding box aligned to a point set's **edges** — a minimum‑area rectangle for flat (planar) inputs and a minimum‑volume box for solids — together with the aligned plane and the box's 8 corner points. Unlike a plain covariance‑PCA, the box stays edge‑aligned even for cubes, squares, and other symmetric shapes.
 
 ## Inputs
 
