@@ -2,6 +2,16 @@
 
 Finds the largest circle that fits inside each closed polyline.
 
+## Example
+
+**Files to download:**
+
+- [⬇ inscribed_circle.ghx](files/inscribe_circle/inscribed_circle.ghx)
+
+![inscribe_circle — inscribed_circle](img/inscribe_circle/inscribed_circle.png)
+
+![inscribe_circle — inscribed_circle_screenshot](img/inscribe_circle/inscribed_circle_screenshot.png)
+
 ## Inputs
 
 | Parameter | Type | Access | Description |
@@ -14,14 +24,3 @@ Finds the largest circle that fits inside each closed polyline.
 | Parameter | Type | Description |
 | --- | --- | --- |
 | **Circle** (C) | Circle | Largest inscribed circle |
-
-## Example
-
-**Files to download:**
-
-- [⬇ inscribed_circle.ghx](files/inscribe_circle/inscribed_circle.ghx)
-
-![inscribe_circle — inscribed_circle](img/inscribe_circle/inscribed_circle.png)
-
-![inscribe_circle — inscribed_circle_screenshot](img/inscribe_circle/inscribed_circle_screenshot.png)
-

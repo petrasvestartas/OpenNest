@@ -2,6 +2,16 @@
 
 Lays objects out in a row, orienting each from 3D to 2D with a chosen spacing.
 
+## Example
+
+**Files to download:**
+
+- [⬇ pack_objects.ghx](files/pack/pack_objects.ghx)
+
+![pack — pack_objects](img/pack/pack_objects.png)
+
+![pack — pack_objects_screenshot](img/pack/pack_objects_screenshot.png)
+
 ## Inputs
 
 | Parameter | Type | Access | Description |
@@ -18,14 +28,3 @@ Lays objects out in a row, orienting each from 3D to 2D with a chosen spacing.
 | --- | --- | --- |
 | **Geo** (G) | Geometry | Packed objects |
 | **Transformation** (T) | Transform | Transform applied to each object |
-
-## Example
-
-**Files to download:**
-
-- [⬇ pack_objects.ghx](files/pack/pack_objects.ghx)
-
-![pack — pack_objects](img/pack/pack_objects.png)
-
-![pack — pack_objects_screenshot](img/pack/pack_objects_screenshot.png)
-

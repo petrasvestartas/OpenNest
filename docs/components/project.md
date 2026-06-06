@@ -2,6 +2,16 @@
 
 Projects a polyline onto its best-fit plane and returns that plane.
 
+## Example
+
+**Files to download:**
+
+- [⬇ project_to_plane.ghx](files/project/project_to_plane.ghx)
+
+![project — project_to_plane](img/project/project_to_plane.png)
+
+![project — project_to_plane_screenshot](img/project/project_to_plane_screenshot.png)
+
 ## Inputs
 
 | Parameter | Type | Access | Description |
@@ -14,14 +24,3 @@ Projects a polyline onto its best-fit plane and returns that plane.
 | --- | --- | --- |
 | **Polyline** (P) | Curve | Projected polyline |
 | **Plane** (Pl) | Plane | Best-fit plane |
-
-## Example
-
-**Files to download:**
-
-- [⬇ project_to_plane.ghx](files/project/project_to_plane.ghx)
-
-![project — project_to_plane](img/project/project_to_plane.png)
-
-![project — project_to_plane_screenshot](img/project/project_to_plane_screenshot.png)
-

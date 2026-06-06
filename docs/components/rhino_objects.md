@@ -2,6 +2,17 @@
 
 Reads referenced Rhino objects, with attributes such as text, into planar Breps for nesting.
 
+## Example
+
+**Files to download:**
+
+- [⬇ rhino_objects.3dm](files/rhino_objects/rhino_objects.3dm)
+- [⬇ rhino_objects.gh](files/rhino_objects/rhino_objects.gh)
+
+![rhino_objects — rhino_objects](img/rhino_objects/rhino_objects.png)
+
+![rhino_objects — rhino_objects_screenshot](img/rhino_objects/rhino_objects_screenshot.png)
+
 ## Inputs
 
 | Parameter | Type | Access | Description |
@@ -15,15 +26,3 @@ Reads referenced Rhino objects, with attributes such as text, into planar Breps 
 | --- | --- | --- |
 | **Breps** (B) | Brep | Planar Breps |
 | **Geometry as guid** (G) | Generic | Referenced geometry as guid (can be mesh, brep, curves in one list) |
-
-## Example
-
-**Files to download:**
-
-- [⬇ rhino_objects.3dm](files/rhino_objects/rhino_objects.3dm)
-- [⬇ rhino_objects.gh](files/rhino_objects/rhino_objects.gh)
-
-![rhino_objects — rhino_objects](img/rhino_objects/rhino_objects.png)
-
-![rhino_objects — rhino_objects_screenshot](img/rhino_objects/rhino_objects_screenshot.png)
-

@@ -2,6 +2,16 @@
 
 Returns the two base edges and their lengths for an object's oriented bounding box.
 
+## Example
+
+**Files to download:**
+
+- [⬇ bounding_box_edges.ghx](files/bbox_edges/bounding_box_edges.ghx)
+
+![bbox_edges — bounding_box_edges](img/bbox_edges/bounding_box_edges.png)
+
+![bbox_edges — bounding_box_edges_screenshot](img/bbox_edges/bounding_box_edges_screenshot.png)
+
 ## Inputs
 
 | Parameter | Type | Access | Description |
@@ -18,14 +28,3 @@ Returns the two base edges and their lengths for an object's oriented bounding b
 | **D0** (Dist0) | Number | Length of the first base edge |
 | **D1** (Dist1) | Number | Length of the second base edge |
 | **B** (Box) | Box | Oriented bounding box |
-
-## Example
-
-**Files to download:**
-
-- [⬇ bounding_box_edges.ghx](files/bbox_edges/bounding_box_edges.ghx)
-
-![bbox_edges — bounding_box_edges](img/bbox_edges/bounding_box_edges.png)
-
-![bbox_edges — bounding_box_edges_screenshot](img/bbox_edges/bounding_box_edges_screenshot.png)
-

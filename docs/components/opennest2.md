@@ -2,6 +2,16 @@
 
 Nests parts onto sheets with the no-fit-polygon genetic solver, keeping each part's attributes. Feed it the Sheets and Geometry components.
 
+## Example
+
+**Files to download:**
+
+- [⬇ opennest2.ghx](files/opennest2/opennest2.ghx)
+
+![opennest2 — opennest2](img/opennest2/opennest2.png)
+
+![opennest2 — opennest2_screenshot](img/opennest2/opennest2_screenshot.png)
+
 ## Inputs
 
 | Parameter | Type | Access | Description |
@@ -37,14 +47,3 @@ On-canvas settings shown on the component body (zoom in on the component to reve
 | **All Rotations** | Choice | On | Off · On | Try every orientation per part for the tightest packing — **C++ engine only** (the C# engine ignores it and uses **Rotations**). Capped at 8 orientations so a large **Rotations** value can't hang the solver. |
 | **Element Holes** | Choice | Fill | Off · Fill | Nest smaller parts **inside** larger parts' holes. |
 | **Sheet Font** | Text | `MecSoft_Font-1 1` | — | Sheet-number label: font name + text size. |
-
-## Example
-
-**Files to download:**
-
-- [⬇ opennest2.ghx](files/opennest2/opennest2.ghx)
-
-![opennest2 — opennest2](img/opennest2/opennest2.png)
-
-![opennest2 — opennest2_screenshot](img/opennest2/opennest2_screenshot.png)
-

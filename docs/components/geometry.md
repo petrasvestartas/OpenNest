@@ -2,6 +2,20 @@
 
 Prepares parts for nesting: separates outlines (with holes) from attached attributes; optional simplify, convex hull and copies.
 
+## Example
+
+**Files to download:**
+
+- [⬇ geometry.ghx](files/geometry/geometry.ghx)
+
+![geometry — geometry](img/geometry/geometry.png)
+
+![geometry — geometry_simplification](img/geometry/geometry_simplification.png)
+
+![geometry — geometry_screenshot](img/geometry/geometry_screenshot.png)
+
+![geometry — geometry_simplification_screenshot](img/geometry/geometry_simplification_screenshot.png)
+
 ## Inputs
 
 | Parameter | Type | Access | Description |
@@ -18,18 +32,3 @@ Prepares parts for nesting: separates outlines (with holes) from attached attrib
 | --- | --- | --- |
 | **Geometry** | Generic | Prepared parts ready for nesting |
 | **Borders** | Curve | Outline border curves per part |
-
-## Example
-
-**Files to download:**
-
-- [⬇ geometry.ghx](files/geometry/geometry.ghx)
-
-![geometry — geometry](img/geometry/geometry.png)
-
-![geometry — geometry_simplification](img/geometry/geometry_simplification.png)
-
-![geometry — geometry_screenshot](img/geometry/geometry_screenshot.png)
-
-![geometry — geometry_simplification_screenshot](img/geometry/geometry_simplification_screenshot.png)
-

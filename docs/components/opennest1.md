@@ -2,6 +2,16 @@
 
 Nests parts onto sheets with the no-fit-polygon solver (no attributes). Takes curves or surfaces directly; supports multi-start Tries and a live preview.
 
+## Example
+
+**Files to download:**
+
+- [⬇ opennest1.ghx](files/opennest1/opennest1.ghx)
+
+![opennest1 — opennest1](img/opennest1/opennest1.png)
+
+![opennest1 — opennest1_screenshot](img/opennest1/opennest1_screenshot.png)
+
 ## Inputs
 
 | Parameter | Type | Access | Description |
@@ -27,14 +37,3 @@ Nests parts onto sheets with the no-fit-polygon solver (no attributes). Takes cu
 | **ID** | Integer | Polygon id number |
 | **Transform** | Transform | Placement transform per part. |
 | **IDS** | Integer | Sheet id number |
-
-## Example
-
-**Files to download:**
-
-- [⬇ opennest1.ghx](files/opennest1/opennest1.ghx)
-
-![opennest1 — opennest1](img/opennest1/opennest1.png)
-
-![opennest1 — opennest1_screenshot](img/opennest1/opennest1_screenshot.png)
-

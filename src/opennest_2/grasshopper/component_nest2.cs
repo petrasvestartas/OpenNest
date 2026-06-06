@@ -54,8 +54,21 @@ namespace opennest_2
         private GH_Structure<GH_Transform> _out_xforms;
         private GH_Structure<GH_Integer> _out_sheetid;
         private readonly System.Timers.Timer _timer;            // ~8 fps clock: live label + live geometry
-        private static readonly object _nfpGate = new object(); // the SvgNest GA uses process-global caches
-        private static bool _nfpBusy = false;                   // => only one NFP solve at a time across the process
+        // Engine arbitration is SHARED with OpenNest1 (both call nfp_nest.dll) via EngineGate.Nfp — only one
+        // nfp_nest solve runs at a time; the rest queue and are woken in order.
+        private Action _wake;   // stable wake delegate for the engine queue (set in the ctor)
+
+        // ---- Live mode: auto-restart on input change (opt-in via the "Live" option, default Off) ----
+        private readonly System.Timers.Timer _debounce;         // one-shot; coalesces rapid input changes (slider drags)
+        private volatile bool _restartRequested = false;        // a change arrived mid-solve -> restart once the solve unwinds
+        private string _solvedSig = null;                       // input signature of the solve we last launched
+        private int _solvedIter = -1;
+        private string _pendingSig = null;                      // signature computed by the most recent InputsChanged()
+        private int _pendingIter = -1;
+        private const int DEBOUNCE_EDIT_MS = 250, DEBOUNCE_ITER_MS = 350;
+        // The Run button is a LATCH: ON = a live session (solve now + auto-restart on every input change);
+        // OFF = idle (nothing runs, the last result is held). Replaces the old separate "Live" toggle.
+        private volatile bool _runActive = false;
 
         public override void DrawViewportWires(IGH_PreviewArgs args)
         {
@@ -117,6 +130,9 @@ namespace opennest_2
             // One UI clock (~8 fps). AutoReset=false + re-arm avoids tick pile-up if a frame is slow.
             _timer = new System.Timers.Timer(120) { AutoReset = false };
             _timer.Elapsed += OnTick;
+            _debounce = new System.Timers.Timer(DEBOUNCE_EDIT_MS) { AutoReset = false };
+            _debounce.Elapsed += OnDebounceElapsed;
+            _wake = WakeForRetry;   // stable delegate so the engine queue can enqueue/dequeue by reference
             BuildOptions();
         }
 
@@ -267,23 +283,53 @@ namespace opennest_2
             {
                 if (_phase == Phase.Computing)
                 {
-                    return;   // already solving; cancel only via the on-component Stop button or ESC
+                    if (!_runActive) { CancelSolve(); return; }     // Run toggled off -> stop the running solve
+                    // Live (Run on): an input changed vs the solve in flight -> debounce -> cancel + restart.
+                    if (InputsChanged(DA)) ArmDebounce();
+                    return;
                 }
 
-                // Idle: launch only when the on-component Run button was clicked.
-                bool run = _runButtonRequested;
+                // Idle. A "launch now" request comes from the Run click that turned the session on, or from a
+                // debounced auto-restart.
+                bool launch = _runButtonRequested;
                 _runButtonRequested = false;
 
-                if (!run)
+                if (!_runActive)
                 {
-                    // A re-expire WITHOUT a Run (e.g. an upstream OpenNest settled, a param/canvas change): HOLD
-                    // the last completed result — re-emit its outputs and keep the preview drawn instead of wiping
-                    // everything. (BeforeSolveInstance already skipped its reset for the same reason.)
+                    // Run is OFF: hold the last completed result; do not solve and do not auto-restart.
+                    this.Message = null;
                     EmitCachedOutputs(DA);
                     return;
                 }
 
-                // Run clicked: fresh solve — clear the old result + preview, prep the solver, launch.
+                if (!launch)
+                {
+                    // Run is ON but this is a plain re-expire (an input/option/canvas change while the session
+                    // is live): keep showing the last result and debounce an auto-restart on a real change.
+                    if (InputsChanged(DA)) { ArmDebounce(); this.Message = "live — restarting…"; }
+                    else this.Message = "live — watching";
+                    EmitCachedOutputs(DA);
+                    return;
+                }
+
+                // Launch (Run just turned on, or a debounced restart fired): fresh solve.
+                // Acquire the process-global engine lock FIRST — the nfp_nest engine uses process-global state,
+                // so only one solve runs at a time across the whole document. If ANOTHER OpenNest holds it,
+                // QUEUE: keep this launch pending, hold the current result, and retry shortly. That lets several
+                // nesting components in one file all solve, one after another, with no manual retry.
+                if (!TryAcquireEngine())
+                {
+                    this.Message = "queued — waiting for engine…";
+                    EmitCachedOutputs(DA);   // hold the last result while queued; woken when the engine frees
+                    ArmDebounce();           // backup poll in case a wake is ever missed
+                    return;
+                }
+
+                // We hold the engine lock. Record the input signature so a later change is detected as new.
+                InputsChanged(DA);
+                _solvedSig = _pendingSig; _solvedIter = _pendingIter;
+
+                // Fresh solve — clear the old result + preview, prep the solver, launch.
                 ResetDisplayLists();
                 _previewBorders = new List<Polyline>();
                 _previewSheets = new List<Polyline>();
@@ -293,7 +339,12 @@ namespace opennest_2
                 DA.GetData(0, ref nest_sheets);
                 nest_rhino_lib.nest_geo nest_geo_in = null;
                 DA.GetData(1, ref nest_geo_in);
-                if (nest_sheets == null || nest_geo_in == null) { this.Message = "missing Sheets/Geometry"; return; }
+                if (nest_sheets == null || nest_geo_in == null)
+                {
+                    ReleaseEngine();   // release — no solve was started; wake the next queued component
+                    this.Message = "missing Sheets/Geometry";
+                    return;
+                }
 
                 var nest_geo_dup = nest_geo_in.duplicate();   // don't mutate upstream geometry
                 this.nest_geos.Add(nest_geo_dup);
@@ -330,13 +381,6 @@ namespace opennest_2
                 DA.GetData(2, ref max_iterations);
                 if (max_iterations < 1) max_iterations = 1;
 
-                // The SvgNest GA uses process-global static caches -> only one solve at a time.
-                lock (_nfpGate)
-                {
-                    if (_nfpBusy) { this.Message = "another OpenNest is solving — wait"; return; }
-                    _nfpBusy = true;
-                }
-
                 try
                 {
                     _pendingNest = new nest_lib.rhino_example(ref nest_sheets, ref nest_geo_dup, parameters, max_iterations);
@@ -348,7 +392,7 @@ namespace opennest_2
                 catch (Exception ex)
                 {
                     Rhino.RhinoApp.WriteLine(ex.ToString());
-                    lock (_nfpGate) { _nfpBusy = false; }
+                    ReleaseEngine();
                     this.Message = "input error";
                     return;
                 }
@@ -363,6 +407,20 @@ namespace opennest_2
             }
 
             // ===== PASS 2: background solve finished -> assemble outputs, publish, stop the clock =====
+
+            // Live: a change arrived while solving. The (now-cancelled) solve has unwound and freed the global
+            // lock, so DON'T publish its partial result — keep the previous good result and relaunch with the
+            // current inputs. ScheduleSolution defers the re-expire safely to after this solution completes.
+            if (_restartRequested)
+            {
+                _restartRequested = false;
+                _phase = Phase.Idle;
+                StopClocks();
+                EmitCachedOutputs(DA);   // hold the previous result so downstream/viewport don't blank
+                if (_runActive) ArmDebounce();   // relaunch shortly via the proven timer -> ExpireSolution path
+                return;
+            }
+
             ResetDisplayLists();
             try
             {
@@ -545,7 +603,7 @@ namespace opennest_2
         {
             try { _pendingNest.static_solver(ref _pendingNestGeo); }
             catch (Exception ex) { Rhino.RhinoApp.WriteLine(ex.ToString()); }
-            finally { lock (_nfpGate) { _nfpBusy = false; } }
+            finally { ReleaseEngine(); }   // frees the engine AND wakes the next queued component
             _phase = Phase.Ready;
             // marshal the re-solve onto the UI thread; NEVER call ExpireSolution from a worker thread.
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() => { try { ExpireSolution(true); } catch { } }));
@@ -567,6 +625,7 @@ namespace opennest_2
         {
             if (_phase == Phase.Computing && _pendingNest != null)
             {
+                _runActive = false;   // ESC ends the live session (no auto-restart afterwards)
                 _pendingNest.StopRequested = true; _cancelled = true; this.Message = "stopping…";
             }
         }
@@ -576,12 +635,112 @@ namespace opennest_2
             if (_phase == Phase.Computing && _pendingNest != null) { _pendingNest.StopRequested = true; _cancelled = true; }
         }
 
+        // ---- engine arbitration: one nfp_nest solve at a time across the process (process-global engine
+        // state). Components that can't get in QUEUE; whoever releases WAKES the next waiter, so several
+        // nesting components in one file run one after another with no manual retry. ----
+        private bool TryAcquireEngine() => EngineGate.Nfp.TryAcquire(_wake);
+        private void ReleaseEngine() => EngineGate.Nfp.Release();
+        private void WakeForRetry()
+        {
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                try { if (_runActive && _phase == Phase.Idle) { _runButtonRequested = true; ExpireSolution(true); } } catch { }
+            }));
+        }
+
+        // ---- Live mode helpers -------------------------------------------------------------------------
+        // Cheap, stable signature of the meaningful inputs: iterations + the engine option tokens + every
+        // nesting-boundary point + every sheet point (rounded). Lets us tell a real edit apart from an
+        // unrelated re-expire (or our own completion re-expire, which leaves the signature unchanged).
+        private static string SigOf(nest_rhino_lib.nest_sheets sheets, nest_rhino_lib.nest_geo geo,
+                                    int iters, List<string> optTokens)
+        {
+            long[] h = { unchecked((long)1469598103934665603) };   // FNV-1a-ish
+            void MixI(long v) { unchecked { h[0] = (h[0] ^ v) * 1099511628211L; } }
+            void MixD(double d) { MixI(BitConverter.DoubleToInt64Bits(Math.Round(d, 6))); }
+            MixI(iters);
+            if (optTokens != null) foreach (var t in optTokens) if (t != null) foreach (char c in t) MixI(c);
+            try
+            {
+                if (geo != null && geo.boundary_sorted != null)
+                    foreach (var part in geo.boundary_sorted)
+                        foreach (var loop in part)
+                        {
+                            var pl = loop.Item2;
+                            if (pl == null) continue;
+                            for (int k = 0; k < pl.Count; k++) { var p = pl[k]; MixD(p.X); MixD(p.Y); MixD(p.Z); }
+                        }
+                if (sheets != null && sheets.sheets != null)
+                    foreach (var arr in sheets.sheets)
+                        if (arr != null)
+                            foreach (var pl in arr)
+                            {
+                                if (pl == null) continue;
+                                for (int k = 0; k < pl.Count; k++) { var p = pl[k]; MixD(p.X); MixD(p.Y); MixD(p.Z); }
+                            }
+            }
+            catch { }
+            return h[0].ToString();
+        }
+
+        // Reads the inputs, computes the signature (cached into _pendingSig/_pendingIter), and reports whether
+        // it differs from the solve we last launched.
+        private bool InputsChanged(IGH_DataAccess DA)
+        {
+            nest_rhino_lib.nest_sheets s = null; DA.GetData(0, ref s);
+            nest_rhino_lib.nest_geo g = null; DA.GetData(1, ref g);
+            int it = 10; DA.GetData(2, ref it); if (it < 1) it = 1;
+            _pendingSig = SigOf(s, g, it, BuildOptionStrings());
+            _pendingIter = it;
+            return _pendingSig != _solvedSig;
+        }
+
+        // (Re-)arm the one-shot debounce. The Iterations slider gets a slightly longer wait since each tick is
+        // a full restart of a heavier solve.
+        private void ArmDebounce()
+        {
+            try { _debounce.Stop(); } catch { }
+            _debounce.Interval = (_pendingIter != _solvedIter) ? DEBOUNCE_ITER_MS : DEBOUNCE_EDIT_MS;
+            _debounce.Start();
+        }
+
+        // Debounce fired: inputs have settled. Idle -> launch now; Computing -> cancel and let PASS 2 restart.
+        private void OnDebounceElapsed(object sender, System.Timers.ElapsedEventArgs e)
+        {
+            if (!_runActive) return;
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                try
+                {
+                    if (_phase == Phase.Computing) { CancelSolve(); _restartRequested = true; }
+                    else if (_phase == Phase.Idle) { _runButtonRequested = true; ExpireSolution(true); }
+                    // Phase.Ready (publishing): the PASS 2 restart hook handles it.
+                }
+                catch (Exception ex) { Rhino.RhinoApp.WriteLine(ex.ToString()); }
+            }));
+        }
+
         // On-component Run button: shows "Stop" while solving.
-        public override bool IsBusy => _phase == Phase.Computing;
+        public override bool IsBusy => _runActive;   // button shows "Stop" the whole time the session is live
         public override void OnRunClicked()
         {
-            if (_phase == Phase.Computing) { CancelSolve(); this.Message = "stopping…"; }
-            else { _runButtonRequested = true; ExpireSolution(true); }
+            if (_runActive || _phase == Phase.Computing)
+            {
+                // Stop the live session: cancel any running solve, drop out of the queue, stop auto-restarting.
+                _runActive = false;
+                CancelSolve();
+                try { _debounce.Stop(); } catch { }
+                try { EngineGate.Nfp.Dequeue(_wake); } catch { }
+                this.Message = "stopped";
+                if (_phase != Phase.Computing) ExpireSolution(true);   // refresh to the held/idle state
+            }
+            else
+            {
+                // Start the live session: solve now, then auto-restart on any input change until Stop.
+                _runActive = true;
+                _runButtonRequested = true;
+                ExpireSolution(true);
+            }
         }
 
         // Don't expire downstream while computing (no outputs yet) — avoids a flash of null at consumers.
@@ -594,7 +753,9 @@ namespace opennest_2
         {
             try { if (_phase == Phase.Computing && _pendingNest != null) _pendingNest.StopRequested = true; } catch { }
             StopClocks();
-            try { lock (_nfpGate) { _nfpBusy = false; } } catch { }
+            try { _debounce.Stop(); } catch { }
+            try { EngineGate.Nfp.Dequeue(_wake); } catch { }
+            try { if (_phase == Phase.Computing) ReleaseEngine(); } catch { }   // free + wake next if we held it
             base.RemovedFromDocument(document);
         }
 

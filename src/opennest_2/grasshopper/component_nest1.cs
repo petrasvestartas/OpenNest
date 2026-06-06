@@ -10,21 +10,22 @@ using System.Drawing;
 using Rhino;
 using Rhino.DocObjects;
 using System.Linq;
-using System.Drawing.Printing;
 
 namespace opennest_2
 {
+    // OpenNest1: the no-fit-polygon nester that takes RAW curves/surfaces directly (no Geometry component, no
+    // attributes). PLAIN input-port component (no on-canvas options). The solve runs on a BACKGROUND thread so
+    // Rhino never freezes, with a LIVE per-generation preview (orange tightening + "gen X / Y" label). Run is a
+    // boolean toggle: TRUE runs and auto re-runs when an input changes; FALSE holds the last result. Reset
+    // (a boolean Button) clears the whole component INSTANTLY. There is NO ESC / Stop — to stop, flip Run off
+    // or press Reset. Supports multi-start Tries (run N seeds, keep the tightest).
     public class component_nest1 : GH_Component, IGH_BakeAwareObject
     {
-
         protected override System.Drawing.Bitmap Icon => Properties.Resources.opennest;
 
         public override Guid ComponentGuid => new Guid("30400898-3A5A-434F-A703-864B9309D79E");
-        
-        public override GH_Exposure Exposure
-        {
-            get { return GH_Exposure.primary; }
-        }
+
+        public override GH_Exposure Exposure { get { return GH_Exposure.primary; } }
 
         private BoundingBox bbox = new BoundingBox();
         private List<TextEntity> text = new List<TextEntity>();
@@ -35,23 +36,145 @@ namespace opennest_2
         private List<Polyline> simplified_borders = new List<Polyline>();
         public override BoundingBox ClippingBox => bbox;
 
+        // ---- background solve state machine ----
+        private enum Phase { Idle, Computing, Ready }
+        private volatile Phase _phase = Phase.Idle;
+        private System.Threading.Tasks.Task _task;
+        private volatile bool _restartRequested = false;   // input changed mid-solve -> relaunch once it unwinds
+        private volatile bool _haveEngine = false;
+        private readonly Action _wake;                      // stable engine-queue wake delegate
+
+        // Solve-generation token: bumped on every launch AND on every Reset/removal. The worker captures the
+        // token it launched under and publishes ONLY if it still matches — so a Reset (or a newer launch) makes
+        // the in-flight worker drop its result with no publish race. Instant, full reset in every phase.
+        private volatile int _solveGen = 0;
+        private volatile int _readyGen = -1;
+
+        // ---- live preview (~8 fps timer reading the in-flight solver) ----
+        private readonly System.Timers.Timer _timer;
+        private volatile nest_lib.rhino_example _liveNest;        // the currently-solving try
+        private volatile List<Polyline> _previewBorders = new List<Polyline>();
+        private List<Polyline> _previewSheets = new List<Polyline>();
+        private int _totalGenerations = 1;
+        private volatile int _currentTry = 0;
+
+        // ---- worker input snapshot (captured on the UI thread; the worker only reads these) ----
+        private nest_rhino_lib.nest_sheets _snapSheets;
+        private nest_rhino_lib.nest_geo _snapTemplate;
+        private List<double> _snapParams;
+        private int _snapIterations = 6;
+        private int _snapTries = 1;
+        private int _snapBaseSeed = 1;
+
+        // ---- best result of the multi-start sweep (published in PASS 2) ----
+        private nest_lib.rhino_example _bestNest;
+        private nest_rhino_lib.nest_geo _bestGeo;
+        private double _bestFitness = 0;
+
+        // ---- published result (read by AssembleOutputs / DrawViewportWires / Bake) ----
+        private List<nest_rhino_lib.nest_geo> nest_geos;
+        nest_lib.rhino_example nest = null;
+        nest_rhino_lib.nest_geo nest_geo = null;
+
+        // ---- cached outputs so a no-Run / still-solving re-expire re-emits instead of blanking ----
+        private bool _hasResult = false;
+        private List<Polyline> _out_sheets;
+        private GH_Structure<GH_Curve> _out_borders;
+        private GH_Structure<GH_Integer> _out_elemid;
+        private GH_Structure<GH_Transform> _out_xforms;
+        private GH_Structure<GH_Integer> _out_sheetid;
+
+        // ---- launch gating (only solve on a real trigger; prevents the restart loop) ----
+        private bool _prevRun = false;
+        private string _lastSig = null;
+
+        // ---- scratch read from the input ports ----
+        private double x = 0;
+        private double spacing = 1;
+        private int placement = 1;
+        private double tolerance = 0.1;
+        private int rotations = 2;
+        private int iterations = 6;
+        private int seed = 1;
+        private int tries = 1;
+        private bool run = false;
+
+        public component_nest1()
+              : base("OpenNest1", "OpenNest1",
+                "Nests RAW curves/surfaces onto sheets with the no-fit-polygon solver (no Geometry component, no attributes). Runs on a background thread with a live preview, so Rhino stays responsive. Run = TRUE solves and re-solves on input change; Reset clears. Supports multi-start Tries.",
+                "Params", "OpenNest2")
+        {
+            _timer = new System.Timers.Timer(120) { AutoReset = false };   // ~8 fps; re-armed in OnTick
+            _timer.Elapsed += OnTick;
+            _wake = WakeForRetry;
+        }
+
+        protected override void RegisterInputParams(GH_Component.GH_InputParamManager pManager)
+        {
+            pManager.AddGeometryParameter("Sheets", "Sheets", "Sheets — closed planar surfaces (outer + holes) or closed curves. A single sheet is auto-copied so parts can overflow onto more.", GH_ParamAccess.list);
+            pManager.AddGeometryParameter("Geo", "Geo", "Parts to nest — closed curves or planar surfaces.", GH_ParamAccess.list);
+            pManager.AddNumberParameter("Spacing", "Spacing", "Gap to keep between placed parts.", GH_ParamAccess.item, 1);
+            pManager.AddIntegerParameter("Placement", "Placement", "Placement strategy index (0 Box, 1 Gravity, 2 Squeeze, 3 Bottom-Left).", GH_ParamAccess.item, 1);
+            pManager.AddNumberParameter("Tolerance", "Tolerance", "Curve simplification tolerance.", GH_ParamAccess.item, 0.1);
+            pManager.AddIntegerParameter("Rotations", "Rotations", "Orientation angles per part. Fewer = much faster on large sets (the cold NFP cache grows with rotations); more = slightly tighter.", GH_ParamAccess.item, 2);
+            pManager.AddIntegerParameter("Iterations", "Iterations", "Solver generations to evolve. You watch each one tighten in the preview; higher = tighter but slower. ~4–10 typical.", GH_ParamAccess.item, 6);
+            pManager.AddIntegerParameter("Seed", "Seed", "Random seed for reproducible results.", GH_ParamAccess.item, 1);
+            pManager.AddIntegerParameter("Tries", "Tries", "Multi-start: run this many attempts (seed, seed+1, …) and keep the TIGHTEST layout. 1 = single run; 4–8 beats run-to-run variance (but multiplies time).", GH_ParamAccess.item, 1);
+            pManager.AddBooleanParameter("Reset", "Reset", "Set TRUE (wire a Button) to clear the whole component instantly and drop any running solve.", GH_ParamAccess.item, false);
+            pManager.AddBooleanParameter("Run", "Run", "Wire a Boolean Toggle. TRUE = solve now and re-solve automatically when an input changes (background thread, Rhino stays responsive, live preview). FALSE = hold the last result. Use Reset to clear.", GH_ParamAccess.item, false);
+
+            for (int i = 2; i < pManager.ParamCount; i++) pManager[i].Optional = true;
+        }
+
+        protected override void RegisterOutputParams(GH_Component.GH_OutputParamManager pManager)
+        {
+            pManager.AddCurveParameter("Sheets", "Sheets", "Sheet outlines used for nesting.", GH_ParamAccess.list);
+            pManager.AddGeometryParameter("Geo", "Geo", "Nested parts placed on the sheets.", GH_ParamAccess.tree);
+            pManager.AddIntegerParameter("ID", "ID", "Polygon id number", GH_ParamAccess.list);
+            pManager.AddTransformParameter("Transform", "Transform", "Placement transform per part.", GH_ParamAccess.list);
+            pManager.AddIntegerParameter("IDS", "IDS", "Sheet id number", GH_ParamAccess.list);
+        }
+
+        // Read the scalar param ports (2..7) into the positional list the rhino_example ctor reads BY INDEX.
+        private List<double> process_inputs(IGH_DataAccess DA)
+        {
+            spacing = 1; placement = 1; tolerance = 0.1; rotations = 2; iterations = 6; seed = 1;
+            DA.GetData(2, ref spacing);
+            DA.GetData(3, ref placement);
+            DA.GetData(4, ref tolerance);
+            DA.GetData(5, ref rotations);
+            DA.GetData(6, ref iterations);
+            DA.GetData(7, ref seed);
+            if (iterations < 1) iterations = 1;
+            if (rotations < 1) rotations = 1;
+
+            return new List<double>
+            {
+                rotations, // [0] num_of_rotations
+                0,         // [1] wiggle
+                placement, // [2] placement_type
+                spacing,   // [3] spacing
+                seed,      // [4] seed  (varied per try by the sweep)
+                tolerance, // [5] simplify_tolerance
+                10,        // [6] mutation
+                10,        // [7] population (canonical SVGnest/DeepNest default)
+                0,         // [8] time
+                10         // [9]
+            };
+        }
+
         public override void DrawViewportWires(IGH_PreviewArgs args)
         {
             var col = Attributes.Selected ? args.WireColour_Selected : args.WireColour;
             var lineWeight = args.DefaultCurveThickness;
 
-            // While a background solve runs, draw the live tightening layout (orange) instead of the
-            // not-yet-assembled final output. These are the solver's swapped snapshot refs (thread-safe).
+            // While the background solve runs, draw the LIVE tightening preview (orange) and return early.
             if (_phase == Phase.Computing)
             {
-                var nest_ = nest;
-                if (nest_ != null)
-                {
-                    var ls = nest_.LiveSheets;
-                    if (ls != null) foreach (var pl in ls) args.Display.DrawPolyline(pl, col);
-                    var lb = nest_.LiveBorders;
-                    if (lb != null) foreach (var pl in lb) args.Display.DrawPolyline(pl, col, lineWeight);
-                }
+                var psheets = _previewSheets;
+                var pborders = _previewBorders;
+                if (psheets != null) foreach (var pl in psheets) args.Display.DrawPolyline(pl, col);
+                if (pborders != null) foreach (var pl in pborders) args.Display.DrawPolyline(pl, System.Drawing.Color.OrangeRed, lineWeight);
                 return;
             }
 
@@ -66,19 +189,14 @@ namespace opennest_2
                 args.Display.DrawPolyline(simplified_borders[i], col, lineWeight);
 
             for (int i = 0; i < geometry.Count; i++)
-                args.Display.DrawCurve(geometry[i], col); // geometry_colors[i]
+                args.Display.DrawCurve(geometry[i], col);
         }
-
-        private List<nest_rhino_lib.nest_geo> nest_geos;
 
         public override void BakeGeometry(RhinoDoc doc, List<Guid> obj_ids)
         {
-            foreach (var nest_geo in nest_geos)
-            {
-
-                obj_ids.AddRange(nest_geo.bake_with_transforms());
-
-            }
+            if (nest_geos != null)
+                foreach (var ng in nest_geos)
+                    obj_ids.AddRange(ng.bake_with_transforms());
 
             for (int i = 0; i < this.sheets_display.Count; i++)
                 for (int j = 0; j < this.sheets_display[i].Count; j++)
@@ -91,157 +209,325 @@ namespace opennest_2
             view.Redraw();
         }
 
-        public component_nest1()
-              : base("OpenNest1", "OpenNest1",
-                "Nests parts onto sheets with the no-fit-polygon solver (no attributes). Takes curves or surfaces directly; supports multi-start Tries and a live preview.",
-                "Params", "OpenNest2")
+        private void ResetDisplayLists()
         {
-            _previewTimer = new System.Timers.Timer(120) { AutoReset = false };
-            _previewTimer.Elapsed += OnPreviewTick;
+            nest_geos = new List<nest_rhino_lib.nest_geo>();
+            bbox = new BoundingBox();
+            text = new List<TextEntity>();
+            geometry = new List<Curve>();
+            geometry_colors = new List<System.Drawing.Color>();
+            sheets_display = new List<List<Polyline>>();
+            sheets_number_display = new List<Curve>();
+            simplified_borders = new List<Polyline>();
         }
 
-
-        private double x = 0;
-        private double spacing = 0;
-        private int placement = 0;
-        private double tolerance = 0.1;
-        private int rotations = 4;
-        private int iterations = 1;
-        private int seed = 1;
-        private bool reset = true;
-        private bool run = false;
-
-        // ---- non-blocking solve + live preview + ESC-to-cancel (mirrors OpenNest2) ----
-        private enum Phase { Idle, Computing, Ready }
-        private volatile Phase _phase = Phase.Idle;
-        private System.Threading.Tasks.Task _solveTask;
-        private volatile bool _cancelled = false;
-        private readonly System.Timers.Timer _previewTimer;
-
-        // ---- multi-start (seed sweep): run N tries with different seeds, keep the TIGHTEST (lowest fitness) ----
-        private int tries = 1;
-        private int _sweepTries = 1;
-        private int _baseSeed = 1;
-        private int _baseIterations = 1;
-        private List<double> _baseParams;
-        private nest_rhino_lib.nest_geo _templateGeo;     // pristine geo; duplicated per try (never solved on directly)
-        private nest_rhino_lib.nest_sheets _sweepSheets;  // read-only across tries (the context clones it)
-        private volatile int _currentTry = 0;
-        private double _bestFitness = 0;
-
-     
-        protected override void RegisterInputParams(GH_Component.GH_InputParamManager pManager)
+        // Wipe the whole runtime state (used by Reset).
+        private void HardClear()
         {
-            pManager.AddGeometryParameter("Sheets", "Sheets", "Sheets — closed planar surfaces (outer + holes) or closed curves. A single sheet is auto-copied so parts can overflow onto more.", GH_ParamAccess.list);
-            pManager.AddGeometryParameter("Geo", "Geo", "Parts to nest — closed curves or planar surfaces.", GH_ParamAccess.list);
-            pManager.AddNumberParameter("Spacing", "Spacing", "Gap to keep between placed parts.", GH_ParamAccess.item, 1);
-            pManager.AddIntegerParameter("Placement", "Placement", "Placement strategy index.", GH_ParamAccess.item, 1);
-            pManager.AddNumberParameter("Tolerance", "Tolerance", "Curve simplification tolerance.", GH_ParamAccess.item, 0.1);
-            pManager.AddIntegerParameter("Rotations", "Rotations", "Number of rotation angles to try per part.", GH_ParamAccess.item, 4);
-            pManager.AddIntegerParameter("Iterations", "Iterations", "Number of solver iterations.", GH_ParamAccess.item, 1);
-            pManager.AddIntegerParameter("Seed", "Seed", "Random seed for reproducible results.", GH_ParamAccess.item, 1);
-            pManager.AddIntegerParameter("Tries", "Tries", "Multi-start: run this many attempts (seed, seed+1, …) and keep the TIGHTEST layout. 1 = single run; 4–8 reliably beats run-to-run variance. The live preview shows the current try; ESC stops the sweep and keeps the best so far.", GH_ParamAccess.item, 1);
-            pManager.AddBooleanParameter("Reset", "Reset", "Reset the solver and clear results.", GH_ParamAccess.item, true);
-            pManager.AddBooleanParameter("Run", "Run", "Start the nesting solve.", GH_ParamAccess.item, false);
+            nest = null; nest_geo = null;
+            _hasResult = false; _lastSig = null;
+            _out_sheets = null; _out_borders = null; _out_elemid = null; _out_xforms = null; _out_sheetid = null;
+            _previewBorders = new List<Polyline>();
+            _previewSheets = new List<Polyline>();
+            _liveNest = null;
+            ResetDisplayLists();
+        }
 
-            for (int i = 2; i < pManager.ParamCount; i++)
+        // Re-emit the last completed result so a re-expire (paused / still-solving / queued) doesn't blank outputs.
+        private void EmitCachedOutputs(IGH_DataAccess DA)
+        {
+            if (!_hasResult) return;
+            if (_out_sheets  != null) DA.SetDataList(0, _out_sheets);
+            if (_out_borders != null) DA.SetDataTree(1, _out_borders);
+            if (_out_elemid  != null) DA.SetDataTree(2, _out_elemid);
+            if (_out_xforms  != null) DA.SetDataTree(3, _out_xforms);
+            if (_out_sheetid != null) DA.SetDataTree(4, _out_sheetid);
+        }
+
+        private void ReleaseEngineIfHeld()
+        {
+            if (_haveEngine) { _haveEngine = false; EngineGate.Nfp.Release(); }
+        }
+
+        private void StartClocks() { try { _timer.Start(); } catch { } }
+        private void StopClocks() { try { _timer.Stop(); } catch { } }
+
+        protected override void SolveInstance(IGH_DataAccess DA)
+        {
+            bool reset = false;
+            this.run = false; this.tries = 1;
+            DA.GetData(8, ref this.tries);
+            DA.GetData(9, ref reset);
+            DA.GetData(10, ref this.run);
+            var parameters = process_inputs(DA);   // reads ports 2..7
+
+            // ===== RESET (any phase): clear the whole component INSTANTLY =====
+            if (reset)
             {
-                pManager[i].Optional = true;
+                _prevRun = false;
+                _solveGen++;                                       // invalidate any in-flight worker's token
+                EngineGate.Nfp.Dequeue(_wake);
+                if (_phase != Phase.Computing) ReleaseEngineIfHeld();   // a Computing worker frees the gate in its finally
+                _phase = Phase.Idle;
+                StopClocks();
+                HardClear();
+                this.Message = "reset";
+                ExpireSolution(true);
+                return;
             }
 
-        }
-
-        protected override void RegisterOutputParams(GH_Component.GH_OutputParamManager pManager)
-        {
-            pManager.AddCurveParameter("Sheets", "Sheets", "Sheet outlines used for nesting.", GH_ParamAccess.list);
-            pManager.AddGeometryParameter("Geo", "Geo", "Nested parts placed on the sheets.", GH_ParamAccess.tree);
-            pManager.AddIntegerParameter("ID", "ID", "Polygon id number", GH_ParamAccess.list);
-            pManager.AddTransformParameter("Transform", "Transform", "Placement transform per part.", GH_ParamAccess.list);
-            pManager.AddIntegerParameter("IDS", "IDS", "Sheet id number", GH_ParamAccess.list);
-        }
-
-
-        private (List<double>, string) process_inputs(IGH_DataAccess DA)
-        {
-            this.spacing = 0;
-            this.placement = 0;
-            this.tolerance = 0.1;
-            this.rotations = 4;
-            this.iterations = 1;
-            this.seed = 1;
-
-
-            DA.GetData(2, ref spacing);
-            DA.GetData(3, ref placement);
-            DA.GetData(4, ref tolerance);
-            DA.GetData(5, ref rotations);
-            DA.GetData(6, ref iterations);
-            DA.GetData(7, ref seed);
-
-
-            spacing = run ? spacing : 0;
-            placement = run ? placement : 0;
-            tolerance = run ? tolerance : 0.1;
-            rotations = run ? rotations : 4;
-            iterations = run ? iterations : 1;
-            seed = run ? seed : 1;
-
-
-            var parameters = new List<double> {
-                rotations, // "num_of_rotations 4",
-                0, // "wiggle 0",
-                placement, // "placement_type 0",
-                spacing, // "spacing 0.0",
-                seed, // "seed 30",
-                tolerance, // "simplify_tolerance 1",
-                10, // "mutation 10",
-                10, // population — was 200 (20x slower); 10 is the canonical SVGnest/DeepNest default (same as OpenNest2)
-                0, // "time 0",
-                10 // "MecSoft_Font-1 10"
-            };
-
-            string font_and_size = "MecSoft_Font-1";
-
-            return (parameters, font_and_size);
-        }
-
-        public Polyline ToPolyline(Curve curve, bool collapseShortSegments = true)
-        {
-            curve.TryGetPolyline(out Polyline polyline);
-            if (collapseShortSegments)
+            // ===== PASS 2: a finished background solve is waiting to publish =====
+            if (_phase == Phase.Ready)
             {
-                polyline.CollapseShortSegments(Rhino.RhinoDoc.ActiveDoc.ModelAbsoluteTolerance);
-            }
-            return polyline;
-        }
+                StopClocks();
+                _phase = Phase.Idle;
 
-        private List<Polyline> ToPolylines(IEnumerable<Curve> nurbsCurves, bool collapseShortSegments = true)
-        {
-            List<Polyline> polylines = new List<Polyline>(nurbsCurves.Count());
-            foreach (var curve in nurbsCurves)
-            {
-                if (curve.TryGetPolyline(out Polyline polyline))
+                // Superseded by a Reset (or removal) after the worker committed -> drop it, stay cleared.
+                if (_readyGen != _solveGen) return;
+
+                nest = _bestNest; nest_geo = _bestGeo;
+                ResetDisplayLists();
+                if (nest != null && nest_geo != null)
                 {
-                    polylines.Add(polyline);
+                    nest_geos.Add(nest_geo);   // so BakeGeometry can bake the placed parts
+                    try { AssembleOutputs(DA); _hasResult = true; }
+                    catch (Exception ex) { Rhino.RhinoApp.WriteLine(ex.ToString()); _hasResult = false; }
+                    this.Message = (_snapTries > 1 ? ("best of " + _snapTries + "   ") : "") + "fit " + _bestFitness.ToString("F3");
                 }
-                else
+                else { _hasResult = false; this.Message = "no result"; }
+
+                // An input changed while we were solving -> re-solve with the new inputs.
+                if (_restartRequested && this.run)
                 {
-                    var poly = curve.ToPolyline(0.01, 0.01, 0.01, 100).ToPolyline();
-                    if (poly != null)
-                        polylines.Add(poly);
+                    _restartRequested = false;
+                    Rhino.RhinoApp.InvokeOnUiThread((Action)(() => { try { ExpireSolution(true); } catch { } }));
                 }
+                return;
             }
-            return polylines;
+
+            // ===== COMPUTING: hold the last result; note a mid-solve input change for a follow-up re-solve.
+            // (The live label/preview are driven by the timer; don't touch Message here.) =====
+            if (_phase == Phase.Computing)
+            {
+                if (this.run)
+                {
+                    try { if (ComputeSig(DA, parameters) != _lastSig) _restartRequested = true; } catch { }
+                }
+                EmitCachedOutputs(DA);
+                return;
+            }
+
+            // ===== IDLE =====
+            if (!this.run)
+            {
+                _prevRun = false;
+                EngineGate.Nfp.Dequeue(_wake);
+                this.Message = _hasResult ? "paused" : null;
+                EmitCachedOutputs(DA);
+                return;
+            }
+
+            // Run is ON. Build the inputs (needed to compute the change signature and to solve).
+            var sheets = process_sheets(DA);
+            var template = process_geometry(DA);
+            if (sheets == null || template == null)
+            {
+                _hasResult = false; ResetDisplayLists(); this.Message = "missing Sheets / Geo"; return;
+            }
+
+            string sig = ComputeSig(DA, parameters);
+            bool rising = !_prevRun;   // Run just turned on
+            _prevRun = true;
+
+            // No real trigger (Run already on, inputs unchanged) -> re-emit, do NOT relaunch (breaks the loop).
+            if (!rising && _hasResult && sig == _lastSig)
+            {
+                EmitCachedOutputs(DA);
+                this.Message = (_snapTries > 1 ? ("best of " + _snapTries + "   ") : "") + "fit " + _bestFitness.ToString("F3");
+                return;
+            }
+
+            // Launch a fresh background solve. Serialize against OpenNest2 (shared nfp_nest.dll); if busy, queue.
+            if (!EngineGate.Nfp.TryAcquire(_wake))
+            {
+                this.Message = "waiting for engine…";
+                EmitCachedOutputs(DA);
+                return;
+            }
+            _haveEngine = true;
+
+            _snapSheets = sheets;
+            _snapTemplate = template;
+            _snapParams = parameters;
+            _snapIterations = Math.Max(1, iterations);
+            _snapTries = Math.Max(1, this.tries);
+            _snapBaseSeed = (parameters != null && parameters.Count > 4) ? (int)parameters[4] : 1;
+            _lastSig = sig;
+            _restartRequested = false;
+            _bestNest = null; _bestGeo = null; _bestFitness = 0;
+            _totalGenerations = _snapIterations;
+            _previewBorders = new List<Polyline>();
+            _previewSheets = new List<Polyline>();
+            _liveNest = null;
+            _currentTry = 0;
+
+            int myGen = ++_solveGen;
+            _phase = Phase.Computing;
+            this.Message = (_snapTries > 1 ? ("solving… " + _snapTries + " tries") : "solving…");
+            _task = new System.Threading.Tasks.Task(() => RunSolve(myGen));   // started in AfterSolveInstance
         }
+
+        protected override void AfterSolveInstance()
+        {
+            if (_phase == Phase.Computing && _task != null && _task.Status == System.Threading.Tasks.TaskStatus.Created)
+            {
+                var t = _task; _task = null;
+                StartClocks();
+                t.Start(System.Threading.Tasks.TaskScheduler.Default);
+            }
+        }
+
+        // BACKGROUND THREAD: multi-start sweep — run _snapTries seeds, keep the tightest. Publishes only if its
+        // generation token is still current (so a Reset / newer launch makes it drop silently). When done, flip
+        // to Ready and re-expire on the UI thread (never call ExpireSolution off-thread).
+        private void RunSolve(int myGen)
+        {
+            try
+            {
+                double bestFit = double.MaxValue;
+                nest_lib.rhino_example bestNest = null;
+                nest_rhino_lib.nest_geo bestGeo = null;
+
+                for (int t = 0; t < _snapTries; t++)
+                {
+                    if (myGen != _solveGen) break;   // superseded (Reset / newer launch) -> stop the sweep
+                    _currentTry = t + 1;
+
+                    var geoTry = _snapTemplate.duplicate();
+                    var sheetsRef = _snapSheets;
+                    var paramsTry = new List<double>(_snapParams);
+                    if (paramsTry.Count > 4) paramsTry[4] = _snapBaseSeed + t;
+
+                    var nestTry = new nest_lib.rhino_example(ref sheetsRef, ref geoTry, paramsTry, _snapIterations);
+                    nestTry.Engine = "cpp";
+                    nestTry.TryAllRotations = 0;   // first valid orientation per placement = far faster; GA still varies rotations
+
+                    _liveNest = nestTry;   // expose the in-flight try to the live preview
+                    nestTry.static_solver(ref geoTry);
+
+                    double fit = nestTry.CurrentFitness;
+                    if (bestNest == null || fit < bestFit) { bestFit = fit; bestNest = nestTry; bestGeo = geoTry; }
+                }
+
+                _bestNest = bestNest; _bestGeo = bestGeo; _bestFitness = bestFit;
+            }
+            catch (Exception ex) { Rhino.RhinoApp.WriteLine(ex.ToString()); }
+            finally { ReleaseEngineIfHeld(); }   // free the engine + wake the next queued component (even if dropped)
+
+            if (myGen != _solveGen) return;       // superseded -> never publish
+            _readyGen = myGen;
+            _phase = Phase.Ready;
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => { if (myGen == _solveGen) { try { ExpireSolution(true); } catch { } } }));
+        }
+
+        // ~8 fps: refresh the "gen X / Y   fit Z" label and repaint the live tightening layout the solver
+        // publishes in LiveSheets/LiveBorders. NO ESC, NO "stop" wording.
+        private void OnTick(object sender, System.Timers.ElapsedEventArgs e)
+        {
+            if (_phase != Phase.Computing) return;
+            try
+            {
+                var ln = _liveNest;
+                int gen = ln != null ? ln.CurrentGeneration : 0;
+                double fit = ln != null ? ln.CurrentFitness : 0.0;
+                string tryTag = _snapTries > 1 ? ("   try " + _currentTry + "/" + _snapTries) : "";
+                this.Message = "gen " + gen + " / " + _totalGenerations + "   fit " + fit.ToString("F3") + tryTag;
+                Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+                {
+                    try
+                    {
+                        if (_phase == Phase.Computing && ln != null)
+                        {
+                            _previewSheets = ln.LiveSheets;
+                            _previewBorders = ln.LiveBorders;
+                            OnDisplayExpired(true);
+                            ExpirePreview(true);
+                            Rhino.RhinoDoc.ActiveDoc?.Views.Redraw();
+                        }
+                    }
+                    catch { }
+                }));
+            }
+            catch { }
+            if (_phase == Phase.Computing) _timer.Start();   // re-arm
+        }
+
+        // ---- engine arbitration: one nfp_nest solve at a time across the process (shared with OpenNest2) ----
+        private void WakeForRetry()
+        {
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                try { if (this.run && _phase == Phase.Idle) ExpireSolution(true); } catch { }
+            }));
+        }
+
+        public override void RemovedFromDocument(GH_Document document)
+        {
+            _solveGen++;   // invalidate any in-flight worker so it never marshals onto a dead component
+            StopClocks();
+            try { EngineGate.Nfp.Dequeue(_wake); } catch { }
+            try { if (_phase != Phase.Computing) ReleaseEngineIfHeld(); } catch { }
+            base.RemovedFromDocument(document);
+        }
+
+        // ---- change signature (raw goo bounding boxes + curve samples + the scalar params + iterations/tries) ----
+        private string ComputeSig(IGH_DataAccess DA, List<double> parameters)
+        {
+            var s = new List<IGH_GeometricGoo>(); DA.GetDataList(0, s);
+            var g = new List<IGH_GeometricGoo>(); DA.GetDataList(1, g);
+            return SigOf(s, g, this.iterations, this.tries, parameters);
+        }
+
+        private static string SigOf(List<IGH_GeometricGoo> sheets, List<IGH_GeometricGoo> geo,
+                                    int iters, int tries, List<double> parameters)
+        {
+            long[] h = { unchecked((long)1469598103934665603) };   // FNV-1a-ish
+            void MixI(long v) { unchecked { h[0] = (h[0] ^ v) * 1099511628211L; } }
+            void MixD(double d) { MixI(BitConverter.DoubleToInt64Bits(Math.Round(d, 6))); }
+            void MixGoo(IGH_GeometricGoo gg)
+            {
+                if (gg == null) { MixI(0); return; }
+                try
+                {
+                    var bb = gg.Boundingbox;
+                    MixD(bb.Min.X); MixD(bb.Min.Y); MixD(bb.Min.Z);
+                    MixD(bb.Max.X); MixD(bb.Max.Y); MixD(bb.Max.Z);
+                }
+                catch { }
+                try
+                {
+                    if (gg.CastTo<Curve>(out Curve c) && c != null)
+                        for (int sgn = 0; sgn <= 8; sgn++)
+                        {
+                            try { var p = c.PointAtNormalizedLength(sgn / 8.0); MixD(p.X); MixD(p.Y); MixD(p.Z); }
+                            catch { }
+                        }
+                }
+                catch { }
+            }
+            MixI(iters); MixI(tries);
+            if (parameters != null) foreach (var v in parameters) MixD(v);
+            if (sheets != null) { MixI(sheets.Count); foreach (var gg in sheets) MixGoo(gg); }
+            if (geo != null) { MixI(geo.Count); foreach (var gg in geo) MixGoo(gg); }
+            return h[0].ToString();
+        }
+
+        // ====================================================================================================
+        // Intake helpers: raw Goo -> nest_sheets / nest_geo.
+        // ====================================================================================================
 
         private nest_rhino_lib.nest_sheets process_sheets(IGH_DataAccess DA)
         {
-            // Sheets accept SURFACES (planar Breps, with holes) and closed curves. A surface yields its
-            // outer loop + hole loops (naked-edge JoinCurves); a curve yields one closed loop. Each input
-            // sheet becomes a loop set [outer, hole1, ...]; nest_sheets sorts loops by size (outer first)
-            // and the cpp path forwards the holes as keep-out regions. This fixes "Data conversion failed
-            // from Surface to Curve" and the downstream null-ref that occurred when a rejected surface left
-            // ZERO sheets (the solver then ran with no sheet -> "Object reference not set").
             var sheetGoo = new List<IGH_GeometricGoo>();
             DA.GetDataList(0, sheetGoo);
 
@@ -255,7 +541,7 @@ namespace opennest_2
                 {
                     if (goo.CastTo<Brep>(out Brep brep) && brep != null)
                     {
-                        Curve[] rings = BrepBoundaryCurves(brep);   // outer + hole loops (proven path)
+                        Curve[] rings = BrepBoundaryCurves(brep);
                         if (rings != null)
                             foreach (var c in rings) { var pl = CurveToClosedPolyline(c); if (pl != null) loops.Add(pl); }
                     }
@@ -280,8 +566,6 @@ namespace opennest_2
             }
 
             this.x = 0;
-            // A single sheet is auto-copied (11 total) so parts that don't fit overflow onto more sheets.
-            // Each copy is shifted in +X by the sheet width; holes move WITH their outer loop.
             if (sheetSets.Count == 1)
             {
                 var template = sheetSets[0];
@@ -302,12 +586,11 @@ namespace opennest_2
             }
 
             var gaps = new List<double> { 0.0 };
-            var rotations = new List<int> { 4 };
-            int placement = 0;
-            return new nest_rhino_lib.nest_sheets(sheetSets, gaps, rotations, placement);
+            var rots = new List<int> { 4 };
+            int place = 0;
+            return new nest_rhino_lib.nest_sheets(sheetSets, gaps, rots, place);
         }
 
-        // Curve -> closed XY polyline (sheet loops). Native polyline first, else fine tessellation.
         private Polyline CurveToClosedPolyline(Curve curve)
         {
             if (curve == null) return null;
@@ -319,22 +602,16 @@ namespace opennest_2
                 return polyline;
             return null;
         }
+
         private Polyline[] MeshLoops(Mesh mesh)
         {
             Polyline[] outlines = mesh.GetOutlines(Plane.WorldXY);
             double[] length = new double[(int)outlines.Length];
-            for (int i = 0; i < (int)outlines.Length; i++)
-            {
-                length[i] = outlines[i].Length;
-            }
+            for (int i = 0; i < (int)outlines.Length; i++) length[i] = outlines[i].Length;
             Array.Sort<double, Polyline>(length, outlines);
             return new Polyline[] { outlines[(int)outlines.Length - 1] };
         }
 
-        // Surface/Brep -> closed boundary loops as RAW curves (outer + holes), the SAME way the proven
-        // "Geometry Srf" component does it: collect naked edges and JoinCurves them, then let
-        // geo_to_nest_geo tessellate. (Pre-converting to Polyline here was fragile and made the component
-        // go red on real surfaces.) Non-planar/multi-face falls back to the largest XY mesh silhouette.
         private Curve[] BrepBoundaryCurves(Brep B)
         {
             if (B == null || !B.IsValid) return null;
@@ -355,7 +632,6 @@ namespace opennest_2
                 return (joined != null && joined.Length > 0) ? joined : null;
             }
 
-            // Non-planar / multi-face: largest XY mesh silhouette (approximate; holes dropped).
             Mesh[] meshArray = Mesh.CreateFromBrep(B);
             if (meshArray == null || meshArray.Length == 0) return null;
             Mesh mesh = new Mesh();
@@ -368,17 +644,13 @@ namespace opennest_2
             Polyline big = outlines[outlines.Length - 1];
             return (big != null && big.IsValid && big.Count >= 3) ? new Curve[] { big.ToNurbsCurve() } : null;
         }
-        
+
         private double FastDistance(Point3d p1, Point3d p2)
         {
             double x = (p2.X - p1.X) * (p2.X - p1.X) + (p2.Y - p1.Y) * (p2.Y - p1.Y) + (p2.Z - p1.Z) * (p2.Z - p1.Z);
             return x;
         }
 
-        // Convert each input Goo (CURVE, SURFACE/BREP, or MESH) into its boundary polyline ring(s) and keep
-        // curves[], attributes[], copies[] in LOCKSTEP (one entry per item that produced a valid ring set).
-        // Surfaces/Breps go through BrepLoops -> outer + hole polylines; curves are taken/tessellated and
-        // required to be closed. Items that produce nothing are skipped without desyncing the three lists.
         public (List<Curve[]>, List<GeometryBase[]>, List<int>) GooToOutlines(List<IGH_GeometricGoo> geo_)
         {
             var curves = new List<Curve[]>();
@@ -394,7 +666,7 @@ namespace opennest_2
                 if (typeName == "Brep" || typeName == "Surface")
                 {
                     if (goo.CastTo<Brep>(out Brep brep))
-                        ring = BrepBoundaryCurves(brep);   // naked-edge loops, raw curves (proven path)
+                        ring = BrepBoundaryCurves(brep);
                 }
                 else if (typeName == "Mesh")
                 {
@@ -457,9 +729,6 @@ namespace opennest_2
                     return null;
                 }
 
-                // hard_coded_input:false => identify_groups auto-pairs each outer ring with the smaller
-                // rings it contains (big rect + smaller rect inside = one part with a hole), so a FLAT LIST
-                // gets element holes detected the same way the Geometry component does.
                 return nest_rhino_lib.nest_geo_util.geo_to_nest_geo(outlines.Item1, outlines.Item3, new List<double> { 0, 0 }, outlines.Item2, false);
             }
             catch (Exception ex)
@@ -469,194 +738,7 @@ namespace opennest_2
             }
         }
 
-        nest_lib.rhino_example nest = null;
-        nest_rhino_lib.nest_sheets nest_sheets = null;
-        nest_rhino_lib.nest_geo nest_geo = null;
-        int counter = 0;
-
-        protected override void AfterSolveInstance()
-        {
-            // Start the background solve only after this SolveInstance unwinds on the UI thread, so the UI
-            // never blocks. The solve runs on a worker; ESC + the ~8 fps preview clock run alongside it.
-            if (_phase == Phase.Computing && _solveTask != null &&
-                _solveTask.Status == System.Threading.Tasks.TaskStatus.Created)
-            {
-                StartClocks();
-                _solveTask.Start(System.Threading.Tasks.TaskScheduler.Default);
-            }
-        }
-
-        private void StartClocks()
-        {
-            _cancelled = false;
-            try { Rhino.RhinoApp.EscapeKeyPressed += OnEscape; } catch { }
-            _previewTimer.Start();
-        }
-
-        private void StopClocks()
-        {
-            try { Rhino.RhinoApp.EscapeKeyPressed -= OnEscape; } catch { }
-            try { _previewTimer.Stop(); } catch { }
-        }
-
-        // ESC fires on the UI thread (free now that the solve is on a worker) -> ask the solver to stop;
-        // run_cpp's poll loop sees StopRequested and calls nfp_cancel, ending the native solve early.
-        private void OnEscape(object sender, EventArgs e)
-        {
-            if (_phase == Phase.Computing && nest != null)
-            {
-                nest.StopRequested = true;
-                _cancelled = true;
-                this.Message = "stopping…";
-            }
-        }
-
-        // ~8 fps: refresh the status label + repaint the live layout the solver publishes in nest.LiveBorders.
-        private void OnPreviewTick(object sender, System.Timers.ElapsedEventArgs e)
-        {
-            if (_phase != Phase.Computing) return;
-            try
-            {
-                var nest_ = nest;
-                int gen = nest_ != null ? nest_.CurrentGeneration : 0;
-                double fit = nest_ != null ? nest_.CurrentFitness : 0.0;
-                string tryTag = _sweepTries > 1 ? ("try " + _currentTry + "/" + _sweepTries + "   ") : "";
-                this.Message = _cancelled ? ("stopping…  " + tryTag + "gen " + gen)
-                                          : (tryTag + "gen " + gen + "   fit " + fit.ToString("F3") + "   (ESC = stop)");
-                Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
-                {
-                    try
-                    {
-                        if (_phase == Phase.Computing && nest_ != null)
-                        {
-                            var bb = BoundingBox.Empty;
-                            var ls = nest_.LiveSheets; if (ls != null) foreach (var pl in ls) bb.Union(pl.BoundingBox);
-                            var lb = nest_.LiveBorders; if (lb != null) foreach (var pl in lb) bb.Union(pl.BoundingBox);
-                            if (bb.IsValid) this.bbox = bb;
-                            ExpirePreview(true);
-                            Rhino.RhinoDoc.ActiveDoc?.Views.Redraw();
-                        }
-                    }
-                    catch { }
-                }));
-            }
-            catch { }
-            if (_phase == Phase.Computing) _previewTimer.Start();   // re-arm
-        }
-
-        // Runs on a worker thread. When done, flip to Ready and marshal ExpireSolution onto the UI thread
-        // (NEVER call ExpireSolution from a worker) -> SolveInstance re-runs and publishes the outputs.
-        // MULTI-START: run _sweepTries attempts with seeds (base, base+1, ...), keep the (nest, nest_geo)
-        // with the lowest fitness (= tightest). Each try gets a fresh duplicated geo (the solve writes
-        // transforms into it); the sheets are read-only so they're shared. Runs on a worker thread; when
-        // done, flip to Ready and marshal ExpireSolution onto the UI thread (never call it from a worker).
-        private void RunSolveBackground()
-        {
-            try
-            {
-                double bestFit = double.MaxValue;
-                nest_lib.rhino_example bestNest = null;
-                nest_rhino_lib.nest_geo bestGeo = null;
-
-                for (int t = 0; t < _sweepTries; t++)
-                {
-                    _currentTry = t + 1;
-
-                    var geoTry = _templateGeo.duplicate();                  // pristine copy per try
-                    var sheetsRef = _sweepSheets;                           // read-only; guard the field from ref-reassign
-                    var paramsTry = new List<double>(_baseParams);
-                    if (paramsTry.Count > 4) paramsTry[4] = _baseSeed + t;  // vary the seed (parameters[4]) per try
-
-                    var nestTry = new nest_lib.rhino_example(ref sheetsRef, ref geoTry, paramsTry, _baseIterations);
-                    nestTry.Engine = "cpp";        // OpenNest1 always uses the fast C++ nfp_nest engine
-                    nestTry.TryAllRotations = 1;   // All Rotations ON (engine caps it at 8 orientations)
-
-                    // expose the in-flight try so the live preview + ESC act on it
-                    nest = nestTry; nest_geo = geoTry;
-
-                    nestTry.static_solver(ref geoTry);
-
-                    double fit = nestTry.CurrentFitness;   // engine's final fitness; lower = tighter
-                    if (bestNest == null || fit < bestFit) { bestFit = fit; bestNest = nestTry; bestGeo = geoTry; }
-
-                    if (_cancelled) break;   // ESC -> stop the sweep, keep the best completed so far
-                }
-
-                if (bestNest != null) { nest = bestNest; nest_geo = bestGeo; _bestFitness = bestFit; }
-            }
-            catch (Exception ex) { Rhino.RhinoApp.WriteLine(ex.ToString()); }
-            _phase = Phase.Ready;
-            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => { try { ExpireSolution(true); } catch { } }));
-        }
-
-
-
-        protected override void BeforeSolveInstance()
-        {
-            // Only wipe the display on a genuinely fresh solve (Idle). During Computing the live preview
-            // must persist; on the Ready (publish) pass the output block fills these lists itself.
-            if (_phase != Phase.Idle) return;
-            ResetDisplayLists();
-        }
-
-        private void ResetDisplayLists()
-        {
-            nest_geos = new List<nest_rhino_lib.nest_geo>();
-            bbox = new BoundingBox();
-            text = new List<TextEntity>();
-            geometry = new List<Curve>();
-            geometry_colors = new List<System.Drawing.Color>();
-            sheets_display = new List<List<Polyline>>();
-            sheets_number_display = new List<Curve>();
-            simplified_borders = new List<Polyline>();
-        }
-
-        protected override void SolveInstance(IGH_DataAccess DA)
-        {
-            // ===== PASS 2: the background solve finished -> assemble + publish outputs on the UI thread =====
-            if (_phase == Phase.Ready)
-            {
-                StopClocks();
-                try { AssembleOutputs(DA); }
-                catch (Exception ex) { Rhino.RhinoApp.WriteLine(ex.ToString()); }
-                string tag = (_sweepTries > 1 ? (" — best of " + _sweepTries) : "") + "   fit " + _bestFitness.ToString("F3");
-                this.Message = (_cancelled ? "stopped" : "done") + tag;
-                _phase = Phase.Idle;
-                return;
-            }
-
-            // Already solving: ignore re-solves so the live preview keeps running (cancel via ESC).
-            if (_phase == Phase.Computing) return;
-
-            // ===== Idle: read inputs; launch a NON-BLOCKING (multi-start) background solve only when Run is true =====
-            this.reset = true;
-            this.run = false;
-            this.tries = 1;
-            DA.GetData(8, ref tries);
-            DA.GetData(9, ref reset);
-            DA.GetData(10, ref run);
-
-            var (parameters, font_and_size) = process_inputs(DA);
-            if (!run) { this.Message = null; return; }
-
-            _sweepSheets = process_sheets(DA);
-            _templateGeo = process_geometry(DA);
-            if (_sweepSheets == null || _templateGeo == null) return;
-
-            _baseParams = parameters;
-            _baseSeed = (parameters != null && parameters.Count > 4) ? (int)parameters[4] : 1;
-            _baseIterations = iterations;
-            _sweepTries = Math.Max(1, tries);
-            _bestFitness = 0;
-            nest = null; nest_geo = null;   // set per-try by the sweep (read by the live preview)
-
-            _solveTask = new System.Threading.Tasks.Task(RunSolveBackground);
-            _phase = Phase.Computing;   // the task is started in AfterSolveInstance, after the UI thread frees
-            this.Message = _sweepTries > 1 ? ("starting… " + _sweepTries + " tries") : "starting…";
-        }
-
-        // Assemble + publish outputs from the finished solve (runs on the UI thread in PASS 2). This is the
-        // original inline output block, unchanged, just moved out of the (now background) solve path.
+        // Assemble + publish outputs from the finished solve (PASS 2, UI thread), and cache them for re-emit.
         private void AssembleOutputs(IGH_DataAccess DA)
         {
             List<Polyline> output_sheets = new List<Polyline>();
@@ -671,9 +753,6 @@ namespace opennest_2
             GH_Structure<GH_Integer> element_id = new GH_Structure<GH_Integer>();
             GH_Structure<GH_Transform> xforms = new GH_Structure<GH_Transform>();
             GH_Structure<GH_Integer> sheet_id = new GH_Structure<GH_Integer>();
-            GH_Structure<GH_Curve> sheet_txt = new GH_Structure<GH_Curve>();
-            GH_Structure<IGH_GeometricGoo> geometry_attributes = new GH_Structure<IGH_GeometricGoo>();
-            var doc = Rhino.RhinoDoc.ActiveDoc;
 
             for (int i = 0; i < nest.output_transforms.Count; i++)
             {
@@ -698,14 +777,6 @@ namespace opennest_2
                         geo_temp.Transform(nest_geo.xforms[i][k]);
                         all_geo_groups.Append(Grasshopper.Kernel.GH_Convert.ToGeometricGoo(geo_temp), new GH_Path(i));
 
-                        if (nest_geo.geometry_attributes.Count > nest_geo.geometry_sorted[i][j])
-                            foreach (var geometry_attibute in nest_geo.geometry_attributes[nest_geo.geometry_sorted[i][j]])
-                            {
-                                GeometryBase geometry_attibute_temp = geometry_attibute.Duplicate();
-                                geometry_attibute_temp.Transform(nest_geo.xforms[i][k]);
-                                geometry_attributes.Append(Grasshopper.Kernel.GH_Convert.ToGeometricGoo(geometry_attibute_temp), new GH_Path(i));
-                            }
-
                         if (object_type == "Curve")
                         {
                             bbox.Union(geo_temp.GetBoundingBox(false));
@@ -725,6 +796,9 @@ namespace opennest_2
             DA.SetDataTree(2, element_id);
             DA.SetDataTree(3, xforms);
             DA.SetDataTree(4, sheet_id);
+
+            _out_sheets = output_sheets; _out_borders = borders; _out_elemid = element_id;
+            _out_xforms = xforms; _out_sheetid = sheet_id;
         }
     }
 }

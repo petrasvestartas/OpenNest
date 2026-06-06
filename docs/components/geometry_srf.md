@@ -2,6 +2,16 @@
 
 Builds nesting parts from planar surfaces instead of curves; holes are read from the surface boundaries.
 
+## Example
+
+**Files to download:**
+
+- [⬇ geometry_surface.ghx](files/geometry_srf/geometry_surface.ghx)
+
+![geometry_srf — geometry_surface](img/geometry_srf/geometry_surface.png)
+
+![geometry_srf — geometry_surface_screenshot](img/geometry_srf/geometry_surface_screenshot.png)
+
 ## Inputs
 
 | Parameter | Type | Access | Description |
@@ -18,14 +28,3 @@ Builds nesting parts from planar surfaces instead of curves; holes are read from
 | --- | --- | --- |
 | **Geometry** | Generic | Nesting parts ready for the solver. |
 | **Borders** | Curve | Outline curves of each part. |
-
-## Example
-
-**Files to download:**
-
-- [⬇ geometry_surface.ghx](files/geometry_srf/geometry_surface.ghx)
-
-![geometry_srf — geometry_surface](img/geometry_srf/geometry_surface.png)
-
-![geometry_srf — geometry_surface_screenshot](img/geometry_srf/geometry_surface_screenshot.png)
-

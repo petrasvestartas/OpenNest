@@ -2,6 +2,16 @@
 
 Reduces a closed curve's vertex count, auto-offsetting outward just enough that the original stays inside - so nested parts never overlap.
 
+## Example
+
+**Files to download:**
+
+- [⬇ simplify.ghx](files/simplify/simplify.ghx)
+
+![simplify — simplify](img/simplify/simplify.png)
+
+![simplify — simplify_screenshot](img/simplify/simplify_screenshot.png)
+
 ## Inputs
 
 | Parameter | Type | Access | Description |
@@ -16,14 +26,3 @@ Reduces a closed curve's vertex count, auto-offsetting outward just enough that 
 | **Curves** | Curve | Simplified closed polylines (each GUARANTEED to contain its original). |
 | **Vertices** | Integer | Vertex count of each simplified curve. |
 | **Offset** | Number | The outward distance auto-applied to each curve so the original stays inside (model units). 0 = none needed. |
-
-## Example
-
-**Files to download:**
-
-- [⬇ simplify.ghx](files/simplify/simplify.ghx)
-
-![simplify — simplify](img/simplify/simplify.png)
-
-![simplify — simplify_screenshot](img/simplify/simplify_screenshot.png)
-

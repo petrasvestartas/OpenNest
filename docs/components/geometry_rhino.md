@@ -2,6 +2,17 @@
 
 Builds nesting parts from referenced Rhino objects, separating outlines from attributes (text, curves) and sorting them automatically.
 
+## Example
+
+**Files to download:**
+
+- [⬇ rhino_objects.3dm](files/geometry_rhino/rhino_objects.3dm)
+- [⬇ rhino_objects.ghx](files/geometry_rhino/rhino_objects.ghx)
+
+![geometry_rhino — rhino_objects](img/geometry_rhino/rhino_objects.png)
+
+![geometry_rhino — rhino_objects_screenshot](img/geometry_rhino/rhino_objects_screenshot.png)
+
 ## Inputs
 
 | Parameter | Type | Access | Description |
@@ -21,15 +32,3 @@ Builds nesting parts from referenced Rhino objects, separating outlines from att
 | **BC** | Curve | Convex-hull border curves per part |
 | **Groups** | Integer | Object group indices per part |
 | **All** | Geometry | All referenced geometry grouped per part |
-
-## Example
-
-**Files to download:**
-
-- [⬇ rhino_objects.3dm](files/geometry_rhino/rhino_objects.3dm)
-- [⬇ rhino_objects.ghx](files/geometry_rhino/rhino_objects.ghx)
-
-![geometry_rhino — rhino_objects](img/geometry_rhino/rhino_objects.png)
-
-![geometry_rhino — rhino_objects_screenshot](img/geometry_rhino/rhino_objects_screenshot.png)
-

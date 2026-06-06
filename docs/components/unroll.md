@@ -2,6 +2,16 @@
 
 Unrolls a developable Brep or mesh to flat, carrying along its curves, points and text.
 
+## Example
+
+**Files to download:**
+
+- [⬇ unroll.ghx](files/unroll/unroll.ghx)
+
+![unroll — unroll](img/unroll/unroll.png)
+
+![unroll — unroll_screenshot](img/unroll/unroll_screenshot.png)
+
 ## Inputs
 
 | Parameter | Type | Access | Description |
@@ -21,14 +31,3 @@ Unrolls a developable Brep or mesh to flat, carrying along its curves, points an
 | **Points** (P) | Point | Unrolled points |
 | **TextDotsLocation** (TXT L) | Generic | Unrolled text label locations |
 | **TextDots** (TXT) | Generic | Unrolled text labels |
-
-## Example
-
-**Files to download:**
-
-- [⬇ unroll.ghx](files/unroll/unroll.ghx)
-
-![unroll — unroll](img/unroll/unroll.png)
-
-![unroll — unroll_screenshot](img/unroll/unroll_screenshot.png)
-

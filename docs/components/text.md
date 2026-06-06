@@ -2,6 +2,16 @@
 
 Builds text outlines as curves for laser-cutting or milling.
 
+## Example
+
+**Files to download:**
+
+- [⬇ text.ghx](files/text/text.ghx)
+
+![text — text](img/text/text.png)
+
+![text — text_screenshot](img/text/text_screenshot.png)
+
 ## Inputs
 
 | Parameter | Type | Access | Description |
@@ -16,14 +26,3 @@ Builds text outlines as curves for laser-cutting or milling.
 | Parameter | Type | Description |
 | --- | --- | --- |
 | **Curves** (C) | Curve | Text as curves |
-
-## Example
-
-**Files to download:**
-
-- [⬇ text.ghx](files/text/text.ghx)
-
-![text — text](img/text/text.png)
-
-![text — text_screenshot](img/text/text_screenshot.png)
-

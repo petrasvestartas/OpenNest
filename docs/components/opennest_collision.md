@@ -7,6 +7,16 @@ Nests parts onto sheets with the physics collision solver - packs tightly and ca
     defaults. If a run spills onto a second sheet, change the **Seed** and run again. (Fewer Poles is faster but
     can pack worse; a single high-rotation start is what closes the pack — no multi-start needed.)
 
+## Example
+
+**Files to download:**
+
+- [⬇ opennestcollision.ghx](files/opennest_collision/opennestcollision.ghx)
+
+![opennest_collision — opennestcollision](img/opennest_collision/opennestcollision.png)
+
+![opennest_collision — opennestcollision_screenshot](img/opennest_collision/opennestcollision_screenshot.png)
+
 ## Inputs
 
 | Parameter | Type | Access | Description |
@@ -41,14 +51,3 @@ On-canvas settings shown on the component body (zoom in on the component to reve
 | **Compact** | Choice | Bottom-Left | Off · Bottom-Left · Multi | Post-pack tightening slide. **Bottom-Left** slides parts down-then-left; **Multi** slides from several directions. |
 | **Fit** | Choice | One sheet (max fill) | One sheet (max fill) · All parts (fewest sheets) | **One sheet** = fill a single sheet as full as possible; parts that don't fit are placed **outside**. **All parts** = use as many sheets as needed so nothing is left off. |
 | **Sheet Font** | Text | `MecSoft_Font-1 1` | — | Sheet-number label: font name + text size. |
-
-## Example
-
-**Files to download:**
-
-- [⬇ opennestcollision.ghx](files/opennest_collision/opennestcollision.ghx)
-
-![opennest_collision — opennestcollision](img/opennest_collision/opennestcollision.png)
-
-![opennest_collision — opennestcollision_screenshot](img/opennest_collision/opennestcollision_screenshot.png)
-
