@@ -390,48 +390,36 @@ namespace opennest_2
 
         private void ShowChoiceMenu(NestOption opt, Point screenPt)
         {
-            var menu = new ContextMenuStrip();
-
-            // Build items with Grasshopper's own helper (the same call GH uses for its native
-            // component menus, which size correctly on macOS) instead of a raw ToolStripMenuItem,
-            // whose auto-width under-measures on Rhino-for-Mac's WinForms shim and clips the label.
-            var items = new List<ToolStripMenuItem>();
+            // Use an Eto.Forms context menu, NOT a WinForms ContextMenuStrip. On Rhino-for-Mac there is no
+            // real WinForms — the compatibility shim under-measures menu-item text in its own render pass and
+            // trims long labels with an ellipsis ("Bottom-Left" -> "Bott.-left"), and that trim ignores any
+            // item width / MinimumSize we set. Eto is Rhino's native cross-platform toolkit (real Cocoa menus
+            // on Mac, the same toolkit Grasshopper's own Mac UI uses), so items size to their text correctly.
+            // Fully qualified to avoid clashing with the System.Windows.Forms types this file also uses.
+            var menu = new Eto.Forms.ContextMenu();
+            Eto.Forms.RadioMenuItem controller = null;
             for (int k = 0; k < opt.ChoiceLabels.Count; k++)
             {
                 int idx = k;
-                var item = GH_DocumentObject.Menu_AppendItem(
-                    menu, opt.ChoiceLabels[k],
-                    (s, a) =>
+                var item = new Eto.Forms.RadioMenuItem(controller)
+                {
+                    Text = opt.ChoiceLabels[k],
+                    Checked = (k == opt.SelectedIndex)
+                };
+                if (controller == null) controller = item;   // first item is the radio-group controller
+                item.Click += (s, a) =>
+                {
+                    if (opt.SelectedIndex != idx)
                     {
-                        if (opt.SelectedIndex != idx)
-                        {
-                            opt.SelectedIndex = idx;
-                            _host.OnOptionChanged(opt);
-                        }
-                    },
-                    true, k == opt.SelectedIndex);
-                if (item != null) items.Add(item);
+                        opt.SelectedIndex = idx;
+                        _host.OnOptionChanged(opt);
+                    }
+                };
+                menu.Items.Add(item);
             }
 
-            // Width: measure the labels with the MENU's actual font. The first attempt measured with
-            // the on-canvas GH font (GH_FontServer.Standard, ~7pt), which is far smaller than the system
-            // menu font (larger still on a Retina Mac), so the width was under-estimated and labels still
-            // clipped. Measure with menu.Font, pad for the checkmark column + margins, then PIN every item
-            // to that width (AutoSize off) so the Mac shim's narrow auto-size can't truncate; also raise
-            // the strip minimum width to match.
-            int widest = 0;
-            foreach (var lbl in opt.ChoiceLabels)
-                widest = Math.Max(widest, TextRenderer.MeasureText(lbl, menu.Font).Width);
-            int w = widest + 64;
-            foreach (var it in items)
-            {
-                int h = it.Height;          // capture the auto height before disabling AutoSize
-                it.AutoSize = false;
-                it.Size = new Size(w, h);
-            }
-            menu.MinimumSize = new Size(w + 8, 0);
-
-            menu.Show(screenPt);
+            // Show at the mouse cursor (where the user just clicked the value button).
+            menu.Show();
         }
 
         // A small editable box (numbers + the font text line). ToolStripTextBox in a ContextMenuStrip is plain
