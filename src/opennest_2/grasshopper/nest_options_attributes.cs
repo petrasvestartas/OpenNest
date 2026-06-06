@@ -155,8 +155,13 @@ namespace opennest_2
             if (n > 0)
             {
                 y += Pad;
-                int ctrlX = left + Pad + LabelW;
-                int ctrlW = Math.Max(CtrlMinW, innerW - LabelW);
+                // The value button fills from after the label column to the RIGHT INNER EDGE, so its right
+                // side is always `right - Pad` and it can never spill past the body. On a narrow body (the
+                // macOS auto-sized body is narrower than on Windows) the label column shrinks instead of the
+                // old behaviour, which floored the button width at CtrlMinW and let it protrude to the right.
+                int labelW = Math.Min(LabelW, Math.Max(0, innerW - CtrlMinW));
+                int ctrlX = left + Pad + labelW;
+                int ctrlW = innerW - labelW;
                 for (int i = 0; i < n; i++) { _ctrlRects[i] = new RectangleF(ctrlX, y, ctrlW, RowH); y += RowH; }
             }
         }
@@ -205,7 +210,7 @@ namespace opennest_2
                 // leading vector icon followed by centered text. Icons are drawn as geometry (not Unicode
                 // glyphs) so layout never depends on per-platform font fallback. `hit` is the full hit-test
                 // rect from Layout(); the capsule is inset 1px vertically for visual breathing room only.
-                void Button(Rectangle hit, string s, Color baseCol, IconKind icon = IconKind.None)
+                void Button(Rectangle hit, string s, Color baseCol, IconKind icon = IconKind.None, int rightInset = 0)
                 {
                     Rectangle r = Rectangle.Inflate(hit, 0, -1);
                     int rad = Math.Min(3, r.Height / 2);   // less-rounded corners
@@ -232,18 +237,21 @@ namespace opennest_2
                     g.SmoothingMode = sm;
 
                     // Center the icon+text group as a unit so they never overlap (mirrors GH_Capsule).
+                    // `rightInset` reserves space on the right (e.g. for the dropdown caret) so text never
+                    // runs under it and is centered within the remaining area.
+                    int avail = Math.Max(1, r.Width - rightInset);
                     int iconSz = icon == IconKind.None ? 0 : (int)Math.Round(r.Height * 0.45f);
                     int gap = icon == IconKind.None ? 0 : 4;
-                    float textW = string.IsNullOrEmpty(s) ? 0 : g.MeasureString(s, font, r.Width, sfText).Width;
+                    float textW = string.IsNullOrEmpty(s) ? 0 : g.MeasureString(s, font, avail, sfText).Width;
                     float groupW = iconSz + gap + textW;
-                    float gx = r.X + Math.Max(0, (r.Width - groupW) / 2f);
+                    float gx = r.X + Math.Max(0, (avail - groupW) / 2f);
                     if (icon != IconKind.None)
                     {
                         var ib = new RectangleF(gx, r.Y + (r.Height - iconSz) / 2f, iconSz, iconSz);
                         DrawIcon(g, ib, icon, A(Color.White));
                         gx += iconSz + gap;
                     }
-                    CenteredText(g, s, font, whiteBrush, new RectangleF(gx, r.Y, r.Right - gx, r.Height), sfText);
+                    CenteredText(g, s, font, whiteBrush, new RectangleF(gx, r.Y, r.X + avail - gx, r.Height), sfText);
                 }
 
                 Color dark = Color.FromArgb(64, 64, 64);
@@ -266,14 +274,17 @@ namespace opennest_2
                 {
                     var opt = opts[i];
                     Rectangle ctrl = GH_Convert.ToRectangle(_ctrlRects[i]);
-                    var labelRect = new RectangleF(Bounds.Left + Pad, ctrl.Y, LabelW - Pad, ctrl.Height);
-
+                    // Label fills from the left inset up to just before the value button (it follows the
+                    // control's left edge, which shrinks with the body on narrow/macOS layouts).
+                    float labelLeft = Bounds.Left + Pad;
+                    var labelRect = new RectangleF(labelLeft, ctrl.Y, Math.Max(0, ctrl.Left - labelLeft - Pad), ctrl.Height);
                     CenteredText(g, opt.Label, font, labelBrush, labelRect, sfText);
 
-                    Button(ctrl, opt.Display(), dark);
-                    if (opt.Kind == NestOptionKind.Choice)
+                    bool isChoice = opt.Kind == NestOptionKind.Choice;
+                    Button(ctrl, opt.Display(), dark, IconKind.None, isChoice ? CaretW : 0);
+                    if (isChoice)
                     {
-                        // dropdown caret as geometry at the right edge of the value button
+                        // dropdown caret as geometry in the reserved strip at the right edge of the value button
                         var inner = Rectangle.Inflate(ctrl, 0, -1);
                         int cs = Math.Min(CaretW - 4, inner.Height - 6);
                         var cb = new RectangleF(inner.Right - CaretW + (CaretW - cs) / 2f,
@@ -325,8 +336,14 @@ namespace opennest_2
         private static void CenteredText(Graphics g, string s, Font f, Brush br, RectangleF r, StringFormat sf)
         {
             if (string.IsNullOrEmpty(s)) return;
-            float th = g.MeasureString(s, f, (int)Math.Ceiling(r.Width), sf).Height;
-            var layout = new RectangleF(r.X, r.Y + (r.Height - th) / 2f, r.Width, th);
+            float th = g.MeasureString(s, f, (int)Math.Ceiling(Math.Max(1, r.Width)), sf).Height;
+            float ty = r.Y + Math.Max(0, (r.Height - th) / 2f);
+            // The layout rect runs from the centered top (ty) down to the bottom of r, so its height is
+            // always >= the measured line height. A rect exactly `th` tall makes macOS libgdiplus decide
+            // the line doesn't fit and render just the ellipsis ("..."), even though the text is short —
+            // that was the cause of values showing "..." instead of names. Near alignment then draws the
+            // line at ty, i.e. vertically centered.
+            var layout = new RectangleF(r.X, ty, r.Width, r.Bottom - ty);
             g.DrawString(s, f, br, layout, sf);
         }
 
