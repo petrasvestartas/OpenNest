@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 Documentation
+    url: https://petrasvestartas.github.io/OpenNest/
+    about: Install, components, build & publish — check here first.
+  - name: ☕ Support / Buy me a coffee
+    url: https://ko-fi.com/petrasvestartas
+    about: Support OpenNest development.

@@ -1,0 +1,101 @@
+/* Thicker headings — Material's defaults are thin/light. The page title (h1) defaults to a grey
+   (--md-default-fg-color--light); force it to the full foreground so it reads BLACK (white in dark mode). */
+.md-typeset h1 { font-weight: 800; letter-spacing: -0.01em; color: var(--md-default-fg-color); }
+.md-typeset h2 { font-weight: 700; }
+.md-typeset h3 { font-weight: 700; }
+.md-typeset h4,
+.md-typeset h5,
+.md-typeset h6 { font-weight: 600; }
+
+/* Black & white for header/buttons; LINKS + the selected/active nav link + text selection are BLUE (not violet). */
+:root {
+  --md-primary-fg-color:        #000000;
+  --md-primary-fg-color--light: #1a1a1a;
+  --md-primary-fg-color--dark:  #000000;
+  --md-accent-fg-color:         #1565c0;   /* hover / active nav / ::selection = blue */
+  --md-typeset-a-color:         #1565c0;   /* links + selected nav link = blue, not violet/black */
+}
+
+/* Buttons */
+.md-typeset .md-button {
+  color: #000000;
+  border-color: #000000;
+  border-radius: 0;            /* crisp, minimal */
+}
+.md-typeset .md-button--primary {
+  background-color: #000000;
+  border-color: #000000;
+  color: #ffffff;
+}
+.md-typeset .md-button:hover,
+.md-typeset .md-button:focus {
+  background-color: #000000;
+  border-color: #000000;
+  color: #ffffff;
+}
+.md-typeset .md-button--primary:hover,
+.md-typeset .md-button--primary:focus {
+  background-color: #333333;
+  border-color: #333333;
+  color: #ffffff;
+}
+
+/* Code syntax highlighting: Material's defaults colour keywords/functions/constants violet-indigo.
+   Remap those tokens to blue so highlighting reads blue, not violet. */
+:root {
+  --md-code-hl-keyword-color:  #1565c0;
+  --md-code-hl-function-color: #1565c0;
+  --md-code-hl-constant-color: #1565c0;
+  --md-code-hl-special-color:  #1565c0;
+  --md-code-hl-name-color:     var(--md-code-fg-color);
+}
+
+/* Dark scheme: invert to white-on-black */
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #ffffff;
+  --md-accent-fg-color:  #64b5f6;
+  --md-typeset-a-color:  #64b5f6;
+  --md-code-hl-keyword-color:  #64b5f6;
+  --md-code-hl-function-color: #64b5f6;
+  --md-code-hl-constant-color: #64b5f6;
+  --md-code-hl-special-color:  #64b5f6;
+}
+[data-md-color-scheme="slate"] .md-typeset .md-button {
+  color: #ffffff;
+  border-color: #ffffff;
+}
+[data-md-color-scheme="slate"] .md-typeset .md-button--primary {
+  background-color: #ffffff;
+  border-color: #ffffff;
+  color: #000000;
+}
+
+/* Ko-fi "Buy me a coffee" button: quiet link affordance — a subtle dim on hover, no scaling/movement. */
+a[href*="ko-fi.com"] img {
+  border-radius: 8px;
+  transition: opacity .15s ease;
+}
+a[href*="ko-fi.com"] img:hover {
+  opacity: 0.85;
+}
+
+/* Content links (in the page body): PINK, never violet. Browsers colour VISITED links violet by
+   default — override :visited too, so a clicked link never turns violet. (Nav + ::selection stay blue.) */
+.md-typeset a,
+.md-typeset a:link,
+.md-typeset a:visited {
+  color: #d81b60;            /* pink */
+}
+.md-typeset a:hover,
+.md-typeset a:focus {
+  color: #ad1457;            /* darker pink on hover */
+}
+[data-md-color-scheme="slate"] .md-typeset a,
+[data-md-color-scheme="slate"] .md-typeset a:link,
+[data-md-color-scheme="slate"] .md-typeset a:visited {
+  color: #f48fb1;           /* lighter pink for dark mode */
+}
+[data-md-color-scheme="slate"] .md-typeset a:hover,
+[data-md-color-scheme="slate"] .md-typeset a:focus {
+  color: #f06292;
+}

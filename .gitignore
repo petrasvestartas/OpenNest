@@ -1,0 +1,68 @@
+*build*
+*.moc.*
+*.moc
+ui_*
+CMakeCache.txt
+tags
+.*.swp
+activity.png
+*.out
+*.php*
+*.log
+*.orig
+*.rej
+log
+patch
+*.patch
+a
+a.*
+lapack/testing
+lapack/reference
+.*project
+.settings
+bin/
+src/opennest_2/bin/
+
+# External dependencies
+**nest_cpp/external/**
+!**/nest_cpp/external/clipper2/**
+**/nest_cpp/external/boost/**
+
+# Executables
+*.exe
+*.app
+
+# IDE files
+.vscode/
+.idea/
+.DS_Store
+
+# CMake generated files
+CMakeFiles/
+cmake_install.cmake
+Makefile
+!ci/build.gitlab-ci.yml
+
+# Third-party research repositories
+3rd_party/
+
+# Generated nesting result files
+*_result.svg
+nesting_result.svg
+
+# Compiled libraries
+*.lib
+*.a
+*.o
+*.obj
+
+# Build intermediates / caches
+obj/
+.vs/
+.venv/
+.ghaload_test/
+
+# MkDocs build output
+site/
+# Claude Code local settings / scratch
+.claude/

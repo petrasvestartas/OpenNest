@@ -1,0 +1,28 @@
+name: Docs
+
+# Build the MkDocs site and publish it to GitHub Pages (gh-pages branch).
+# After the first successful run, set Settings -> Pages -> Source = "Deploy from a branch: gh-pages".
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/**
+      - mkdocs.yml
+      - .github/workflows/docs.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write   # mkdocs gh-deploy pushes the built site to the gh-pages branch
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - run: pip install mkdocs-material
+      - run: mkdocs gh-deploy --force --no-history

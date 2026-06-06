@@ -1,0 +1,224 @@
+name: Build & Publish (Windows + macOS -> Yak)
+
+# Manual publish. Bumps the version ONCE, builds every engine from source on BOTH platforms, packages a
+# SEPARATE Yak distribution per OS (…-rh8_0-win and …-rh8_0-mac) at the same version, pushes both, refreshes
+# the committed grasshopper_plugin/ packages, tags, and creates a GitHub Release.
+# A plugin with platform-specific native binaries (.dll on Windows, .dylib on macOS) MUST ship as separate
+# per-OS Yak packages — `yak build --platform win|mac` sets the distribution tag (see the Yak CLI reference).
+# Add a repo secret YAK_TOKEN (from `yak login --ci`) to enable the push step.
+on:
+  # Auto-publish on every push to main (the version bumps each time — that's intended).
+  # The release commit this job makes is tagged "[skip ci]", which GitHub honours for push
+  # events, so the bump commit never re-triggers the workflow (no infinite loop).
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version part to bump (manual runs only; push always bumps minor)"
+        type: choice
+        default: minor
+        options: [minor, patch, major]
+
+permissions:
+  contents: write   # push the version-bump commit + tag, and create the GitHub Release
+
+# Serialize publishes so rapid pushes don't race on the version bump / git push (they queue, not cancel).
+concurrency:
+  group: publish-yak
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------------------------------
+  # 1) macOS: build the three engines as UNIVERSAL dylibs (Intel x86_64 + Apple Silicon arm64) and upload
+  #    them. The Windows job then assembles the -mac Yak package with yak.exe (yak can tag either platform).
+  # ---------------------------------------------------------------------------------------------------
+  mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build native engines (universal x86_64 + arm64; minkowski fetches Boost + Eigen)
+        run: |
+          set -e
+          ARCH="-DCMAKE_OSX_ARCHITECTURES=x86_64;arm64"
+          cmake -S src/opennest_cpp     -B src/opennest_cpp/build     -DCMAKE_BUILD_TYPE=Release "$ARCH"
+          cmake --build src/opennest_cpp/build --target nfp_nest -j3
+          cmake -S src/nest_physics_cpp -B src/nest_physics_cpp/build -DCMAKE_BUILD_TYPE=Release "$ARCH"
+          cmake --build src/nest_physics_cpp/build --target nest_physics -j3
+          cmake -S src/minkowski        -B src/minkowski/build        -DCMAKE_BUILD_TYPE=Release "$ARCH" -DGET_LIBS=ON
+          cmake --build src/minkowski/build --target minkowski -j3
+
+      - name: Stage + verify universal dylibs (must list arm64 + x86_64)
+        run: |
+          set -e
+          mkdir -p mac_out
+          cp src/opennest_cpp/build/nfp_nest.dylib         mac_out/
+          cp src/nest_physics_cpp/build/nest_physics.dylib mac_out/
+          cp src/minkowski/build/minkowski.dylib           mac_out/
+          for f in mac_out/*.dylib; do echo "== $f =="; lipo -archs "$f"; done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-dylibs
+          path: mac_out/*.dylib
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------------------------------
+  # 2) Windows: build the Windows libs + the .gha, then package & push BOTH Yak distributions
+  #    (win from this build; mac from the artifact above — yak.exe can tag either platform).
+  # ---------------------------------------------------------------------------------------------------
+  windows:
+    needs: mac
+    runs-on: windows-latest
+    # Expose the secret as an env var so the push step's `if:` can test it (the `secrets` context is not
+    # allowed in `if:` — that would make the workflow file invalid).
+    env:
+      YAK_TOKEN: ${{ secrets.YAK_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ---- 1) Bump the version in BOTH manifests (the win manifest is canonical) ----
+      - name: Bump version
+        id: ver
+        shell: pwsh
+        run: |
+          $win = "grasshopper_plugin/opennest_win/manifest.yml"
+          $mac = "grasshopper_plugin/opennest_mac/manifest.yml"
+          $c = Get-Content $win -Raw
+          if ($c -notmatch 'version:\s*([0-9]+)\.([0-9]+)\.([0-9]+)') { throw "version not found in $win" }
+          $base = [version]"$($Matches[1]).$($Matches[2]).$($Matches[3])"
+          # Never publish a duplicate: start from the HIGHER of the committed manifest and the version
+          # already live on Yak (a prior run can push to Yak but fail to commit the bump after a race).
+          try {
+            $y = (Invoke-RestMethod -Uri "https://yak.rhino3d.com/packages/opennest" -TimeoutSec 20).version
+            if ($y -match '([0-9]+)\.([0-9]+)\.([0-9]+)') {
+              $yv = [version]"$($Matches[1]).$($Matches[2]).$($Matches[3])"
+              if ($yv -gt $base) { $base = $yv }
+            }
+          } catch { Write-Host "Yak version query failed; using manifest version. $_" }
+          $maj=$base.Major; $min=$base.Minor; $pat=$base.Build
+          switch ("${{ github.event.inputs.bump }}") {
+            "major" { $maj++; $min=0; $pat=0 }
+            "patch" { $pat++ }
+            default { $min++; $pat=0 }   # minor
+          }
+          $new = "$maj.$min.$pat.0"
+          foreach ($m in @($win, $mac)) {
+            (Get-Content $m -Raw) -replace 'version:\s*[0-9.]+', "version: $new" | Set-Content $m -NoNewline
+          }
+          "version=$new" | Out-File $env:GITHUB_OUTPUT -Append
+          Write-Host "New version: $new"
+
+      # ---- 2) Toolchains (CMake + VS 2022 + MSVC are preinstalled on windows-latest) ----
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # ---- 3) Build the three native engines FROM SOURCE (Windows x64) ----
+      - name: Build nfp_nest.dll
+        run: |
+          cmake -S src/opennest_cpp -B src/opennest_cpp/build -A x64
+          cmake --build src/opennest_cpp/build --config Release --target nfp_nest
+
+      - name: Build nest_physics.dll
+        run: |
+          cmake -S src/nest_physics_cpp -B src/nest_physics_cpp/build -A x64
+          cmake --build src/nest_physics_cpp/build --config Release --target nest_physics
+
+      - name: Build minkowski.dll (CMake superbuild fetches Boost + Eigen — no vcpkg)
+        run: |
+          cmake -S src/minkowski -B src/minkowski/build -A x64 -DGET_LIBS=ON
+          cmake --build src/minkowski/build --config Release --target minkowski
+
+      # ---- 4) Build the plugin (all TFMs); PostBuild copies the Windows DLLs next to each .gha ----
+      - name: Build opennest_2.gha
+        run: dotnet build src/opennest_2/opennest_2.csproj -c Release
+
+      # ---- 5) Pull the universal macOS dylibs built by the mac job ----
+      - name: Download macOS dylibs
+        uses: actions/download-artifact@v4
+        with:
+          name: mac-dylibs
+          path: mac_dylibs
+
+      - name: Install Yak CLI
+        shell: pwsh
+        run: Invoke-WebRequest -Uri "https://files.mcneel.com/yak/tools/latest/yak.exe" -OutFile "$PWD/yak.exe"
+
+      # ---- 6) WINDOWS Yak package (rh8_0-win) from the net7.0-windows build ----
+      - name: Build Windows Yak package
+        shell: pwsh
+        run: |
+          $stage = "yak_win"
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          Copy-Item "src/opennest_2/bin/Release/net7.0-windows/*" $stage -Recurse -Force
+          Copy-Item "grasshopper_plugin/opennest_win/manifest.yml" $stage -Force
+          Copy-Item "grasshopper_plugin/opennest_win/icon.png"     $stage -Force
+          if (Test-Path "README.md") { Copy-Item "README.md" "$stage/" -Force }
+          if (Test-Path "LICENSE")   { Copy-Item "LICENSE"   "$stage/" -Force }
+          Push-Location $stage
+          & "$env:GITHUB_WORKSPACE/yak.exe" build --platform win
+          Pop-Location
+          Get-ChildItem "$stage/*.yak" | Select-Object Name
+
+      # ---- 7) macOS Yak package (rh8_0-mac): the net7.0 managed build + the universal dylibs ----
+      - name: Build macOS Yak package
+        shell: pwsh
+        run: |
+          $stage = "yak_mac"
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          Copy-Item "src/opennest_2/bin/Release/net7.0/*" $stage -Recurse -Force
+          # Drop the Windows-native engine DLLs the PostBuild copied in; ship the universal dylibs instead.
+          Remove-Item "$stage/nfp_nest.dll","$stage/nest_physics.dll","$stage/minkowski.dll" -Force -ErrorAction SilentlyContinue
+          Copy-Item "mac_dylibs/*.dylib" $stage -Force
+          Copy-Item "grasshopper_plugin/opennest_mac/manifest.yml" $stage -Force
+          Copy-Item "grasshopper_plugin/opennest_mac/icon.png"     $stage -Force
+          if (Test-Path "README.md") { Copy-Item "README.md" "$stage/" -Force }
+          if (Test-Path "LICENSE")   { Copy-Item "LICENSE"   "$stage/" -Force }
+          Push-Location $stage
+          & "$env:GITHUB_WORKSPACE/yak.exe" build --platform mac
+          Pop-Location
+          Get-ChildItem "$stage/*.yak" | Select-Object Name
+
+      # ---- 8) Push BOTH distributions (same version, different platform tag) ----
+      - name: Yak push (win + mac)
+        if: ${{ env.YAK_TOKEN != '' }}
+        shell: pwsh
+        run: |
+          Get-ChildItem yak_win/*.yak, yak_mac/*.yak | ForEach-Object {
+            & "$env:GITHUB_WORKSPACE/yak.exe" push $_.FullName
+          }
+
+      # ---- 9) Refresh the committed installable packages in grasshopper_plugin/ ----
+      - name: Refresh grasshopper_plugin packages
+        shell: pwsh
+        run: |
+          Remove-Item grasshopper_plugin/opennest_win/*.yak -Force -ErrorAction SilentlyContinue
+          Remove-Item grasshopper_plugin/opennest_mac/*.yak -Force -ErrorAction SilentlyContinue
+          Copy-Item yak_win/*.yak grasshopper_plugin/opennest_win/ -Force
+          Copy-Item yak_mac/*.yak grasshopper_plugin/opennest_mac/ -Force
+
+      # ---- 10) Commit the version bump + refreshed packages, tag, push ----
+      - name: Commit + tag
+        shell: pwsh
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A grasshopper_plugin
+          git commit -m "Release v${{ steps.ver.outputs.version }} [skip ci]"
+          # A concurrent push (e.g. a docs edit) may have moved main; rebase the release commit on top so
+          # the push fast-forwards. Tag AFTER the rebase so the tag points at the final commit.
+          git pull --rebase origin main
+          git tag "v${{ steps.ver.outputs.version }}"
+          git push origin HEAD:main --tags
+
+      - name: GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ steps.ver.outputs.version }}"
+          files: |
+            yak_win/*.yak
+            yak_mac/*.yak
