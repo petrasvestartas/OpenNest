@@ -1,0 +1,131 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  
+  <PropertyGroup>
+    <!-- Select the framework(s) you wish to target.
+        Rhino 6: net45
+        Rhino 7: net48
+        Rhino 8 Windows: net48, net7.0, net7.0-windows, net7.0-windows10.0.22000.0, etc
+        Rhino 8 Mac: net7.0, net7.0-macos, net7.0-macos12.0, etc
+    -->
+    <TargetFrameworks>net7.0-windows;net7.0;net48</TargetFrameworks>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <TargetExt>.gha</TargetExt>
+    <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
+    <!-- Suppressed warnings:
+         NU1701: Package compatibility warning
+         NETSDK1086: Target framework compatibility warning
+         CA1416: Platform compatibility warning
+         CS0618: Obsolete member warning
+         CS0168: Variable declared but never used
+         CS0219: Variable assigned but its value is never used
+         CS0162: Unreachable code detected
+         CS0649: Field is never assigned to, and will always have its default value
+         CS0169: Field is never used
+         CS0414: Field is assigned but its value is never used
+         CS0728: Possibly incorrect assignment to local variable in using or lock statement
+    -->
+    <NoWarn>NU1701;NETSDK1086;CA1416;CS0618;CS0168;CS0219;CS0162;CS0649;CS0169;CS0414;CS0728</NoWarn>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateResourceUsePreserializedResources>true</GenerateResourceUsePreserializedResources>
+  </PropertyGroup>
+  
+  <PropertyGroup>
+    <!-- Specifies information for Assembly and Yak -->
+    <Version>1.0</Version>
+    <Title>opennest_2</Title>
+    <Company>opennest_2 Authors</Company>
+    <Description>Description of opennest_2</Description>
+    <BaseOutputPath></BaseOutputPath>
+    <!-- <BaseOutputPath>C:\Users\petras\AppData\Roaming\Grasshopper\Libraries</BaseOutputPath> -->
+  </PropertyGroup>
+  
+  <ItemGroup>
+    <PackageReference Include="Grasshopper" Version="8.0.23304.9001" ExcludeAssets="runtime" />
+    <PackageReference Include="System.Resources.Extensions" Version="5.0.0" />
+    <PackageReference Include="System.Drawing.Common" Version="7.0.0" />
+  </ItemGroup>
+
+  <!-- WinForms for the embedded component options UI (ContextMenuStrip dropdowns + type-in boxes).
+       Cross-platform: Rhino 8 ships its own Cocoa-based System.Windows.Forms on Mac, so the same menu
+       code runs on both. Windows TFMs use WinForms natively; the cross-platform net7.0 TFM compiles
+       against the REFERENCE assembly only and binds to Rhino's implementation at runtime (never bundle
+       System.Windows.Forms.dll). Per McNeel guidance (RH-80655). -->
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net7.0-windows' or '$(TargetFramework)' == 'net48'">
+    <UseWindowsForms>true</UseWindowsForms>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net7.0'">
+    <PackageReference Include="Microsoft.WindowsDesktop.App.Ref" GeneratePathProperty="true" Version="7.0.0" ExcludeAssets="all" />
+    <Reference Include="$(PkgMicrosoft_WindowsDesktop_App_Ref)\ref\net7.0\System.Windows.Forms.dll" Private="False" />
+  </ItemGroup>
+
+  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
+    <!-- Copy for Windows -->
+    <Copy Condition=" '$(OS)' == 'Windows_NT' AND Exists('../minkowski/build/Release/minkowski.dll') " SourceFiles="../minkowski/build/Release/minkowski.dll" DestinationFolder="$(TargetDir)" />
+    <!-- Copy for macOS -->
+    <Copy Condition=" '$(OS)' != 'Windows_NT' AND Exists('../minkowski/build/minkowski.dylib') " SourceFiles="../minkowski/build/minkowski.dylib" DestinationFolder="$(TargetDir)" />
+    <!-- Copy the nest_physics solver DLL next to the .gha so the component_nest P/Invoke finds it -->
+    <Copy Condition=" '$(OS)' == 'Windows_NT' AND Exists('nest_physics.dll') " SourceFiles="nest_physics.dll" DestinationFolder="$(TargetDir)" />
+    <!-- Copy the nfp_nest NFP/SvgNest solver DLL (Boost.Polygon GA) next to the .gha for component_nest2 -->
+    <Copy Condition=" '$(OS)' == 'Windows_NT' AND Exists('../opennest_cpp/build/Release/nfp_nest.dll') " SourceFiles="../opennest_cpp/build/Release/nfp_nest.dll" DestinationFolder="$(TargetDir)" />
+    <!-- macOS: the universal (x86_64 + arm64) dylibs, emitted with no "lib" prefix into each engine's build/ root -->
+    <Copy Condition=" '$(OS)' != 'Windows_NT' AND Exists('../opennest_cpp/build/nfp_nest.dylib') " SourceFiles="../opennest_cpp/build/nfp_nest.dylib" DestinationFolder="$(TargetDir)" />
+    <Copy Condition=" '$(OS)' != 'Windows_NT' AND Exists('../nest_physics_cpp/build/nest_physics.dylib') " SourceFiles="../nest_physics_cpp/build/nest_physics.dylib" DestinationFolder="$(TargetDir)" />
+  </Target>
+
+  <ItemGroup>
+    <Reference Update="System">
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Update="System.Core">
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Update="System.Data">
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Update="System.Drawing">
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Update="System.IO.Compression.FileSystem">
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Update="System.Numerics">
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Update="System.Runtime.Serialization">
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Update="System.Xml">
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Update="System.Xml.Linq">
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+</Project>
+

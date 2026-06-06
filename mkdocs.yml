@@ -1,0 +1,83 @@
+site_name: OpenNest
+site_description: 2D polygonal nesting for Rhino / Grasshopper
+site_url: https://petrasvestartas.github.io/OpenNest/
+repo_url: https://github.com/petrasvestartas/OpenNest
+repo_name: petrasvestartas/OpenNest
+copyright: © Petras Vestartas
+
+theme:
+  name: material
+  logo: assets/logo.png
+  favicon: assets/favicon.png
+  # Strict black & white (see stylesheets/extra.css for the button/link overrides).
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: black
+      accent: grey
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: grey
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - content.code.copy
+    - toc.follow
+
+extra_css:
+  - stylesheets/extra.css
+
+nav:
+  - Home: index.md
+  - Build & Publish: developing.md
+  - Credits: references.md
+  - Components:
+      - Nesting:
+          - "OpenNest2": components/opennest2.md
+          - "OpenNest1": components/opennest1.md
+          - "OpenNestCollision": components/opennest_collision.md
+      - Geometry & sheets:
+          - "Geometry": components/geometry.md
+          - "Geometry (Surfaces)": components/geometry_srf.md
+          - "Geometry (Rhino)": components/geometry_rhino.md
+          - "Merge": components/merge.md
+          - "Sheets": components/sheets.md
+          - "Sheets (Surfaces)": components/sheets_surfaces.md
+      - Utilities:
+          - "Transform Object": components/transform_guid.md
+          - "Unroll": components/unroll.md
+          - "Project to Plane": components/project.md
+          - "Region Slits": components/region_slits.md
+          - "Rhino Objects": components/rhino_objects.md
+          - "Text": components/text.md
+          - "Inscribed Circle": components/inscribe_circle.md
+          - "Pack Objects": components/pack.md
+          - "Principal Component Analysis": components/pca.md
+          - "Box Packing": components/bin_packing.md
+          - "Bounding Box Edges": components/bbox_edges.md
+          - "Simplify": components/simplify.md
+
+markdown_extensions:
+  - admonition
+  - tables
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.details
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/petrasvestartas/OpenNest
+    - icon: fontawesome/solid/mug-hot
+      link: https://ko-fi.com/petrasvestartas
