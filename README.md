@@ -19,5 +19,5 @@ OpenNest is released under the **MIT License** — see [LICENSE](LICENSE).
 
 ## Credits
 
-Builds on published nesting methods — see **[CREDITS.md](CREDITS.md)**. Original OpenNest, the C++
-translation, and all enhancements by **Petras Vestartas**.
+Developed by Petras Vestartas.
+Builds on published nesting methods — see **[CREDITS.md](CREDITS.md)**. 
