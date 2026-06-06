@@ -1,21 +1,20 @@
 # Build & Publish
 
-This page is for developers who want to **use** OpenNest from source or **contribute** to it. It covers the toolchains you need, how to build the three native C++ engines and the Grasshopper plugin, how to load the result into Rhino, and how publishing/docs deploy.
+This page is for developers who want to **use** OpenNest from source or **contribute** to it. It covers the toolchains you need, how to build the two native C++ engines and the Grasshopper plugin, how to load the result into Rhino, and how publishing/docs deploy.
 
 ## 1. Prerequisites
 
 | Tool | Version | Used for |
 |---|---|---|
-| CMake | 3.20+ (minkowski needs 3.24.2) | Configuring/building the native engines |
+| CMake | 3.20+ | Configuring/building the native engines |
 | MSVC | Visual Studio 2022 (Windows) | Compiling the C++ DLLs on Windows |
 | Clang | default toolchain (macOS) | Compiling the C++ dylibs on macOS |
 | .NET SDK | **8.0.x** | Building the C# Grasshopper plugin |
-| Boost + Eigen | Boost 1.78.0, Eigen 3.4.0 | **Only** for the `minkowski` engine (header-only; optional auto-download) |
 
 !!! note
     The plugin targets `net7.0` / `net48` runtimes, but you build it with the **.NET 8.0.x SDK** (this is what CI uses). The .NET 7 SDK alone is not sufficient. Building the `net48` target on Windows works because the project sets `EnableWindowsTargeting=true`.
 
-The `opennest_cpp` and `nest_physics_cpp` engines have **no external dependencies** — Boost/Eigen are required only by `minkowski` (see below).
+Both engines are **fully self-contained** — no external dependencies. Clipper2 and a minimal Boost.Polygon subset are **vendored** in `src/opennest_cpp`.
 
 ## 2. Repository layout
 
@@ -23,7 +22,6 @@ The `opennest_cpp` and `nest_physics_cpp` engines have **no external dependencie
 |---|---|
 | `src/opennest_cpp` | `nfp_nest.dll` — NFP/SVGnest GA engine. Vendored Clipper2 (static) + a minimal Boost.Polygon subset. C++17. |
 | `src/nest_physics_cpp` | `nest_physics.dll` — physics/overlap solver. Header-only, threads only, no external deps. C++20. |
-| `src/minkowski` | `minkowski.dll` (+ a `minkowski_app` executable) — Minkowski/NFP helper. Needs Boost + Eigen. C++20. |
 | `src/opennest_2` | `opennest_2.gha` — the .NET / C# Grasshopper plugin. |
 | `docs/` | MkDocs Material source (`index.md`, `developing.md`, `references.md`, `components/`). |
 | `grasshopper_plugin/` | Packaged Yak distributions per platform (`opennest_win/`, `opennest_mac/`): `.yak` binaries + `manifest.yml`. |
@@ -33,7 +31,7 @@ The `opennest_cpp` and `nest_physics_cpp` engines have **no external dependencie
 
 ## 3. Build the native engines
 
-Each engine is its own standalone CMake project, so configure and build them **one folder at a time**. All three produce a self-contained shared library (no `lib` prefix, to match the P/Invoke names).
+Each engine is its own standalone CMake project, so configure and build them **one folder at a time**. Both produce a self-contained shared library (no `lib` prefix, to match the P/Invoke names).
 
 !!! note "Self-contained DLLs"
     Every engine links the **static MSVC runtime** (`/MT`) on Windows (and `-static -static-libgcc -static-libstdc++` under MinGW/GCC), so the resulting DLL/dylib has no external runtime dependency and loads in Rhino without the VC++ redistributable.
@@ -48,15 +46,11 @@ cmake --build src/opennest_cpp/build --config Release
 # nest_physics.dll  ->  src/nest_physics_cpp/build/Release/nest_physics.dll
 cmake -S src/nest_physics_cpp -B src/nest_physics_cpp/build -A x64
 cmake --build src/nest_physics_cpp/build --config Release
-
-# minkowski.dll  ->  src/minkowski/build/Release/minkowski.dll
-cmake -S src/minkowski -B src/minkowski/build -A x64 -DGET_LIBS=ON
-cmake --build src/minkowski/build --config Release
 ```
 
 ### macOS (Clang)
 
-Drop `-A x64`. To match CI's universal build, pass the OSX arch flag (required for `nfp_nest` and `nest_physics`, which do not force it themselves; `minkowski` forces universal on its own):
+Drop `-A x64`. To match CI's universal build, pass the OSX arch flag (both engines need it explicitly):
 
 ```bash
 cmake -S src/opennest_cpp     -B src/opennest_cpp/build     -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"
@@ -64,22 +58,10 @@ cmake --build src/opennest_cpp/build --config Release
 
 cmake -S src/nest_physics_cpp -B src/nest_physics_cpp/build -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"
 cmake --build src/nest_physics_cpp/build --config Release
-
-cmake -S src/minkowski        -B src/minkowski/build        -DGET_LIBS=ON
-cmake --build src/minkowski/build --config Release
 ```
 
-### minkowski dependency flags
-
-`minkowski` is the only engine needing **Boost** (boost/polygon) and **Eigen** — both header-only and **not** vendored. They are also required for the `minkowski_app` executable, which builds unconditionally. Choose one of:
-
-| Flag | Effect |
-|---|---|
-| `-DGET_LIBS=ON` | Download **Boost 1.78.0** + **Eigen 3.4.0** at build time and wire them in automatically. |
-| `-DBOOST_INCLUDE_DIR=<dir> -DEIGEN_INCLUDE_DIR=<dir>` | Point at existing header installs (folders containing `boost/` and `Eigen/`, e.g. a vcpkg `install/x64-windows/include`). |
-
-!!! note
-    `opennest_cpp`'s vendored Boost.Polygon lives at `third_party/boost_min`; override it with `-DBOOST_MIN_INCLUDE_DIR=<dir>` to point at a full Boost install. `nest_physics` can additionally build a standalone CLI with `-DNEST_PHYSICS_BUILD_CLI=ON`.
+!!! note "Optional flags"
+    `nfp_nest` vendors a minimal Boost.Polygon at `src/opennest_cpp/third_party/boost_min`; override it with `-DBOOST_MIN_INCLUDE_DIR=<dir>` to point at a full Boost install. `nest_physics` can additionally build a standalone CLI with `-DNEST_PHYSICS_BUILD_CLI=ON`.
 
 ## 4. Build the Grasshopper plugin
 
@@ -109,12 +91,11 @@ A `PostBuild` target copies each native engine library next to the `.gha` (guard
 
 | Native lib | Windows source | macOS source |
 |---|---|---|
-| `minkowski` | `../minkowski/build/Release/minkowski.dll` | `../minkowski/build/minkowski.dylib` |
 | `nest_physics` | `nest_physics.dll` (next to the csproj) | `../nest_physics_cpp/build/nest_physics.dylib` |
 | `nfp_nest` | `../opennest_cpp/build/Release/nfp_nest.dll` | `../opennest_cpp/build/nfp_nest.dylib` |
 
 !!! warning "nest_physics.dll is copied from a different place"
-    On Windows, `nest_physics.dll` is copied from the **project root next to the csproj** — *not* from a `build/Release/` folder like the other two engines. After building `nest_physics`, stage its DLL there yourself; otherwise the `Exists(...)` guard skips it and the physics P/Invoke fails at runtime.
+    On Windows, `nest_physics.dll` is copied from the **project root next to the csproj** — *not* from a `build/Release/` folder like `nfp_nest`. After building `nest_physics`, stage its DLL there yourself; otherwise the `Exists(...)` guard skips it and the physics P/Invoke fails at runtime.
 
 ## 5. Run it locally
 

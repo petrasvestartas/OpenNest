@@ -61,10 +61,6 @@
   </ItemGroup>
 
   <Target Name="PostBuild" AfterTargets="PostBuildEvent">
-    <!-- Copy for Windows -->
-    <Copy Condition=" '$(OS)' == 'Windows_NT' AND Exists('../minkowski/build/Release/minkowski.dll') " SourceFiles="../minkowski/build/Release/minkowski.dll" DestinationFolder="$(TargetDir)" />
-    <!-- Copy for macOS -->
-    <Copy Condition=" '$(OS)' != 'Windows_NT' AND Exists('../minkowski/build/minkowski.dylib') " SourceFiles="../minkowski/build/minkowski.dylib" DestinationFolder="$(TargetDir)" />
     <!-- Copy the nest_physics solver DLL next to the .gha so the component_nest P/Invoke finds it -->
     <Copy Condition=" '$(OS)' == 'Windows_NT' AND Exists('nest_physics.dll') " SourceFiles="nest_physics.dll" DestinationFolder="$(TargetDir)" />
     <!-- Copy the nfp_nest NFP/SvgNest solver DLL (Boost.Polygon GA) next to the .gha for component_nest2 -->

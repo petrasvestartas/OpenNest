@@ -30,8 +30,7 @@ original authors for the underlying techniques.
 ## Geometry libraries (used directly)
 
 - **Clipper2** — Angus Johnson. Polygon clipping & offsetting. <https://github.com/AngusJohnson/Clipper2>
-- **Boost.Polygon** — Minkowski‑sum / NFP construction. <https://www.boost.org/>
-- **Eigen** — linear algebra in the Minkowski helper. <https://eigen.tuxfamily.org/>
+- **Boost.Polygon** — no‑fit‑polygon (Minkowski) convolution in the `nfp_nest` engine; a minimal subset is vendored in‑repo. <https://www.boost.org/>
 
 ## OpenNest
 
@@ -41,4 +40,4 @@ Original **OpenNest** Grasshopper plugin, the C++ translation, and all enhanceme
 ---
 
 Each dependency keeps its own license; the OpenNest engines are independent implementations of the *methods*
-above. If you redistribute OpenNest, include the upstream licenses for the components you bundle.
+above. If you redistribute OpenNest, include the upstream licenses for the components you bundle (Clipper2, Boost.Polygon).

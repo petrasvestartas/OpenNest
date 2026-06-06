@@ -395,10 +395,11 @@ namespace opennest_2
             // Build items with Grasshopper's own helper (the same call GH uses for its native
             // component menus, which size correctly on macOS) instead of a raw ToolStripMenuItem,
             // whose auto-width under-measures on Rhino-for-Mac's WinForms shim and clips the label.
+            var items = new List<ToolStripMenuItem>();
             for (int k = 0; k < opt.ChoiceLabels.Count; k++)
             {
                 int idx = k;
-                GH_DocumentObject.Menu_AppendItem(
+                var item = GH_DocumentObject.Menu_AppendItem(
                     menu, opt.ChoiceLabels[k],
                     (s, a) =>
                     {
@@ -409,15 +410,26 @@ namespace opennest_2
                         }
                     },
                     true, k == opt.SelectedIndex);
+                if (item != null) items.Add(item);
             }
 
-            // Belt-and-suspenders: force the strip at least as wide as the widest label measured with
-            // GH's own font metrics (+ room for the checkmark / padding), so a too-narrow auto-size on
-            // the Mac shim still can't truncate the text.
+            // Width: measure the labels with the MENU's actual font. The first attempt measured with
+            // the on-canvas GH font (GH_FontServer.Standard, ~7pt), which is far smaller than the system
+            // menu font (larger still on a Retina Mac), so the width was under-estimated and labels still
+            // clipped. Measure with menu.Font, pad for the checkmark column + margins, then PIN every item
+            // to that width (AutoSize off) so the Mac shim's narrow auto-size can't truncate; also raise
+            // the strip minimum width to match.
             int widest = 0;
             foreach (var lbl in opt.ChoiceLabels)
-                widest = Math.Max(widest, GH_FontServer.StringWidth(lbl, GH_FontServer.Standard));
-            menu.MinimumSize = new Size(widest + 48, 0);
+                widest = Math.Max(widest, TextRenderer.MeasureText(lbl, menu.Font).Width);
+            int w = widest + 64;
+            foreach (var it in items)
+            {
+                int h = it.Height;          // capture the auto height before disabling AutoSize
+                it.AutoSize = false;
+                it.Size = new Size(w, h);
+            }
+            menu.MinimumSize = new Size(w + 8, 0);
 
             menu.Show(screenPt);
         }

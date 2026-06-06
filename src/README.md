@@ -1,19 +1,19 @@
 # `src/` — source layout
 
-Four projects: one C# Grasshopper plugin and three native C++ nesting engines it calls through
+Three projects: one C# Grasshopper plugin and two native C++ nesting engines it calls through
 P/Invoke. Everything builds from source, **cross‑platform** — Windows (x64) and macOS
-(universal: Intel `x86_64` + Apple Silicon `arm64`).
+(universal: Intel `x86_64` + Apple Silicon `arm64`). Both engines are self‑contained (no external
+dependencies — Clipper2 and a minimal Boost.Polygon subset are vendored in `opennest_cpp`).
 
 | Folder | What it does | Output |
 | --- | --- | --- |
 | `opennest_2/` | The **Grasshopper plugin** (C#): the components, the UI, geometry intake, and the wrappers that drive the engines. | `opennest_2.gha` |
 | `opennest_cpp/` | The **`nfp_nest`** engine (C++): nests parts with a no‑fit‑polygon genetic algorithm. | `nfp_nest.dll` / `nfp_nest.dylib` |
 | `nest_physics_cpp/` | The **`nest_physics`** engine (C++): packs parts by overlap‑relaxation — it lets parts overlap, then slides them apart until they fit. | `nest_physics.dll` / `nest_physics.dylib` |
-| `minkowski/` | The **`minkowski`** engine (C++): computes the no‑fit polygons that let parts sit together without overlapping. | `minkowski.dll` / `minkowski.dylib` |
 
 ## Building the native engines
 
-Each engine is a standalone CMake project; a top‑level `CMakeLists.txt` superbuild builds all three at once.
+Each engine is a standalone CMake project; a top‑level `CMakeLists.txt` superbuild builds both at once.
 
 **Windows (x64):**
 
@@ -28,10 +28,6 @@ cmake --build build --config Release
 cmake -S . -B build -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
-
-`minkowski` needs Boost.Polygon + Eigen (both header‑only). Easiest is to let CMake fetch them — add
-**`-DGET_LIBS=ON`** and it downloads Boost + Eigen at build time (this is what CI does, so no package
-manager is required). Or point at your own copies with `-DBOOST_INCLUDE_DIR=… -DEIGEN_INCLUDE_DIR=…`.
 
 ## Building the plugin
 

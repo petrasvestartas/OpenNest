@@ -31,8 +31,7 @@ authors for the underlying techniques.
 ## Geometry libraries (used directly)
 
 - **Clipper2** — Angus Johnson. Polygon clipping & offsetting. <https://github.com/AngusJohnson/Clipper2>
-- **Boost.Polygon** — Minkowski‑sum / NFP construction. <https://www.boost.org/>
-- **Eigen** — linear algebra in the Minkowski helper. <https://eigen.tuxfamily.org/>
+- **Boost.Polygon** — no‑fit‑polygon (Minkowski) convolution in the `nfp_nest` engine; a minimal subset is vendored in‑repo. <https://www.boost.org/>
 
 ## OpenNest
 
@@ -42,7 +41,7 @@ authors for the underlying techniques.
 !!! note "Licensing"
     Each dependency keeps its own license. The OpenNest engines are independent implementations of the
     *methods* above. If you redistribute OpenNest, include the upstream licenses for the components you bundle
-    (e.g. Clipper2, Boost, Eigen).
+    (Clipper2, Boost.Polygon).
 
 ---
 
@@ -60,7 +59,6 @@ The original authors of the underlying methods are credited above.
   the JavaScript original and the C# ports) as a self‑contained engine with a C API for the plugin.
 - **`nest_physics`** — a C++ implementation of the *sparrow* overlap‑relaxation method (jagua‑rs lineage):
   shrink the strip, then resolve overlaps by moving parts to minimise a penalty.
-- **`minkowski`** — C++ Minkowski‑sum no‑fit‑polygon construction used by the managed path.
 
 ### Speed & performance (algorithm changes)
 
