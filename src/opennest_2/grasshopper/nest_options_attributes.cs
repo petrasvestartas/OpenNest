@@ -391,20 +391,34 @@ namespace opennest_2
         private void ShowChoiceMenu(NestOption opt, Point screenPt)
         {
             var menu = new ContextMenuStrip();
+
+            // Build items with Grasshopper's own helper (the same call GH uses for its native
+            // component menus, which size correctly on macOS) instead of a raw ToolStripMenuItem,
+            // whose auto-width under-measures on Rhino-for-Mac's WinForms shim and clips the label.
             for (int k = 0; k < opt.ChoiceLabels.Count; k++)
             {
                 int idx = k;
-                var item = new ToolStripMenuItem(opt.ChoiceLabels[k]) { Checked = (k == opt.SelectedIndex) };
-                item.Click += (s, a) =>
-                {
-                    if (opt.SelectedIndex != idx)
+                GH_DocumentObject.Menu_AppendItem(
+                    menu, opt.ChoiceLabels[k],
+                    (s, a) =>
                     {
-                        opt.SelectedIndex = idx;
-                        _host.OnOptionChanged(opt);
-                    }
-                };
-                menu.Items.Add(item);
+                        if (opt.SelectedIndex != idx)
+                        {
+                            opt.SelectedIndex = idx;
+                            _host.OnOptionChanged(opt);
+                        }
+                    },
+                    true, k == opt.SelectedIndex);
             }
+
+            // Belt-and-suspenders: force the strip at least as wide as the widest label measured with
+            // GH's own font metrics (+ room for the checkmark / padding), so a too-narrow auto-size on
+            // the Mac shim still can't truncate the text.
+            int widest = 0;
+            foreach (var lbl in opt.ChoiceLabels)
+                widest = Math.Max(widest, GH_FontServer.StringWidth(lbl, GH_FontServer.Standard));
+            menu.MinimumSize = new Size(widest + 48, 0);
+
             menu.Show(screenPt);
         }
 
