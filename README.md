@@ -9,9 +9,6 @@ JavaScript / Rust / C# originals and then **substantially extended**.
 
 ![Parts nested to fill a shape with OpenNest](docs/assets/screenshot05.png)
 
-
-
-
 ## Documentation
 
 Install, components, build & publish: **https://petrasvestartas.github.io/OpenNest/**
