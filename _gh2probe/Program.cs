@@ -19,25 +19,26 @@ class Probe
         var mlc = new MetadataLoadContext(new PathAssemblyResolver(paths.Distinct()), "System.Private.CoreLib");
         _gh = mlc.LoadFromAssemblyPath(Path.Combine(ghRef, "Grasshopper2.dll"));
 
-        var sw = new StreamWriter(@"C:\pc\3_code\code_cpp\OpenNest\_gh2probe\gh2final.txt", false) { AutoFlush = true };
+        var sw = new StreamWriter(@"C:\pc\3_code\code_cpp\OpenNest\_gh2probe\gh2builder.txt", false) { AutoFlush = true };
         Console.SetOut(sw);
 
-        var resp = _gh.GetType("Grasshopper2.UI.Flex.Response");
-        Console.WriteLine("Response enum: " + (resp != null ? string.Join(", ", Enum.GetNames(resp)) : "?"));
-
-        // Component methods that trigger recompute / expire
-        var comp = _gh.GetType("Grasshopper2.Components.Component");
-        Console.WriteLine("=== Component expire/recompute-ish methods ===");
-        foreach (var m in comp.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.FlattenHierarchy)
-                              .Where(m => !m.IsSpecialName && (m.Name.Contains("Expire") || m.Name.Contains("Recompute") || m.Name.Contains("Modif") || m.Name.Contains("Invalidate") || m.Name.Contains("Schedule") || m.Name.Contains("Solution")))
-                              .Select(m => m.Name).Distinct().OrderBy(x => x))
-            Console.WriteLine("  " + m);
-
-        // Attributes base: how to access the Document / owner to schedule a new solution
-        var ca = _gh.GetType("Grasshopper2.Doc.Attributes.ComponentAttributes");
-        Console.WriteLine("=== ComponentAttributes/base props for Owner/Document ===");
-        foreach (var p in ca.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.FlattenHierarchy)
-                            .Select(p => { try { return p.PropertyType.Name + " " + p.Name; } catch { return "? " + p.Name; } }).Distinct())
-            Console.WriteLine("  " + p);
+        Dump("Grasshopper2.UI.Icon.Vector.Builder", new[] { "WithFill", "WithEdge", "Polyline", "Line", "Box", "Circle", "Ellipse", "Bezier", "Arc", "Text", "Curve", "Element" });
+        Dump("Grasshopper2.UI.Icon.Vector.VectorIcon", null);
+        Dump("Grasshopper2.UI.Icon.AbstractIcon", new[] { "FromBitmap" });
     }
+
+    static void Dump(string typeName, string[] only)
+    {
+        var t = _gh.GetType(typeName);
+        if (t == null) { Console.WriteLine("### " + typeName + " <NOT FOUND>"); return; }
+        Console.WriteLine("### " + typeName);
+        foreach (var c in t.GetConstructors(BindingFlags.Public | BindingFlags.Instance))
+            try { Console.WriteLine("  ctor(" + Pars(c.GetParameters()) + ")"); } catch { Console.WriteLine("  ctor(?)"); }
+        foreach (var m in t.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly)
+                          .Where(m => !m.IsSpecialName && (only == null || only.Contains(m.Name))).OrderBy(m => m.Name))
+            try { Console.WriteLine("  " + Short(m.ReturnType) + " " + m.Name + "(" + Pars(m.GetParameters()) + ")"); }
+            catch { Console.WriteLine("  ? " + m.Name + "(?)"); }
+    }
+    static string Pars(ParameterInfo[] ps) { try { return string.Join(", ", ps.Select(p => Short(p.ParameterType) + " " + p.Name + (p.HasDefaultValue ? "=" + (p.RawDefaultValue ?? "null") : ""))); } catch { return "?"; } }
+    static string Short(Type t) => t == null ? "void" : t.Name;
 }

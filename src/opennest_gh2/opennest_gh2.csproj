@@ -26,9 +26,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Component icons (SVG, vector) embedded so AbstractIcon.FromResource can load them.
-         Logical resource name = opennest_gh2.icons.<file>.svg -->
+    <!-- Component icons. The SVGs are converted to GH2 true-vector icons at runtime (SvgVectorIcon); the PNGs
+         are the per-icon raster fallback. Logical names: opennest_gh2.icons.<file>.svg / .png -->
     <EmbeddedResource Include="icons\*.svg" />
+    <EmbeddedResource Include="icons\*.png" />
   </ItemGroup>
 
   <ItemGroup>

@@ -4,11 +4,24 @@ using Rhino.Geometry;
 
 namespace opennest_gh2.components
 {
-    // Loads embedded SVG icons (icons\*.svg -> opennest_gh2.icons.<file>.svg). GH2 renders SVG (vector) icons.
+    // Loads an embedded PNG icon (icons\<file>.png -> opennest_gh2.icons.<file>.png) as an Eto bitmap and
+    // wraps it in a GH2 icon. Robust across the WIP SDK (FromBitmap is the universal path).
     internal static class NestIcons
     {
-        public static IIcon Load(string svgFile)
-            => AbstractIcon.FromResource("opennest_gh2.icons." + svgFile, typeof(opennest_gh2.OpenNestGh2Plugin));
+        public static IIcon Load(string pngFile)
+        {
+            try
+            {
+                var asm = typeof(opennest_gh2.OpenNestGh2Plugin).Assembly;
+                using (var s = asm.GetManifestResourceStream("opennest_gh2.icons." + pngFile))
+                {
+                    if (s == null) return null;
+                    var bmp = new Eto.Drawing.Bitmap(s);
+                    return AbstractIcon.FromBitmap(new[] { bmp });
+                }
+            }
+            catch { return null; }
+        }
     }
 
     internal static class NestGh2Util

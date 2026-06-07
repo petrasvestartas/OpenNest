@@ -37,10 +37,7 @@ extra_css:
 
 nav:
   - Home: index.md
-  - Rhino Command: rhino/index.md
-  - Build & Publish: developing.md
-  - Credits: references.md
-  - Components:
+  - Rhino Grasshopper:
       - Nesting:
           - "OpenNest2": components/opennest2.md
           - "OpenNest1": components/opennest1.md
@@ -65,6 +62,13 @@ nav:
           - "Box Packing": components/bin_packing.md
           - "Bounding Box Edges": components/bbox_edges.md
           - "Simplify": components/simplify.md
+  - Rhino Commands:
+      - "OpenNest": rhino/index.md
+  - API Reference:
+      - "C++ API": api/cpp.md
+      - "C# API": api/csharp.md
+  - Build & Publish: developing.md
+  - Credits: references.md
 
 markdown_extensions:
   - admonition

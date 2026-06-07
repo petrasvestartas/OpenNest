@@ -18,7 +18,7 @@ namespace opennest_gh2.components
 
         public SheetsComponent(IReader reader) : base(reader) { }
 
-        protected override Grasshopper2.UI.Icon.IIcon IconInternal => NestIcons.Load("sheet.svg");
+        protected override Grasshopper2.UI.Icon.IIcon IconInternal => opennest_gh2.icons.SvgVectorIcon.Load("sheet.svg");
 
         protected override void AddInputs(InputAdder inputs)
         {

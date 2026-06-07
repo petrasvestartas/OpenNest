@@ -32,7 +32,7 @@ namespace opennest_gh2.components
         public IReadOnlyList<NestOption> Options => _options;
 
         protected override IAttributes CreateAttributes() => new NestAttributes(this);
-        protected override Grasshopper2.UI.Icon.IIcon IconInternal => NestIcons.Load("nest_collision.svg");
+        protected override Grasshopper2.UI.Icon.IIcon IconInternal => opennest_gh2.icons.SvgVectorIcon.Load("nest_collision.svg");
 
         private static List<NestOption> BuildCollisionOptions() => new List<NestOption>
         {
