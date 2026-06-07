@@ -13,12 +13,7 @@ namespace opennest_gh2.attributes
 {
     // Implemented by the nest components so the custom attributes can read/toggle the on-canvas Run latch
     // and the collapsible options panel.
-    internal interface IRunHost
-    {
-        bool Run { get; set; }
-    }
-
-    internal interface INestOptionsHost : IRunHost
+    internal interface INestOptionsHost
     {
         IReadOnlyList<NestOption> Options { get; }
         bool OptionsExpanded { get; set; }
@@ -26,7 +21,8 @@ namespace opennest_gh2.attributes
         // Live-solve feedback (driven by the component's monitor) drawn on the body.
         bool Solving { get; }
         string StatusText { get; }
-        // Request the running native solve to stop (keeps the best-so-far).
+        // One-shot Run button: launch a solve, or stop the running one (keeps the best-so-far).
+        void RequestLaunch();
         void RequestStop();
         // Relayout + repaint the component WITHOUT a re-solve (component proxies its protected ExpireDisplay).
         void RefreshDisplay();
@@ -83,9 +79,9 @@ namespace opennest_gh2.attributes
             if (Host == null) return;
             Graphics g = context.Graphics;
 
-            // Run / Stop button. Run==true means a live session is active -> show red "Stop"; otherwise green "Run".
-            bool run = Host.Run;
-            Button(g, _runRect, run ? "Stop" : "Run", run ? Color.FromArgb(176, 48, 48) : Color.FromArgb(40, 132, 56), Colors.White, true);
+            // Run / Stop button. One-shot: red "Stop" while solving, green "Run" when idle.
+            bool solving = Host.Solving;
+            Button(g, _runRect, solving ? "Stop" : "Run", solving ? Color.FromArgb(176, 48, 48) : Color.FromArgb(40, 132, 56), Colors.White, true);
 
             // Live status strip (round/generation count) while solving.
             if (ShowStatus)
@@ -131,20 +127,10 @@ namespace opennest_gh2.attributes
                 PointF p = e.Location;
                 if (_runRect.Contains(p))
                 {
-                    if (Host.Run)
-                    {
-                        // Stop the live session: request the native solve to stop; UI-only refresh (no re-solve).
-                        Host.Run = false;
-                        Host.RequestStop();
-                        Relayout();
-                    }
-                    else
-                    {
-                        // Start: latch Run on and launch a solve (Expire schedules the compute).
-                        Host.Run = true;
-                        Relayout();          // immediate Run->Stop label repaint
-                        Owner.Expire();      // kick the solve
-                    }
+                    // One-shot: while solving the button is Stop (cancel); otherwise it launches a solve.
+                    if (Host.Solving) Host.RequestStop();
+                    else Host.RequestLaunch();
+                    Relayout();              // repaint the button state immediately
                     return Response.Handled;
                 }
                 if (_headerRect.Contains(p))
@@ -206,12 +192,8 @@ namespace opennest_gh2.attributes
             AfterOptionChanged();
         }
 
-        // An option VALUE changed: re-nest if a live session is running, otherwise just repaint the new value.
-        private void AfterOptionChanged()
-        {
-            if (Host != null && Host.Run) Owner.Expire();
-            else Relayout();
-        }
+        // An option VALUE changed: repaint the new value. (Run is one-shot — the new value applies on next Run.)
+        private void AfterOptionChanged() => Relayout();
 
         // ---- drawing helpers ----
         private static void Button(Graphics g, RectangleF r, string text, Color fill, Color textColor, bool bold)

@@ -1,0 +1,53 @@
+name: Examples (standalone C++ / C# apps)
+
+# Builds the native engines from source and the two standalone example apps (examples/cpp_console +
+# examples/csharp_console) via the CMake superbuild, then RUNS both on Windows, macOS and Linux —
+# so the C ABI usage shown in docs/api/cpp.md and docs/api/csharp.md is always proven to compile & run.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'examples/**'
+      - 'src/opennest_cpp/**'
+      - 'src/nest_physics_cpp/**'
+      - '.github/workflows/examples.yml'
+  pull_request:
+    paths:
+      - 'examples/**'
+      - 'src/opennest_cpp/**'
+      - 'src/nest_physics_cpp/**'
+      - '.github/workflows/examples.yml'
+  workflow_dispatch:
+
+jobs:
+  build-run:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # .NET SDK for the C# example (Linux/macOS/Windows). The C++ toolchain is preinstalled on every
+      # runner: MSVC on windows-latest, clang on macos-latest, gcc on ubuntu-latest.
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Configure superbuild
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cmake -S examples -B examples/build -A x64
+          else
+            cmake -S examples -B examples/build -DCMAKE_BUILD_TYPE=Release
+          fi
+
+      - name: Build (engines + C++ console + C# console)
+        run: cmake --build examples/build --config Release
+
+      - name: Run both examples (must exit 0)
+        run: cmake --build examples/build --target run_examples --config Release

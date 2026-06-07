@@ -1,6 +1,14 @@
 # C# API
 
-Nesting from C# is **3 steps**: build the parts + sheets, run the solver, read where each part went.
+!!! tip "Runnable example"
+    [`examples/csharp_console`](https://github.com/petrasvestartas/OpenNest/tree/main/examples/csharp_console) is a
+    standalone, Rhino‑free console that `P/Invoke`s the engines directly (the low‑level *Talk to the engines
+    directly* path shown further down). Build it with the CMake
+    **superbuild** in [`examples/`](https://github.com/petrasvestartas/OpenNest/tree/main/examples); it's built &
+    run on Windows, macOS and Linux by
+    [`examples.yml`](https://github.com/petrasvestartas/OpenNest/blob/main/.github/workflows/examples.yml).
+
+The high‑level path below uses RhinoCommon; **3 steps**: build the parts + sheets, run the solver, read where each part went.
 
 ```csharp
 // 1) PARTS + SHEETS  — one Curve[] per part (outer ring first, then hole rings)

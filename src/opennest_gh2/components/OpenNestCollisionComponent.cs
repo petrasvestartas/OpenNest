@@ -79,14 +79,18 @@ namespace opennest_gh2.components
             outputs.AddGeneric("Attributes", "Attributes", "Per-part attribute geometry.", Access.Twig);
         }
 
-        // Called by the base only when Run is ON, on the background worker thread. The base drives the live
-        // progress popup, on-body status text, viewport preview and ESC; we just flatten, solve and assemble.
-        protected override void DoSolve(IDataAccess access, CancellationToken token)
+        // snapshotted solve state (set in Prepare on the UI thread, consumed by SolveCore on the worker)
+        private nest_sheets _sheets;
+        private nest_geo _geo;
+        private NpRun _run;
+
+        // PASS 1 (UI thread): read inputs, flatten, wire the live-preview poll. false = invalid (stay Idle).
+        protected override bool Prepare(IDataAccess access)
         {
             if (!access.GetItem(0, out nest_sheets sheets) || sheets == null)
-            { access.AddError("No sheets", "Connect the OpenNest Sheets output."); return; }
+            { access.AddError("No sheets", "Connect the OpenNest Sheets output."); return false; }
             if (!access.GetItem(1, out nest_geo geo) || geo == null)
-            { access.AddError("No geometry", "Connect the OpenNest Geometry output."); return; }
+            { access.AddError("No geometry", "Connect the OpenNest Geometry output."); return false; }
             access.GetItem(2, out int iterations);
 
             int rotations = OptInt("num_of_rotations", 3600);
@@ -99,28 +103,36 @@ namespace opennest_gh2.components
 
             var run = new NpRun();
             // NpRun.Flatten reads parameters positionally: [0]=rotations [1]=seed [2]=starts.
-            // The native solve holds process-global state, so serialize it across all instances.
-            lock (s_engineLock)
+            run.Flatten(sheets, geo, new List<double> { rotations, seed, starts < 1 ? 1 : starts },
+                        iterations < 1 ? 1 : iterations, partHolesMode, poles, compactOn, fitMode);
+            if (!run.Ready) { access.AddError("Nothing to nest", "No parts/sheet after flattening."); return false; }
+
+            _sheets = sheets; _geo = geo; _run = run;
+            SetPoll(() =>
             {
-                run.Flatten(sheets, geo, new List<double> { rotations, seed, starts < 1 ? 1 : starts },
-                            iterations < 1 ? 1 : iterations, partHolesMode, poles, compactOn, fitMode);
-                // Now the native arrays are built: feed the monitor a live round count + tightening preview.
-                SetPoll(() =>
+                long done = 0; try { done = NestPhysics.NestPhysicsWrapper.np_progress(); } catch { }
+                long total = run.TotalBudget;
+                return new NestTick
                 {
-                    long done = 0; try { done = NestPhysics.NestPhysicsWrapper.np_progress(); } catch { }
-                    long total = run.TotalBudget;
-                    return new NestTick
-                    {
-                        Done = done,
-                        Total = total,
-                        Status = done + " / ~" + total + " rounds  (ESC = stop)",
-                        Borders = run.BuildPreviewBorders(),
-                        Sheets = run.SheetOutlines()
-                    };
-                });
-                run.Solve();
-                run.Assemble();
-            }
+                    Done = done,
+                    Total = total,
+                    Status = done + " / ~" + total + " rounds  (ESC = stop)",
+                    Borders = run.BuildPreviewBorders(),
+                    Sheets = run.SheetOutlines()
+                };
+            });
+            return true;
+        }
+
+        // BACKGROUND THREAD: the blocking native solve (process-global state -> serialize across instances).
+        protected override void SolveCore() { lock (s_engineLock) { _run.Solve(); } }
+
+        // PASS 2 (UI thread): assemble + publish the placed geometry, cache it for no-solve re-emits.
+        protected override void Assemble(IDataAccess access)
+        {
+            var run = _run; var geo = _geo;
+            if (run == null || geo == null) return;
+            run.Assemble();
 
             var sheetCurves = new List<Curve>();
             foreach (var s in run.output_sheets)
@@ -176,6 +188,10 @@ namespace opennest_gh2.components
             };
             emit(access);
             CacheResult(emit);
+
+            var finalWires = new List<Curve>(sheetArr.Length + borderArr.Length);
+            finalWires.AddRange(sheetArr); finalWires.AddRange(borderArr);
+            SetFinalWires(finalWires);
         }
     }
 }

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Grasshopper2.Data;
 using Grasshopper2.UI.Icon;
 using Rhino.Geometry;
 
@@ -33,6 +34,23 @@ namespace opennest_gh2.components
             foreach (var c in curves)
                 if (c != null) bb.Union(c.GetBoundingBox(false));
             return bb.IsValid ? bb.Diagonal.Length : 0.0;
+        }
+
+        // First value in a Tree (or default). Used to read a scalar from an Access.Tree input so that NO input
+        // can drive GH2 per-branch iteration — the component then runs ONCE and emits ONE object.
+        public static T First<T>(Tree<T> t, T def)
+        {
+            if (t != null) foreach (var v in t.AllItems) return v;
+            return def;
+        }
+
+        // All values in a Tree as a list (e.g. per-part Copies, GH1-style), empty -> the given fallback.
+        public static List<T> AllOr<T>(Tree<T> t, T fallback)
+        {
+            var list = new List<T>();
+            if (t != null) foreach (var v in t.AllItems) list.Add(v);
+            if (list.Count == 0) list.Add(fallback);
+            return list;
         }
     }
 }

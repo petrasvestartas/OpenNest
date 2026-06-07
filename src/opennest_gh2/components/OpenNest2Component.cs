@@ -72,13 +72,17 @@ namespace opennest_gh2.components
             outputs.AddGeneric("Attributes", "Attributes", "Attribute geometry carried with each part.", Access.Twig);
         }
 
-        // Called by the base only when Run is ON, on the background worker thread.
-        protected override void DoSolve(IDataAccess access, CancellationToken token)
+        // snapshotted solve state (Prepare on UI thread -> SolveCore on worker -> Assemble on UI thread)
+        private nest_sheets _sheets;
+        private nest_geo _geo;
+
+        // PASS 1 (UI thread): read inputs, build the GA solver, wire the live-preview poll.
+        protected override bool Prepare(IDataAccess access)
         {
             if (!access.GetItem(0, out nest_sheets sheets) || sheets == null)
-            { access.AddError("No sheets", "Connect the OpenNest Sheets output."); return; }
+            { access.AddError("No sheets", "Connect the OpenNest Sheets output."); return false; }
             if (!access.GetItem(1, out nest_geo geo) || geo == null)
-            { access.AddError("No geometry", "Connect the OpenNest Geometry output."); return; }
+            { access.AddError("No geometry", "Connect the OpenNest Geometry output."); return false; }
             access.GetItem(2, out int iterations);
             int totalGen = iterations < 1 ? 1 : iterations;
 
@@ -94,7 +98,7 @@ namespace opennest_gh2.components
             nest.ExactNfp = 1;
             nest.TryAllRotations = OptToken("all_rotations", 1);
             nest.UseHoles = OptToken("element_holes", 1);
-            _activeNest = nest;
+            _sheets = sheets; _geo = geo; _activeNest = nest;
             // Live per-generation progress + tightening preview (orange borders) from the managed GA solver.
             SetPoll(() => new NestTick
             {
@@ -104,12 +108,22 @@ namespace opennest_gh2.components
                 Borders = nest.LiveBorders,
                 Sheets = nest.LiveSheets
             });
-            try
-            {
-                lock (s_engineLock)
-                    nest.static_solver(ref geo);   // writes geo.xforms (one transform list per part group)
-            }
-            finally { _activeNest = null; }
+            return true;
+        }
+
+        // BACKGROUND THREAD: the managed GA solve (process-global engine -> serialize across instances).
+        protected override void SolveCore()
+        {
+            var geo = _geo;
+            lock (s_engineLock) _activeNest.static_solver(ref geo);   // writes geo.xforms
+            _geo = geo;
+        }
+
+        // PASS 2 (UI thread): assemble + publish placed geometry, cache it for no-solve re-emits.
+        protected override void Assemble(IDataAccess access)
+        {
+            var geo = _geo; var sheets = _sheets;
+            if (_activeNest == null || geo == null || sheets == null) return;
 
             // sheet world bboxes (for sheet-id assignment)
             int nsheet = 0;
@@ -172,6 +186,11 @@ namespace opennest_gh2.components
             };
             emit(access);
             CacheResult(emit);
+            _activeNest = null;
+
+            var finalWires = new List<Curve>(sheetArr.Length + borderArr.Length);
+            finalWires.AddRange(sheetArr); finalWires.AddRange(borderArr);
+            SetFinalWires(finalWires);
         }
 
         private static int SheetOf(Curve border, BoundingBox[] sheetBox)

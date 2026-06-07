@@ -15,6 +15,12 @@ You call them through a plain **C ABI** (works from any language).
 To place instance *i*: `final = Rotate(part, angle[i], origin) + (tx[i], ty[i])`, on sheet `sheet_id[i]`
 (`-1` = didn't fit). `(tx, ty)` are sheet‑local — add the sheet's own position.
 
+!!! tip "Runnable example"
+    [`examples/cpp_console`](https://github.com/petrasvestartas/OpenNest/tree/main/examples/cpp_console) is a
+    standalone C++ console that calls both engines through this C ABI. Build it with the CMake **superbuild** in
+    [`examples/`](https://github.com/petrasvestartas/OpenNest/tree/main/examples); it's built & run on Windows,
+    macOS and Linux by [`examples.yml`](https://github.com/petrasvestartas/OpenNest/blob/main/.github/workflows/examples.yml).
+
 ---
 
 ## How a polygon crosses the boundary

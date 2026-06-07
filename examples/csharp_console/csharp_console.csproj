@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Standalone, Rhino-free C# example: P/Invokes nfp_nest.dll + nest_physics.dll directly
+       (Program.cs declares its own [DllImport] + structs). Build the native engines first via the
+       CMake superbuild in examples/, or any prior engine build under src/*/build. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>opennest_csharp_example</AssemblyName>
+    <!-- The solver DLLs are native x64; force an x64 process so the bare-name P/Invoke binds. -->
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+
+  <!-- Copy whichever native solver libraries exist next to the exe so the bare-name P/Invoke resolves.
+       Covers MSVC (build/Release/), single-config (build/), and Unix (.dylib/.so). -->
+  <Target Name="CopyNativeLibs" AfterTargets="Build">
+    <ItemGroup>
+      <NativeLib Include="..\..\src\opennest_cpp\build\Release\nfp_nest.dll" />
+      <NativeLib Include="..\..\src\opennest_cpp\build\nfp_nest.dll" />
+      <NativeLib Include="..\..\src\opennest_cpp\build\nfp_nest.dylib" />
+      <NativeLib Include="..\..\src\opennest_cpp\build\nfp_nest.so" />
+      <NativeLib Include="..\..\src\nest_physics_cpp\build\Release\nest_physics.dll" />
+      <NativeLib Include="..\..\src\nest_physics_cpp\build\nest_physics.dll" />
+      <NativeLib Include="..\..\src\nest_physics_cpp\build\nest_physics.dylib" />
+      <NativeLib Include="..\..\src\nest_physics_cpp\build\nest_physics.so" />
+    </ItemGroup>
+    <Copy SourceFiles="@(NativeLib)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true"
+          Condition="Exists('%(NativeLib.Identity)')" />
+  </Target>
+
+</Project>

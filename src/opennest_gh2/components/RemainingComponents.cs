@@ -24,11 +24,12 @@ namespace opennest_gh2.components
 
         protected override void AddInputs(InputAdder inputs)
         {
-            inputs.AddText("Layer", "L", "Boundary layer name in Rhino.", Access.Item, Requirement.MayBeMissing).Set("");
-            inputs.AddInteger("Copies", "C", "Copies per branch.", Access.Twig, Requirement.MayBeMissing).Set(1);
-            inputs.AddNumber("Simplify", "S", "Simplify params: [segment divisions, hull 0/1].", Access.Twig, Requirement.MayBeMissing).Set(100.0);
-            inputs.AddNumber("Sort", "So", "Sort polylines (0 = off).", Access.Item, Requirement.MayBeMissing).Set(1.0);
-            inputs.AddNumber("Offset", "O", "Nesting clearance offset (0 = off).", Access.Item, Requirement.MayBeMissing).Set(0.0);
+            // ALL inputs whole-TREE so nothing drives per-branch iteration: builds exactly ONE nest_geo.
+            inputs.AddText("Layer", "L", "Boundary layer name in Rhino.", Access.Tree, Requirement.MayBeMissing).Set("");
+            inputs.AddInteger("Copies", "C", "Copies per part (one value, or one per part).", Access.Tree, Requirement.MayBeMissing).Set(1);
+            inputs.AddNumber("Simplify", "S", "Simplify params: [segment divisions, hull 0/1].", Access.Tree, Requirement.MayBeMissing).Set(100.0);
+            inputs.AddNumber("Sort", "So", "Sort polylines (0 = off).", Access.Tree, Requirement.MayBeMissing).Set(1.0);
+            inputs.AddNumber("Offset", "O", "Nesting clearance offset (0 = off).", Access.Tree, Requirement.MayBeMissing).Set(0.0);
             inputs.AddGeneric("Guid", "G", "Referenced geometry as guid (mesh, brep, curves); one branch per part.", Access.Tree);
         }
         protected override void AddOutputs(OutputAdder outputs)
@@ -42,19 +43,20 @@ namespace opennest_gh2.components
 
         protected override void Process(IDataAccess access)
         {
-            access.GetItem(0, out string layer); layer = layer ?? "";
-            access.GetItemArray(1, out int[] copiesArr);
-            access.GetItemArray(2, out double[] simplifyArr);
-            access.GetItem(3, out double sort);
-            access.GetItem(4, out double offset);
+            access.GetTree(0, out Tree<string> layerT); string layer = NestGh2Util.First(layerT, "") ?? "";
+            access.GetTree(1, out Tree<int> copiesT);
+            access.GetTree(2, out Tree<double> simplifyT);
+            access.GetTree(3, out Tree<double> sortT); double sort = NestGh2Util.First(sortT, 1.0);
+            access.GetTree(4, out Tree<double> offsetT); double offset = NestGh2Util.First(offsetT, 0.0);
             if (!access.GetTree(5, out Tree<Guid> tree) || tree == null || tree.LeafCount == 0)
             { access.AddWarning("No guids", "Connect referenced object ids."); return; }
 
             tree.ToArrays(out Guid[][] branches);
             var guids = branches.Where(b => b != null && b.Length > 0).Select(b => b.ToArray()).ToList();
             if (guids.Count == 0) return;
-            var copies = (copiesArr != null && copiesArr.Length > 0) ? copiesArr.ToList() : new List<int> { 1 };
-            var simplifyParams = (simplifyArr != null && simplifyArr.Length > 0) ? simplifyArr.ToList() : new List<double> { 100, 0 };
+            var copies = NestGh2Util.AllOr(copiesT, 1);
+            var simplifyParams = new List<double>(); if (simplifyT != null) foreach (var v in simplifyT.AllItems) simplifyParams.Add(v);
+            if (simplifyParams.Count == 0) simplifyParams.AddRange(new[] { 100.0, 0.0 });
 
             var geo = nest_rhino_lib.nest_geo_util.guid_to_nest_geo(guids, layer, copies, simplifyParams);
             if (offset != 0) geo.offset_nesting_boundary(offset);

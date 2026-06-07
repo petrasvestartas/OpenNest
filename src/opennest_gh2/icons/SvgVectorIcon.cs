@@ -145,12 +145,15 @@ namespace opennest_gh2.icons
             Emit(b, st, () => b.Text(txt, p.X, p.Y, size * Scale(m)));
         }
 
-        // apply current fill/edge (scoped IDisposables) then draw
+        // apply fill/edge (scoped IDisposables) then draw. ALWAYS set BOTH explicitly: the Builder carries a
+        // default CurrentFill/CurrentEdge, so a `fill:none` shape (e.g. simplify's outline) would otherwise pick
+        // up the default solid fill and render as a blob. Transparent fill / zero-width edge = truly off.
         private static void Emit(Builder b, Style st, Action draw)
         {
             var disp = new List<IDisposable>(2);
+            disp.Add(b.WithFill(st.Fill ?? Colors.Transparent));
             if (st.Stroke.HasValue) disp.Add(b.WithEdge(st.Stroke.Value, (float)Math.Max(0.2, st.StrokeWidth)));
-            if (st.Fill.HasValue) disp.Add(b.WithFill(st.Fill.Value));
+            else disp.Add(b.WithEdge(Colors.Transparent, 0f));
             try { draw(); }
             finally { for (int i = disp.Count - 1; i >= 0; i--) disp[i].Dispose(); }
         }
