@@ -32,6 +32,28 @@ namespace opennest_gh2.upgraders
         static void Safe(Action a) { try { a(); } catch { } }
     }
 
+    public sealed class OpenNest2Upgrader : IUpgradeGh1Component
+    {
+        public Guid Grasshopper1Id => new Guid("55f51cca-4e86-4498-8fce-38abbe131c8c");
+        public IDocumentObject Upgrade(IGH_Component component)
+        {
+            var c = new OpenNest2Component();
+            try
+            {
+                if (component.UnderlyingObject is opennest_2.component2_nest src)
+                    foreach (var o in src.Options)
+                        foreach (var d in c.Options)
+                            if (d.Key == o.Key) { d.SelectedIndex = o.SelectedIndex; d.Value = o.Value; d.TextValue = o.TextValue; }
+            }
+            catch { }
+            Safe(() => component.TransferInputs(c, new[] { (0, 0), (1, 1), (2, 2) }));
+            Safe(() => component.TransferOutputs(c, new[] { (0, 0), (1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6) }));
+            Safe(() => component.TransferInstanceId(c));
+            return c;
+        }
+        static void Safe(Action a) { try { a(); } catch { } }
+    }
+
     public sealed class SheetsUpgrader : IUpgradeGh1Component
     {
         public Guid Grasshopper1Id => new Guid("11e19ce6-e1a3-47b1-9a91-ecc987d1dfca");

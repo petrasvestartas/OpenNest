@@ -31,6 +31,7 @@ theme:
     - navigation.footer
     - content.code.copy
     - toc.follow
+    - toc.integrate   # show each page's headings (e.g. every example) in the LEFT sidebar
 
 extra_css:
   - stylesheets/extra.css

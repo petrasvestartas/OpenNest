@@ -1,20 +1,30 @@
 # Python API
 
 **[compas_nest](https://petrasvestartas.github.io/compas_nest/)** is the COMPAS plugin for 2D nesting — the
-Python route into the same OpenNest engines, and it runs inside the **Rhino 8 Script Editor** too.
+Python route into the same OpenNest engines. The examples here are written for **Rhino 8 users**: paste any one
+straight into the **Script Editor** (Python 3). The `# r: compas_nest` header installs the package on the first
+**Run**, and a COMPAS `Scene` draws the result into your Rhino document.
 
-Nesting from Python is **3 steps**: build the parts + sheets, run an engine, read the placed geometry.
+There are **two engines**, same API — `opennest_collision()` (physics / overlap‑relaxation, dense, nests into
+holes) and `opennest()` (NFP + genetic algorithm). Every nest is **3 steps**: build the parts + sheets, nest, draw.
+
+## Example 1 — collision engine
+
+The minimal nest: a few parts (one with a hole) onto a sheet (with a hole), drawn into Rhino.
 
 ```python
-# 1) INSTALL + IMPORT  (pip install compas_nest)
+#! python3
+# r: compas_nest
+
 from compas.geometry import Polyline
+from compas.scene import Scene
 from compas_nest import nest_geo, nest_sheets, opennest_collision
 
 def rect(x0, y0, w, h):
     return Polyline([[x0, y0, 0], [x0 + w, y0, 0],
                      [x0 + w, y0 + h, 0], [x0, y0 + h, 0], [x0, y0, 0]])
 
-# 2) PARTS + SHEETS  (outer ring = Polyline; holes = list of Polylines)
+# 1) PARTS + SHEETS  (outer ring = Polyline; holes = list of Polylines)
 geo = nest_geo()
 geo.add_part(rect(0, 0, 20, 10), copies=3)
 geo.add_part(rect(0, 0, 15, 15), holes=[rect(5, 5, 5, 5)], copies=2)
@@ -22,28 +32,116 @@ geo.add_part(rect(0, 0, 15, 15), holes=[rect(5, 5, 5, 5)], copies=2)
 sheets = nest_sheets()
 sheets.add_sheet(rect(0, 0, 100, 100), holes=[rect(40, 40, 10, 10)])
 
-# 3) NEST  ->  read the placed geometry, grouped per sheet
+# 2) NEST
 result = opennest_collision().solve(geo, sheets)
 
+# 3) DRAW the placed geometry into the Rhino document (grouped per sheet)
+scene = Scene()
+scene.clear()
 for group in result.placed_polylines():
     for part in group["parts"]:
-        outline = part["outline"]    # placed COMPAS Polyline
-        holes   = part["holes"]      # placed holes
-        attrs   = part["attributes"] # any geometry carried along
+        scene.add(part["outline"])      # placed COMPAS Polyline
+        for hole in part["holes"]:
+            scene.add(hole)
+scene.draw()
 ```
 
-That's the whole flow. There are **two engines** — swap which one you construct:
+## Example 2 — NFP + genetic algorithm
 
-| Want this… | Construct | Notes |
-| --- | --- | --- |
-| Dense packing, parts into holes | **`opennest_collision()`** | physics / overlap‑relaxation, dependency‑free |
-| Clean polygon packing | **`opennest()`** | NFP + genetic algorithm, bundled Clipper2 |
+Same shape, but construct **`opennest`** instead (and add a triangle part). Sheets drawn black, parts blue.
 
-Both follow the same pattern: construct the engine with tuning params, then call **`.solve(geo, sheets)`** → a
-`nest_result`. Read it with `result.placed_polylines()` (grouped per sheet) or `result.transformation(placement)`
-(the per‑part move + rotate).
+```python
+#! python3
+# r: compas_nest
 
----
+from compas.colors import Color
+from compas.geometry import Polyline
+from compas.scene import Scene
+from compas_nest import nest_geo, nest_sheets, opennest
+
+BLACK = Color.from_hex("#000000")
+BLUE = Color.from_hex("#0072B2")
+
+# 1) parts (one with a hole, plus a triangle) and a sheet (with a hole)
+geo = nest_geo()
+geo.add_part(Polyline([[0, 0, 0], [30, 0, 0], [30, 12, 0], [0, 12, 0], [0, 0, 0]]), copies=4)
+geo.add_part(
+    Polyline([[0, 0, 0], [20, 0, 0], [20, 20, 0], [0, 20, 0], [0, 0, 0]]),
+    holes=[Polyline([[6, 6, 0], [14, 6, 0], [14, 14, 0], [6, 14, 0], [6, 6, 0]])],
+    copies=2,
+)
+geo.add_part(Polyline([[0, 0, 0], [22, 0, 0], [0, 22, 0], [0, 0, 0]]), copies=4)
+
+sheets = nest_sheets()
+sheets.add_sheet(
+    Polyline([[0, 0, 0], [120, 0, 0], [120, 120, 0], [0, 120, 0], [0, 0, 0]]),
+    holes=[Polyline([[50, 50, 0], [65, 50, 0], [65, 65, 0], [50, 65, 0], [50, 50, 0]])],
+)
+
+# 2) nest with the NFP + genetic‑algorithm engine
+result = opennest(generations=20, rotations=8, seed=7).solve(geo, sheets)
+
+# 3) draw into the Rhino document
+scene = Scene()
+scene.clear()
+for sheet in sheets.sheets:
+    scene.add(sheet["outline"], color=BLACK)
+    for hole in sheet["holes"]:
+        scene.add(hole, color=BLACK)
+for group in result.placed_polylines():
+    for part in group["parts"]:
+        scene.add(part["outline"], color=BLUE)
+        for hole in part["holes"]:
+            scene.add(hole, color=BLUE)
+scene.draw()
+```
+
+## Example 3 — attributes that travel with the part
+
+Each part carries a centroid `Point` as an attribute; it's transformed with the part and drawn in red.
+
+```python
+#! python3
+# r: compas_nest
+
+from compas.colors import Color
+from compas.geometry import Point, Polyline, centroid_points
+from compas.scene import Scene
+from compas_nest import nest_geo, nest_sheets, opennest_collision
+
+BLACK = Color.from_hex("#000000")
+BLUE = Color.from_hex("#0072B2")
+RED = Color.from_hex("#C0392B")
+
+def centroid(polyline):
+    return Point(*centroid_points(list(polyline.points)[:-1]))
+
+# 1) parts, each carrying a centroid point that travels with the placement
+geo = nest_geo()
+for outline in [
+    Polyline([[0, 0, 0], [30, 0, 0], [30, 12, 0], [0, 12, 0], [0, 0, 0]]),
+    Polyline([[0, 0, 0], [20, 0, 0], [20, 20, 0], [0, 20, 0], [0, 0, 0]]),
+]:
+    geo.add_part(outline, attributes=[centroid(outline)], copies=4)
+
+sheets = nest_sheets()
+sheets.add_sheet(Polyline([[0, 0, 0], [120, 0, 0], [120, 120, 0], [0, 120, 0], [0, 0, 0]]))
+
+# 2) nest
+result = opennest_collision().solve(geo, sheets)
+
+# 3) draw placed outlines (blue) + their carried centroid points (red) into Rhino
+scene = Scene()
+scene.clear()
+for sheet in sheets.sheets:
+    scene.add(sheet["outline"], color=BLACK)
+for group in result.placed_polylines():
+    for part in group["parts"]:
+        scene.add(part["outline"], color=BLUE)
+        for attribute in part["attributes"]:
+            scene.add(attribute, color=RED)
+scene.draw()
+```
 
 ## The key pieces
 
@@ -54,7 +152,9 @@ Both follow the same pattern: construct the engine with tuning params, then call
 | `opennest_collision` / `opennest` | run the solve | `from compas_nest import opennest_collision, opennest` |
 | `nest_result` | read placements (returned by `.solve()`) | — |
 
-The few knobs that matter:
+Both engines follow the same pattern: construct with tuning params, then `.solve(geo, sheets)` → a `nest_result`.
+Read it with `result.placed_polylines()` (grouped per sheet) or `result.transformation(placement)`. The few knobs
+that matter:
 
 ```python
 # physics engine
@@ -72,12 +172,10 @@ geo    = offset_geo(geo, 0.1)        # grow part outlines, shrink their holes
 sheets = offset_sheets(sheets, 0.1)  # shrink sheet outlines, grow sheet holes
 ```
 
----
-
 ## Run it in the Rhino 8 Script Editor
 
 Rhino 8's Python is **CPython 3.9** (`py39-rh8`). Open the **Script Editor** (`_ScriptEditor`), make a new
-**Python 3** script, and put a requirements header at the very top — the first **Run** pip‑installs the package
+**Python 3** script, and put the requirements header at the very top — the first **Run** pip‑installs the package
 (the editor freezes briefly while it does):
 
 ```python
@@ -86,151 +184,7 @@ Rhino 8's Python is **CPython 3.9** (`py39-rh8`). Open the **Script Editor** (`_
 ```
 
 To show results, draw straight into the Rhino document with a COMPAS **`Scene`** — no `compas_viewer` needed
-(that's for a standalone window). `scene.add(geometry, color=…)` then `scene.draw()`.
-
-**Example 1 — collision (physics) engine** (`01_collision_viewer.py`, viewer swapped for a Rhino `Scene`):
-
-```python
-#! python3
-# r: compas_nest
-
-from compas.colors import Color
-from compas.geometry import Polyline
-from compas.scene import Scene
-from compas_nest import nest_geo, nest_sheets, opennest_collision
-
-BLACK = Color.from_hex("#000000")
-BLUE = Color.from_hex("#0072B2")
-
-# 1. parts (one with a hole) and a sheet (with a hole)
-geo = nest_geo()
-geo.add_part(Polyline([[0, 0, 0], [30, 0, 0], [30, 12, 0], [0, 12, 0], [0, 0, 0]]), copies=4)
-geo.add_part(
-    Polyline([[0, 0, 0], [20, 0, 0], [20, 20, 0], [0, 20, 0], [0, 0, 0]]),
-    holes=[Polyline([[6, 6, 0], [14, 6, 0], [14, 14, 0], [6, 14, 0], [6, 6, 0]])],
-    copies=3,
-)
-
-sheets = nest_sheets()
-sheets.add_sheet(
-    Polyline([[0, 0, 0], [120, 0, 0], [120, 120, 0], [0, 120, 0], [0, 0, 0]]),
-    holes=[Polyline([[50, 50, 0], [65, 50, 0], [65, 65, 0], [50, 65, 0], [50, 50, 0]])],
-)
-
-# 2. nest with the collision (physics) engine
-result = opennest_collision().solve(geo, sheets)
-
-# 3. draw into the Rhino document (sheets black, placed parts blue)
-scene = Scene()
-scene.clear()
-for sheet in sheets.sheets:
-    scene.add(sheet["outline"], color=BLACK)
-    for hole in sheet["holes"]:
-        scene.add(hole, color=BLACK)
-for group in result.placed_polylines():
-    for part in group["parts"]:
-        scene.add(part["outline"], color=BLUE)
-        for hole in part["holes"]:
-            scene.add(hole, color=BLUE)
-scene.draw()
-```
-
-??? example "Example 2 — NFP + genetic‑algorithm engine (`02_nfp_viewer.py`)"
-
-    Same shape as Example 1, but constructs **`opennest`** and adds a triangle part.
-
-    ```python
-    #! python3
-    # r: compas_nest
-
-    from compas.colors import Color
-    from compas.geometry import Polyline
-    from compas.scene import Scene
-    from compas_nest import nest_geo, nest_sheets, opennest
-
-    BLACK = Color.from_hex("#000000")
-    BLUE = Color.from_hex("#0072B2")
-
-    # 1. parts (one with a hole, plus a triangle) and a sheet (with a hole)
-    geo = nest_geo()
-    geo.add_part(Polyline([[0, 0, 0], [30, 0, 0], [30, 12, 0], [0, 12, 0], [0, 0, 0]]), copies=4)
-    geo.add_part(
-        Polyline([[0, 0, 0], [20, 0, 0], [20, 20, 0], [0, 20, 0], [0, 0, 0]]),
-        holes=[Polyline([[6, 6, 0], [14, 6, 0], [14, 14, 0], [6, 14, 0], [6, 6, 0]])],
-        copies=2,
-    )
-    geo.add_part(Polyline([[0, 0, 0], [22, 0, 0], [0, 22, 0], [0, 0, 0]]), copies=4)
-
-    sheets = nest_sheets()
-    sheets.add_sheet(
-        Polyline([[0, 0, 0], [120, 0, 0], [120, 120, 0], [0, 120, 0], [0, 0, 0]]),
-        holes=[Polyline([[50, 50, 0], [65, 50, 0], [65, 65, 0], [50, 65, 0], [50, 50, 0]])],
-    )
-
-    # 2. nest with the NFP + genetic‑algorithm engine
-    result = opennest(generations=20, rotations=8, seed=7).solve(geo, sheets)
-
-    # 3. draw into the Rhino document
-    scene = Scene()
-    scene.clear()
-    for sheet in sheets.sheets:
-        scene.add(sheet["outline"], color=BLACK)
-        for hole in sheet["holes"]:
-            scene.add(hole, color=BLACK)
-    for group in result.placed_polylines():
-        for part in group["parts"]:
-            scene.add(part["outline"], color=BLUE)
-            for hole in part["holes"]:
-                scene.add(hole, color=BLUE)
-    scene.draw()
-    ```
-
-??? example "Example 3 — attributes that ride along with the placement (`05_attributes.py`)"
-
-    Each part carries a centroid `Point` as an attribute; it's transformed with the part and drawn in red.
-
-    ```python
-    #! python3
-    # r: compas_nest
-
-    from compas.colors import Color
-    from compas.geometry import Point, Polyline, centroid_points
-    from compas.scene import Scene
-    from compas_nest import nest_geo, nest_sheets, opennest_collision
-
-    BLACK = Color.from_hex("#000000")
-    BLUE = Color.from_hex("#0072B2")
-    RED = Color.from_hex("#C0392B")
-
-    def centroid(polyline):
-        return Point(*centroid_points(list(polyline.points)[:-1]))
-
-    # 1. parts, each carrying a centroid point that travels with the placement
-    geo = nest_geo()
-    for outline in [
-        Polyline([[0, 0, 0], [30, 0, 0], [30, 12, 0], [0, 12, 0], [0, 0, 0]]),
-        Polyline([[0, 0, 0], [20, 0, 0], [20, 20, 0], [0, 20, 0], [0, 0, 0]]),
-    ]:
-        geo.add_part(outline, attributes=[centroid(outline)], copies=4)
-
-    sheets = nest_sheets()
-    sheets.add_sheet(Polyline([[0, 0, 0], [120, 0, 0], [120, 120, 0], [0, 120, 0], [0, 0, 0]]))
-
-    # 2. nest
-    result = opennest_collision().solve(geo, sheets)
-
-    # 3. draw placed outlines (blue) + their carried centroid points (red) into Rhino
-    scene = Scene()
-    scene.clear()
-    for sheet in sheets.sheets:
-        scene.add(sheet["outline"], color=BLACK)
-    for group in result.placed_polylines():
-        for part in group["parts"]:
-            scene.add(part["outline"], color=BLUE)
-            for attribute in part["attributes"]:
-                scene.add(attribute, color=RED)
-    scene.draw()
-    ```
+(that's for a standalone window): `scene.add(geometry, color=…)` then `scene.draw()`.
 
 !!! warning "Two honest caveats inside Rhino"
 
@@ -261,9 +215,9 @@ scene.draw()
     If `import numpy` ever fails with a `python39.dll` conflict, pin a known‑good numpy or install via the
     manual‑pip path and relaunch Rhino.
 
----
+## API reference
 
-??? info "Full API — nest_geo, nest_sheets"
+??? info "nest_geo, nest_sheets"
 
     ```python
     class nest_geo(parts=None, name=None)
@@ -286,7 +240,7 @@ scene.draw()
     sheets = nest_sheets.from_size(510, 635, count=2)
     ```
 
-??? info "Full API — the two engines"
+??? info "the two engines"
 
     ```python
     class opennest_collision(iterations=4000, num_rotations=3600, spacing=0.0, seed=100,
@@ -308,7 +262,7 @@ scene.draw()
     holes). `opennest` is the NFP + genetic‑algorithm engine (`nfp_nest`, bundles Clipper2; carries part attributes
     through placement). Knob semantics line up with the native structs on the [C++ API](cpp.md) page.
 
-??? info "Full API — nest_result"
+??? info "nest_result"
 
     ```python
     class nest_result(placements, geo, sheet_origins, n_sheets, fitness=None)
@@ -323,7 +277,7 @@ scene.draw()
     `placed_polylines()` returns one dict per sheet (keys include `sheet_id` and `parts`); each entry in `parts`
     is a dict with `"outline"`, `"holes"`, and `"attributes"`.
 
-??? info "Background solving + live animation (standalone, not Rhino)"
+??? info "background solving + live animation (standalone, not Rhino)"
 
     Both engines expose `.start(geo, sheets)` instead of `.solve(...)`, returning a non‑blocking handle
     (`collision_solve` / `nfp_solve`) you can poll while the solve runs on a worker thread:
@@ -349,7 +303,7 @@ scene.draw()
     animate(handle, geo, offset_s, save="result.json", park=-635.0)
     ```
 
-??? info "Offset / clearance helpers"
+??? info "offset / clearance helpers"
 
     ```python
     offset_polyline(polyline, distance) -> Polyline | None   # single closed polyline (+out / -in)
@@ -358,8 +312,6 @@ scene.draw()
     ```
 
     All three use the bundled Clipper2.
-
----
 
 ## Where this fits
 
