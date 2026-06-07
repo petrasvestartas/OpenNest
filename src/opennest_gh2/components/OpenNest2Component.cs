@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using Grasshopper2.Components;
-using Grasshopper2.Doc;
 using Grasshopper2.Parameters;
 using Grasshopper2.UI;
 using GrasshopperIO;
@@ -15,28 +15,26 @@ namespace opennest_gh2.components
     // GH2 port of the GH1 "OpenNest2" component (NFP + genetic algorithm, nfp_nest.dll via nest_lib.rhino_example).
     // Same inputs (Sheets, Geometry, Iterations) and the nine embedded options drawn by NestAttributes.
     [IoId("55f51cca-4e86-4498-8fce-38abbe131c8c")]
-    public class OpenNest2Component : Component, attributes.INestOptionsHost
+    public class OpenNest2Component : NestComponentBase
     {
         private readonly List<NestOption> _options = BuildOptions();
-
-        public OpenNest2Component()
-            : base(new Nomen("OpenNest2", "NFP + genetic algorithm nesting (nfp_nest).", "OpenNest", "Nest"))
-        {
-            // nfp_nest engine keeps process-global state; SingleThreaded + a static lock serialize solves.
-            Threading = ThreadingState.SingleThreaded;
-        }
 
         // Serialize all native nfp solves across instances (process-global engine state).
         private static readonly object s_engineLock = new object();
 
+        // The solver of the in-flight solve, so Stop/ESC/cancel can ask it to halt (keeps best-so-far).
+        private volatile nest_lib.rhino_example _activeNest;
+
+        public OpenNest2Component()
+            : base(new Nomen("OpenNest2", "NFP + genetic algorithm nesting (nfp_nest).", "OpenNest", "Nest")) { }
+
         public OpenNest2Component(IReader reader) : base(reader) { }
 
-        public bool Run { get; set; } = true;
-        public bool OptionsExpanded { get; set; } = false;
-        public IReadOnlyList<NestOption> Options => _options;
+        public override IReadOnlyList<NestOption> Options => _options;
 
-        protected override IAttributes CreateAttributes() => new NestAttributes(this);
         protected override Grasshopper2.UI.Icon.IIcon IconInternal => opennest_gh2.icons.SvgVectorIcon.Load("opennest_2.svg");
+
+        protected override void RequestCancel() { var n = _activeNest; if (n != null) try { n.StopRequested = true; } catch { } }
 
         // Exact GH1 option set (component_nest2.cs BuildOptions).
         private static List<NestOption> BuildOptions() => new List<NestOption>
@@ -74,14 +72,15 @@ namespace opennest_gh2.components
             outputs.AddGeneric("Attributes", "Attributes", "Attribute geometry carried with each part.", Access.Twig);
         }
 
-        protected override void Process(IDataAccess access)
+        // Called by the base only when Run is ON, on the background worker thread.
+        protected override void DoSolve(IDataAccess access, CancellationToken token)
         {
-            if (!Run) { access.AddRemark("Stopped", "Press Run on the component to nest."); return; }
             if (!access.GetItem(0, out nest_sheets sheets) || sheets == null)
             { access.AddError("No sheets", "Connect the OpenNest Sheets output."); return; }
             if (!access.GetItem(1, out nest_geo geo) || geo == null)
             { access.AddError("No geometry", "Connect the OpenNest Geometry output."); return; }
             access.GetItem(2, out int iterations);
+            int totalGen = iterations < 1 ? 1 : iterations;
 
             // rhino_example parameters[0..8]: rotations, wiggle, placement, spacing, seed, curveTol, mutation, population, time.
             var parameters = new List<double>
@@ -90,13 +89,27 @@ namespace opennest_gh2.components
                 OptNum("seed", 30), 1.0, OptNum("mutation", 10), OptNum("population", 10), 0
             };
 
-            var nest = new nest_lib.rhino_example(ref sheets, ref geo, parameters, iterations < 1 ? 1 : iterations);
+            var nest = new nest_lib.rhino_example(ref sheets, ref geo, parameters, totalGen);
             nest.Engine = "cpp";
             nest.ExactNfp = 1;
             nest.TryAllRotations = OptToken("all_rotations", 1);
             nest.UseHoles = OptToken("element_holes", 1);
-            lock (s_engineLock)
-                nest.static_solver(ref geo);   // writes geo.xforms (one transform list per part group)
+            _activeNest = nest;
+            // Live per-generation progress + tightening preview (orange borders) from the managed GA solver.
+            SetPoll(() => new NestTick
+            {
+                Done = nest.CurrentGeneration,
+                Total = totalGen,
+                Status = "gen " + nest.CurrentGeneration + " / " + totalGen + "   fit " + nest.CurrentFitness.ToString("F3") + "   (ESC = stop)",
+                Borders = nest.LiveBorders,
+                Sheets = nest.LiveSheets
+            });
+            try
+            {
+                lock (s_engineLock)
+                    nest.static_solver(ref geo);   // writes geo.xforms (one transform list per part group)
+            }
+            finally { _activeNest = null; }
 
             // sheet world bboxes (for sheet-id assignment)
             int nsheet = 0;
@@ -141,13 +154,24 @@ namespace opennest_gh2.components
                 }
             }
 
-            access.SetTwig(0, sheetCurves.ToArray());
-            access.SetTwig(1, borders.ToArray());
-            access.SetTwig(2, placed.ToArray());
-            access.SetTwig(3, xforms.ToArray());
-            access.SetTwig(4, ids.ToArray());
-            access.SetTwig(5, new Curve[0]);
-            access.SetTwig(6, attributes.ToArray());
+            var sheetArr = sheetCurves.ToArray();
+            var borderArr = borders.ToArray();
+            var placedArr = placed.ToArray();
+            var xformArr = xforms.ToArray();
+            var idArr = ids.ToArray();
+            var attrArr = attributes.ToArray();
+            Action<IDataAccess> emit = a =>
+            {
+                a.SetTwig(0, sheetArr);
+                a.SetTwig(1, borderArr);
+                a.SetTwig(2, placedArr);
+                a.SetTwig(3, xformArr);
+                a.SetTwig(4, idArr);
+                a.SetTwig(5, new Curve[0]);
+                a.SetTwig(6, attrArr);
+            };
+            emit(access);
+            CacheResult(emit);
         }
 
         private static int SheetOf(Curve border, BoundingBox[] sheetBox)

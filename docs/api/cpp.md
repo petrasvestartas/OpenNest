@@ -5,7 +5,7 @@ OpenNest nests with **two native engines**. Both do the same simple thing:
 > **You give:** part shapes + sheet shapes.
 > **You get back:** for each part — *move it by (tx, ty)*, *rotate it by an angle*, and *which sheet* it landed on.
 
-You call them through a plain **C ABI** (works from any language). Shapes cross as flat `x,y` number arrays.
+You call them through a plain **C ABI** (works from any language).
 
 | Want this… | Call | In |
 | --- | --- | --- |
@@ -17,32 +17,64 @@ To place instance *i*: `final = Rotate(part, angle[i], origin) + (tx[i], ty[i])`
 
 ---
 
-## `nfp_nest` — clean polygon packing
+## How a polygon crosses the boundary
 
-Give it parts (+ optional holes) and sheets; it returns the placements and **how many it placed**.
+A C ABI can't take a `vector<Polygon>`, so geometry is passed as **plain number arrays**. The rule is simple:
+
+- **One polygon** = a vertex count + a flat `x,y` list: `x0,y0, x1,y1, x2,y2, …`
+- **A list of polygons** = a `count`, a *lengths* array (vertices in each), and **one** big `xy` buffer with every polygon's points concatenated.
+- **Holes** repeat the same pattern: how many holes each part has, how many vertices each hole has, and one concatenated `xy`.
 
 ```c
-int n = nfp_nest(parts…, sheets…, &params,
-                 out_tx, out_ty, out_angle,   // angle in DEGREES
-                 out_sheet_id, out_part_index, &out_n_sheets, &out_fitness);
+// Two triangles as "a list of polygons":
+int    count         = 2;
+int    vertex_counts[] = { 3, 3 };
+double xy[]            = { 0,0, 10,0, 0,8,    // triangle A
+                           0,0, 10,0, 0,8 };  // triangle B
 ```
 
-The few knobs that matter: `rotations` (orientations to try), `seed`, `generations` (how long to search),
-`spacing` (gap), `useHoles`. Everything else has a sensible default.
+So the long signatures below are just **"a list of polygons (with holes)"** spelled out — once for the parts,
+once for the sheets. That's all the `_counts` / `_xy` arrays are.
 
-??? info "Full signature + all 25 NfpParams options"
+---
 
-    ```c
-    int nfp_nest(
-        int part_count, const int* part_vertex_counts, const double* part_xy,
-        const int* part_quantities, const int* part_hole_counts,
-        const int* part_hole_vertex_counts, const double* part_hole_xy,
-        int sheet_count, const int* sheet_vertex_counts, const double* sheet_xy,
-        const int* sheet_hole_counts, const int* sheet_hole_vertex_counts, const double* sheet_hole_xy,
-        const NfpParams* params,
-        double* out_tx, double* out_ty, double* out_angle,
-        int* out_sheet_id, int* out_part_index, int* out_n_sheets, double* out_fitness);
-    ```
+## `nfp_nest` — clean polygon packing
+
+Give it parts (+ optional holes) and sheets; it **returns how many instances it placed**. Outputs are
+caller‑allocated, one slot per instance (i.e. `sum(part_quantities)` long).
+
+```c
+int n = nfp_nest(
+    // ---- parts: a list of polygons, with holes + a copy-count each ----
+    int           part_count,
+    const int*    part_vertex_counts,        // [part_count]  vertices in each part's outline
+    const double* part_xy,                   // all part-outline points, x,y,x,y,…
+    const int*    part_quantities,           // [part_count]  how many copies of each part
+    const int*    part_hole_counts,          // [part_count]  holes in each part
+    const int*    part_hole_vertex_counts,   // vertices in each hole
+    const double* part_hole_xy,              // all part-hole points, x,y,…
+    // ---- sheets: same shape (a list of polygons, with holes) ----
+    int           sheet_count,
+    const int*    sheet_vertex_counts,
+    const double* sheet_xy,
+    const int*    sheet_hole_counts,
+    const int*    sheet_hole_vertex_counts,
+    const double* sheet_hole_xy,
+    // ---- tuning (see table below) ----
+    const NfpParams* params,
+    // ---- outputs: caller-allocated, one slot per placed instance ----
+    double* out_tx, double* out_ty, double* out_angle,   // angle in DEGREES
+    int*    out_sheet_id,                    // which sheet each instance landed on (-1 = didn't fit)
+    int*    out_part_index,                  // which source part each instance came from
+    int*    out_n_sheets,                    // (single value) sheets used
+    double* out_fitness);                    // (single value) layout score
+// return value = number of placed instances
+```
+
+The few `NfpParams` knobs that matter: `rotations` (orientations to try), `seed`, `generations` (how long to
+search), `spacing` (gap), `useHoles`. Everything else has a sensible default.
+
+??? info "All 25 NfpParams fields"
 
     | Field | Type | Meaning |
     | --- | --- | --- |
@@ -76,28 +108,38 @@ The few knobs that matter: `rotations` (orientations to try), `seed`, `generatio
 
 ## `np_nest` — physics packing (into holes)
 
-Same idea, plus parts can nest **into** holes. Returns `0` on success.
+Same idea, plus parts can nest **into** holes. One output slot per part (original order). Returns `0` on success.
 
 ```c
-int rc = np_nest(parts…, sheets…, part_holes…, &params,
-                 out_tx, out_ty, out_angle,   // angle in RADIANS
-                 out_sheet_id, &out_n_sheets);
+int rc = np_nest(
+    // ---- parts: a list of polygons ----
+    int           part_count,
+    const int*    part_vertex_counts,        // [part_count]  vertices in each part
+    const double* part_xy,                   // all part points, x,y,…
+    // ---- sheets: outlines + holes ----
+    int           sheet_count,
+    const int*    sheet_outer_vertex_counts, // [sheet_count]
+    const double* sheet_outer_xy,
+    const int*    sheet_hole_counts,         // [sheet_count]  holes in each sheet
+    const int*    hole_vertex_counts,        // vertices in each sheet-hole
+    const double* hole_xy,                   // all sheet-hole points
+    // ---- part holes (parts can be nested INTO these) ----
+    const int*    part_hole_counts,          // [part_count]  holes in each part
+    const int*    part_hole_vertex_counts,
+    const double* part_hole_xy,
+    // ---- tuning (see table below) ----
+    const NpParams* params,
+    // ---- outputs: caller-allocated, one slot per part ----
+    double* out_tx, double* out_ty, double* out_angle,   // angle in RADIANS
+    int*    out_sheet_id,                    // which sheet (-1 = didn't fit)
+    int*    out_n_sheets);                   // (single value) sheets used
+// return value = 0 on success
 ```
 
-The few knobs that matter: `num_rotations`, `seed`, `iter_budget` (how long), `n_starts` (tries), `pole_max`
-(accuracy), `fit_mode` (one sheet vs. fewest sheets).
+The few `NpParams` knobs that matter: `num_rotations`, `seed`, `iter_budget` (how long), `n_starts` (tries),
+`pole_max` (accuracy), `fit_mode` (one sheet vs. fewest sheets).
 
-??? info "Full signature + all 13 NpParams options"
-
-    ```c
-    int np_nest(
-        int part_count, const int* part_vertex_counts, const double* part_xy,
-        int sheet_count, const int* sheet_outer_vertex_counts, const double* sheet_outer_xy,
-        const int* sheet_hole_counts, const int* hole_vertex_counts, const double* hole_xy,
-        const int* part_hole_counts, const int* part_hole_vertex_counts, const double* part_hole_xy,
-        const NpParams* params,
-        double* out_tx, double* out_ty, double* out_angle, int* out_sheet_id, int* out_n_sheets);
-    ```
+??? info "All 13 NpParams fields"
 
     | Field | Type | Meaning |
     | --- | --- | --- |

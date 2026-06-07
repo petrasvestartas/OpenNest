@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using Grasshopper2.Components;
-using Grasshopper2.Doc;          // IAttributes
 using Grasshopper2.Parameters;
 using Grasshopper2.UI;
 using GrasshopperIO;
@@ -16,34 +16,27 @@ namespace opennest_gh2.components
     // Inputs match GH1 (Sheets, Geometry, Iterations); the eight options are drawn ON THE COMPONENT BODY by
     // NestAttributes (collapsible dropdown/type-in panel + Run button) using the exact GH1 NestOption model.
     [IoId("c3d5f9b7-4a28-4e03-9b16-2d8c0a1e3b03")]
-    public class OpenNestCollisionComponent : Component, attributes.INestOptionsHost
+    public class OpenNestCollisionComponent : NestComponentBase
     {
         // Serialize all native nest_physics solves across every OpenNestCollision instance (the C++ engine
-        // keeps process-global state: np_cancel / np_progress). GH2 runs solutions on a worker thread, so two
-        // collision components could otherwise enter np_nest concurrently.
+        // keeps process-global state: np_cancel / np_progress). GH2 may evaluate two collision components on
+        // separate worker threads, so this lock is the final reentrancy guard around np_nest.
         private static readonly object s_engineLock = new object();
 
         // Exact GH1 option set (component_nest.cs BuildOptions), reused via the shared NestOption model.
         private readonly List<NestOption> _options = BuildCollisionOptions();
 
         public OpenNestCollisionComponent()
-            : base(new Nomen("OpenNestCollision", "Penetration-depth nesting (nest_physics).", "OpenNest", "Nest"))
-        {
-            // GH2 solves OFF the UI thread already; SingleThreaded keeps Rhino responsive AND guarantees the
-            // process-global native engine (np_nest) is never entered by two solves at once (no GH1 EngineGate
-            // / Task / timer machinery needed). A static lock in Process is the final reentrancy guard.
-            Threading = ThreadingState.SingleThreaded;
-        }
+            : base(new Nomen("OpenNestCollision", "Penetration-depth nesting (nest_physics).", "OpenNest", "Nest")) { }
 
         public OpenNestCollisionComponent(IReader reader) : base(reader) { }
 
-        // INestOptionsHost (on-canvas UI state)
-        public bool Run { get; set; } = true;
-        public bool OptionsExpanded { get; set; } = false;
-        public IReadOnlyList<NestOption> Options => _options;
+        public override IReadOnlyList<NestOption> Options => _options;
 
-        protected override IAttributes CreateAttributes() => new NestAttributes(this);
         protected override Grasshopper2.UI.Icon.IIcon IconInternal => opennest_gh2.icons.SvgVectorIcon.Load("nest_collision.svg");
+
+        // ESC / input-change / Stop -> ask the native solver to stop at the next round (keeps best-so-far).
+        protected override void RequestCancel() { try { NestPhysics.NestPhysicsWrapper.np_cancel(); } catch { } }
 
         private static List<NestOption> BuildCollisionOptions() => new List<NestOption>
         {
@@ -86,10 +79,10 @@ namespace opennest_gh2.components
             outputs.AddGeneric("Attributes", "Attributes", "Per-part attribute geometry.", Access.Twig);
         }
 
-        protected override void Process(IDataAccess access)
+        // Called by the base only when Run is ON, on the background worker thread. The base drives the live
+        // progress popup, on-body status text, viewport preview and ESC; we just flatten, solve and assemble.
+        protected override void DoSolve(IDataAccess access, CancellationToken token)
         {
-            if (!Run) { access.AddRemark("Stopped", "Press Run on the component to nest."); return; }
-
             if (!access.GetItem(0, out nest_sheets sheets) || sheets == null)
             { access.AddError("No sheets", "Connect the OpenNest Sheets output."); return; }
             if (!access.GetItem(1, out nest_geo geo) || geo == null)
@@ -111,6 +104,20 @@ namespace opennest_gh2.components
             {
                 run.Flatten(sheets, geo, new List<double> { rotations, seed, starts < 1 ? 1 : starts },
                             iterations < 1 ? 1 : iterations, partHolesMode, poles, compactOn, fitMode);
+                // Now the native arrays are built: feed the monitor a live round count + tightening preview.
+                SetPoll(() =>
+                {
+                    long done = 0; try { done = NestPhysics.NestPhysicsWrapper.np_progress(); } catch { }
+                    long total = run.TotalBudget;
+                    return new NestTick
+                    {
+                        Done = done,
+                        Total = total,
+                        Status = done + " / ~" + total + " rounds  (ESC = stop)",
+                        Borders = run.BuildPreviewBorders(),
+                        Sheets = run.SheetOutlines()
+                    };
+                });
                 run.Solve();
                 run.Assemble();
             }
@@ -151,13 +158,24 @@ namespace opennest_gh2.components
                 }
             }
 
-            access.SetTwig(0, sheetCurves.ToArray());
-            access.SetTwig(1, borders.ToArray());
-            access.SetTwig(2, placed.ToArray());
-            access.SetTwig(3, xforms.ToArray());
-            access.SetTwig(4, ids.ToArray());
-            access.SetTwig(5, new Curve[0]);                 // Sheet Txt (font-rendered labels) — parity placeholder
-            access.SetTwig(6, attributes.ToArray());
+            var sheetArr = sheetCurves.ToArray();
+            var borderArr = borders.ToArray();
+            var placedArr = placed.ToArray();
+            var xformArr = xforms.ToArray();
+            var idArr = ids.ToArray();
+            var attrArr = attributes.ToArray();
+            Action<IDataAccess> emit = a =>
+            {
+                a.SetTwig(0, sheetArr);
+                a.SetTwig(1, borderArr);
+                a.SetTwig(2, placedArr);
+                a.SetTwig(3, xformArr);
+                a.SetTwig(4, idArr);
+                a.SetTwig(5, new Curve[0]);          // Sheet Txt (font-rendered labels) — parity placeholder
+                a.SetTwig(6, attrArr);
+            };
+            emit(access);
+            CacheResult(emit);
         }
     }
 }

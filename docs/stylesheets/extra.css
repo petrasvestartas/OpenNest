@@ -95,6 +95,24 @@ a[href*="ko-fi.com"] img:hover {
   color: #ffffff;
 }
 
+/* EVERY left-sidebar entry — page links AND the integrated TOC subsections (each example etc.) — must be
+   BLACK, never grey or blue (white in dark mode). !important beats Material's dim-grey + active-accent rules.
+   The current entry stays BOLD so "you are here" still reads without a colour change. */
+.md-nav__link,
+.md-nav--secondary .md-nav__link,
+.md-nav[data-md-component="toc"] .md-nav__link {
+  color: #000000 !important;
+}
+.md-nav__link--active,
+.md-nav__item--active > .md-nav__link {
+  font-weight: 700;
+}
+[data-md-color-scheme="slate"] .md-nav__link,
+[data-md-color-scheme="slate"] .md-nav--secondary .md-nav__link,
+[data-md-color-scheme="slate"] .md-nav[data-md-component="toc"] .md-nav__link {
+  color: #ffffff !important;
+}
+
 /* Content links (in the page body): PINK, never violet. Browsers colour VISITED links violet by
    default — override :visited too, so a clicked link never turns violet. (Nav + ::selection stay blue.) */
 .md-typeset a,

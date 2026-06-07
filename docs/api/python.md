@@ -8,6 +8,8 @@ straight into the **Script Editor** (Python 3). The `# r: compas_nest` header in
 There are **two engines**, same API — `opennest_collision()` (physics / overlap‑relaxation, dense, nests into
 holes) and `opennest()` (NFP + genetic algorithm). Every nest is **3 steps**: build the parts + sheets, nest, draw.
 
+![compas_nest nesting results in COMPAS](../assets/compas_nest.png)
+
 ## Example 1 — collision engine
 
 A mix of parts — bars, a square with a hole, strips, triangles and an L — onto a sheet with a hole. The sheet

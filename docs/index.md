@@ -8,7 +8,7 @@
 waste. Parts and sheets can have **holes**, small parts can nest **inside** larger parts' holes, and sheets can
 be **non‑rectangular**. The nesting engines are C++ implementations, so the solve runs fast.
 
-It works **two ways**, and the same package installs both (Windows and macOS):
+It works **three ways**:
 
 - **[Rhino Grasshopper](components/opennest2.md)** — a full set of Grasshopper components with a live on‑canvas
   preview. Each component has its own tutorial page with a **downloadable example file**:
@@ -17,6 +17,11 @@ It works **two ways**, and the same package installs both (Windows and macOS):
 - **[Rhino Commands](rhino/index.md)** — the **`OpenNest`** command nests **directly in the Rhino viewport**
   (no Grasshopper): select your sheets, select your parts, and it bakes the result into layers — carrying each
   part's markings, colours and object data along.
+- **[Python API](api/python.md)** — drive the same engines from Python, including the **Rhino 8 Script Editor**,
+  via the [`compas_nest`](https://petrasvestartas.github.io/compas_nest/) package.
+
+The Grasshopper components **and** the `OpenNest` command ship in the same Rhino package (Windows and macOS); the
+Python route installs separately with `pip install compas_nest`.
 
 ![Parts nested to fill a shape with OpenNest](assets/screenshot05.png)
 
@@ -29,3 +34,4 @@ Grasshopper components **and** the `OpenNest` Rhino command.
 
 [Rhino Grasshopper →](components/opennest2.md){ .md-button .md-button--primary }
 [Rhino Commands →](rhino/index.md){ .md-button }
+[Python API →](api/python.md){ .md-button }

@@ -16,7 +16,7 @@ namespace opennest_gh2.components
     public class GeometryComponent : Component
     {
         public GeometryComponent()
-            : base(new Nomen("Geometry", "Prepare parts for nesting (holes auto-detected)", "OpenNest", "Nest")) { }
+            : base(new Nomen("Geometry", "Prepare parts for nesting (holes auto-detected)", "OpenNest", "Input")) { }
 
         public GeometryComponent(IReader reader) : base(reader) { }
 

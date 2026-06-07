@@ -115,9 +115,11 @@ namespace opennest_gh2.icons
 
         private static void Rect(Builder b, XElement c, Style st, double[] m)
         {
+            // Transform all FOUR corners and draw as a closed polyline so a rotated/sheared rect (e.g. a
+            // transform="rotate(...)" in pca.svg) renders correctly. An axis-aligned rect is unchanged.
             double x = A(c, "x"), y = A(c, "y"), w = A(c, "width"), h = A(c, "height");
-            var p0 = Pt(m, x, y); var p1 = Pt(m, x + w, y + h);
-            Emit(b, st, () => b.Box(p0.X, p0.Y, p1.X, p1.Y));
+            var pts = new List<PointF> { Pt(m, x, y), Pt(m, x + w, y), Pt(m, x + w, y + h), Pt(m, x, y + h) };
+            Poly(b, pts, true, st, Identity);
         }
 
         private static void Circle(Builder b, XElement c, Style st, double[] m)

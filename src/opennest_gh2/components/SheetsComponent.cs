@@ -15,7 +15,7 @@ namespace opennest_gh2.components
     public class SheetsComponent : Component
     {
         public SheetsComponent()
-            : base(new Nomen("Sheets", "Define nesting sheets from closed outline curves", "OpenNest", "Nest")) { }
+            : base(new Nomen("Sheets", "Define nesting sheets from closed outline curves", "OpenNest", "Input")) { }
 
         public SheetsComponent(IReader reader) : base(reader) { }
 

@@ -22,6 +22,14 @@ namespace opennest_gh2.attributes
     {
         IReadOnlyList<NestOption> Options { get; }
         bool OptionsExpanded { get; set; }
+
+        // Live-solve feedback (driven by the component's monitor) drawn on the body.
+        bool Solving { get; }
+        string StatusText { get; }
+        // Request the running native solve to stop (keeps the best-so-far).
+        void RequestStop();
+        // Relayout + repaint the component WITHOUT a re-solve (component proxies its protected ExpireDisplay).
+        void RefreshDisplay();
     }
 
     // Custom GH2 component attributes mirroring the GH1 OpenNest nest UI: a centered Run/Stop button, a
@@ -29,15 +37,16 @@ namespace opennest_gh2.attributes
     // Drawn with Eto.Drawing via context.Graphics; clicks handled in HandleMouseDown (canvas coordinates).
     public class NestAttributes : ComponentAttributes
     {
-        private const float RunH = 22f, HeaderH = 18f, RowH = 20f, Pad = 3f, LabelW = 92f, CtrlMinW = 64f;
+        private const float RunH = 22f, HeaderH = 18f, RowH = 20f, StatusH = 14f, Pad = 3f, LabelW = 92f, CtrlMinW = 64f;
 
-        private RectangleF _runRect, _headerRect;
+        private RectangleF _runRect, _headerRect, _statusRect;
         private RectangleF[] _rowRects = new RectangleF[0];
 
         public NestAttributes(GComponent owner) : base(owner) { }
 
         private INestOptionsHost Host => Owner as INestOptionsHost;
         private int RowCount => (Host != null && Host.OptionsExpanded) ? Host.Options.Count : 0;
+        private bool ShowStatus => Host != null && Host.Solving;
 
         protected override void LayoutBounds(Shape shape)
         {
@@ -48,6 +57,11 @@ namespace opennest_gh2.attributes
             float left = b.X + Pad, innerW = b.Width - 2f * Pad, y = b.Bottom + Pad;
 
             _runRect = new RectangleF(left, y, innerW, RunH); y += RunH + Pad;
+
+            float statusH = ShowStatus ? StatusH : 0f;
+            _statusRect = new RectangleF(left, y, innerW, statusH);
+            if (statusH > 0f) y += statusH + Pad;
+
             _headerRect = new RectangleF(left, y, innerW, HeaderH); y += HeaderH;
 
             int n = RowCount;
@@ -58,7 +72,7 @@ namespace opennest_gh2.attributes
                 for (int i = 0; i < n; i++) { _rowRects[i] = new RectangleF(left, y, innerW, RowH); y += RowH; }
             }
 
-            float extra = Pad + RunH + Pad + HeaderH + (n > 0 ? Pad + n * RowH : 0f) + Pad;
+            float extra = Pad + RunH + Pad + (statusH > 0f ? statusH + Pad : 0f) + HeaderH + (n > 0 ? Pad + n * RowH : 0f) + Pad;
             b.Height += extra;
             Bounds = b;
         }
@@ -69,9 +83,19 @@ namespace opennest_gh2.attributes
             if (Host == null) return;
             Graphics g = context.Graphics;
 
-            // Run / Stop button
+            // Run / Stop button. Run==true means a live session is active -> show red "Stop"; otherwise green "Run".
             bool run = Host.Run;
-            Button(g, _runRect, run ? "Run" : "Stop", run ? Color.FromArgb(34, 34, 34) : Color.FromArgb(176, 48, 48), Colors.White, true);
+            Button(g, _runRect, run ? "Stop" : "Run", run ? Color.FromArgb(176, 48, 48) : Color.FromArgb(40, 132, 56), Colors.White, true);
+
+            // Live status strip (round/generation count) while solving.
+            if (ShowStatus)
+            {
+                string s = Host.StatusText ?? "working…";
+                Font sf = SystemFonts.Default(7f);
+                SizeF ss = g.MeasureString(sf, s);
+                g.DrawText(sf, Color.FromArgb(176, 48, 48), _statusRect.X + (_statusRect.Width - ss.Width) / 2f,
+                           _statusRect.Y + (_statusRect.Height - ss.Height) / 2f, s);
+            }
 
             // Options header (collapsible) with a chevron
             Button(g, _headerRect, "Options", Color.FromArgb(72, 72, 72), Colors.White, false);
@@ -105,8 +129,31 @@ namespace opennest_gh2.attributes
             if (Host != null && e.Buttons == MouseButtons.Primary)
             {
                 PointF p = e.Location;
-                if (_runRect.Contains(p)) { Host.Run = !Host.Run; Owner.Expire(); return Response.Handled; }
-                if (_headerRect.Contains(p)) { Host.OptionsExpanded = !Host.OptionsExpanded; Owner.Expire(); return Response.Handled; }
+                if (_runRect.Contains(p))
+                {
+                    if (Host.Run)
+                    {
+                        // Stop the live session: request the native solve to stop; UI-only refresh (no re-solve).
+                        Host.Run = false;
+                        Host.RequestStop();
+                        Relayout();
+                    }
+                    else
+                    {
+                        // Start: latch Run on and launch a solve (Expire schedules the compute).
+                        Host.Run = true;
+                        Relayout();          // immediate Run->Stop label repaint
+                        Owner.Expire();      // kick the solve
+                    }
+                    return Response.Handled;
+                }
+                if (_headerRect.Contains(p))
+                {
+                    // Pure UI state change: relayout + redraw only (NEVER a re-solve — that was the toggle bug).
+                    Host.OptionsExpanded = !Host.OptionsExpanded;
+                    Relayout();
+                    return Response.Handled;
+                }
                 for (int i = 0; i < _rowRects.Length && i < Host.Options.Count; i++)
                     if (_rowRects[i].Contains(p))
                     {
@@ -115,6 +162,14 @@ namespace opennest_gh2.attributes
                     }
             }
             return base.HandleMouseDown(e);
+        }
+
+        // Force the attributes to recompute layout (so the hit-rects match what is drawn) and repaint,
+        // WITHOUT triggering a component re-solve. ExpireDisplay raises the DisplayChanged event.
+        private void Relayout()
+        {
+            try { Invalidate(); } catch { }
+            try { Host?.RefreshDisplay(); } catch { }
         }
 
         // ---- editors ----
@@ -133,7 +188,7 @@ namespace opennest_gh2.attributes
                 int idx = k;
                 var item = new RadioMenuItem(controller) { Text = opt.ChoiceLabels[k], Checked = (k == opt.SelectedIndex) };
                 if (controller == null) controller = item;
-                item.Click += (s, a) => { if (opt.SelectedIndex != idx) { opt.SelectedIndex = idx; Owner.Expire(); } };
+                item.Click += (s, a) => { if (opt.SelectedIndex != idx) { opt.SelectedIndex = idx; AfterOptionChanged(); } };
                 menu.Items.Add(item);
             }
             menu.Show();
@@ -148,7 +203,14 @@ namespace opennest_gh2.attributes
             dlg.DefaultButton = ok;
             dlg.Content = new StackLayout { Padding = 8, Spacing = 6, Items = { new Label { Text = opt.Label }, tb, ok } };
             try { dlg.ShowModal(); } catch { }
-            Owner.Expire();
+            AfterOptionChanged();
+        }
+
+        // An option VALUE changed: re-nest if a live session is running, otherwise just repaint the new value.
+        private void AfterOptionChanged()
+        {
+            if (Host != null && Host.Run) Owner.Expire();
+            else Relayout();
         }
 
         // ---- drawing helpers ----
