@@ -39,6 +39,8 @@ extra_css:
 nav:
   - Home: index.md
   - Rhino Grasshopper:
+      - "Grasshopper 1": components/grasshopper1.md
+      - "Grasshopper 2": components/grasshopper2.md
       - Nesting:
           - "OpenNest2": components/opennest2.md
           - "OpenNest1": components/opennest1.md

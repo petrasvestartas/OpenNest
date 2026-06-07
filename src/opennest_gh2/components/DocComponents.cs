@@ -174,11 +174,13 @@ namespace opennest_gh2.components
 
         protected override void AddInputs(InputAdder inputs)
         {
-            inputs.AddGeneric("Mesh or Brep", "M", "Mesh or Brep to unroll.", Access.Item, Requirement.MayBeMissing);
-            inputs.AddCurve("Curves", "C", "Curves to unroll along the surface.", Access.Twig, Requirement.MayBeMissing);
-            inputs.AddPoint("Points", "P", "Points to unroll along the surface.", Access.Twig, Requirement.MayBeMissing);
-            inputs.AddText("Text", "TXT", "Text labels to unroll along the surface.", Access.Twig, Requirement.MayBeMissing);
-            inputs.AddPoint("Text point", "TP", "Anchor points for the text labels.", Access.Twig, Requirement.MayBeMissing);
+            // All Access.Tree so Process runs ONCE (mixing Item/Twig makes GH2 iterate and the generic Item read
+            // returns nothing -> the "No geometry" with a Brep wired). We take the first geometry + flatten the rest.
+            inputs.AddGeneric("Mesh or Brep", "M", "Mesh or Brep to unroll.", Access.Tree, Requirement.MayBeMissing);
+            inputs.AddCurve("Curves", "C", "Curves to unroll along the surface.", Access.Tree, Requirement.MayBeMissing);
+            inputs.AddPoint("Points", "P", "Points to unroll along the surface.", Access.Tree, Requirement.MayBeMissing);
+            inputs.AddText("Text", "TXT", "Text labels to unroll along the surface.", Access.Tree, Requirement.MayBeMissing);
+            inputs.AddPoint("Text point", "TP", "Anchor points for the text labels.", Access.Tree, Requirement.MayBeMissing);
         }
         protected override void AddOutputs(OutputAdder outputs)
         {
@@ -191,7 +193,14 @@ namespace opennest_gh2.components
 
         protected override void Process(IDataAccess access)
         {
-            if (!access.GetItem(0, out GeometryBase geo) || geo == null) { access.AddWarning("No geometry", "Connect a Brep or mesh."); return; }
+            // First non-null geometry across the input tree (generic Item read is unreliable; Tree read works).
+            GeometryBase geo = null;
+            if (access.GetTree(0, out Grasshopper2.Data.Tree<GeometryBase> gtree) && gtree != null && gtree.LeafCount > 0)
+            {
+                gtree.ToArrays(out GeometryBase[][] gb);
+                foreach (var br in gb) { if (br == null) continue; foreach (var g in br) if (g != null) { geo = g; break; } if (geo != null) break; }
+            }
+            if (geo == null) { access.AddWarning("No geometry", "Connect a Brep, surface, extrusion or mesh to the first input."); return; }
             double mtol = Rhino.RhinoDoc.ActiveDoc?.ModelAbsoluteTolerance ?? 0.001;
 
             Brep brep = null;
@@ -214,8 +223,10 @@ namespace opennest_gh2.components
             }
             if (brep == null) { access.AddError("Invalid", "Input must be a Brep, surface, extrusion, SubD or mesh — got " + geo.GetType().Name + "."); return; }
 
-            access.GetItemArray(1, out Curve[] crvs); access.GetItemArray(2, out Point3d[] pts);
-            access.GetItemArray(3, out string[] txtIn); access.GetItemArray(4, out Point3d[] txtLoc);
+            Curve[] crvs = FlattenTree<Curve>(access, 1);
+            Point3d[] pts = FlattenTree<Point3d>(access, 2);
+            string[] txtIn = FlattenTree<string>(access, 3);
+            Point3d[] txtLoc = FlattenTree<Point3d>(access, 4);
             var unroller = new Unroller(brep);
             if (crvs != null && crvs.Length > 0) unroller.AddFollowingGeometry(crvs);
             if (pts != null && pts.Length > 0) unroller.AddFollowingGeometry(pts);
@@ -246,6 +257,18 @@ namespace opennest_gh2.components
             access.SetTwig(2, movedPts.ToArray());
             access.SetTwig(3, dotLocs.ToArray());
             access.SetTwig(4, dotTxt.ToArray());
+        }
+
+        // Read a Tree-access input and flatten every branch into one array (empty if missing).
+        private static T[] FlattenTree<T>(IDataAccess access, int index)
+        {
+            var list = new List<T>();
+            if (access.GetTree(index, out Grasshopper2.Data.Tree<T> t) && t != null && t.LeafCount > 0)
+            {
+                t.ToArrays(out T[][] branches);
+                foreach (var br in branches) if (br != null) foreach (var v in br) if (v != null) list.Add(v);
+            }
+            return list.ToArray();
         }
 
         // GH1 transformThem: pick the rotation (0..pi/10 steps) giving the smallest footprint, map onto WorldXY.

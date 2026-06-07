@@ -54,7 +54,7 @@ namespace opennest_gh2.upgraders
         public IDocumentObject Upgrade(IGH_Component c)
         {
             var g = new GeometrySurfacesComponent();
-            Up.Safe(() => c.TransferInputs(g, new[] { (0, 0), (1, 1), (2, 2), (3, 3) }));
+            Up.Safe(() => c.TransferInputs(g, new[] { (0, 0), (1, 1), (2, 2), (3, 3), (4, 4) }));   // +Offset
             Up.Safe(() => c.TransferOutputs(g, new[] { (0, 0), (1, 1) }));
             Up.Safe(() => c.TransferInstanceId(g));
             return g;
