@@ -21,18 +21,6 @@ namespace opennest_gh2.components
 
         protected override Grasshopper2.UI.Icon.IIcon IconInternal => opennest_gh2.icons.SvgVectorIcon.Load("sheet.svg");
 
-        // Explicit viewport preview (GH1 DrawViewportWires equivalent) so sheet outlines show without baking.
-        private volatile List<Curve> _previewWires;
-        private BoundingBox _previewBox = BoundingBox.Empty;
-        public override bool DisplayCapable => true;
-        public override BoundingBox DisplayBounds() => _previewBox.IsValid ? _previewBox : base.DisplayBounds();
-        public override void DisplayWires(Rhino.Display.DisplayPipeline pipeline, Grasshopper2.Display.Guises guises, ref BoundingBox region)
-        {
-            var w = _previewWires; if (w == null) return;
-            var col = System.Drawing.Color.FromArgb(40, 40, 40);
-            foreach (var c in w) if (c != null) { pipeline.DrawCurve(c, col); region.Union(c.GetBoundingBox(false)); }
-        }
-
         protected override void AddInputs(InputAdder inputs)
         {
             // ALL inputs whole-TREE so NO input can drive GH2 per-branch iteration: builds exactly ONE
@@ -87,15 +75,13 @@ namespace opennest_gh2.components
             access.SetItem(0, sheets);
 
             var outPolys = new List<Curve>();
-            var bb = BoundingBox.Empty;
             foreach (var s in sheets.sheets)
             {
                 if (s == null) continue;
                 foreach (var pl in s)
-                    if (pl != null && pl.Count >= 2) { var c = pl.ToNurbsCurve(); outPolys.Add(c); bb.Union(c.GetBoundingBox(false)); }
+                    if (pl != null && pl.Count >= 2) outPolys.Add(pl.ToNurbsCurve());
             }
             access.SetTwig(1, outPolys.ToArray());
-            _previewWires = outPolys; _previewBox = bb;
         }
     }
 }

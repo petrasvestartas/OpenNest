@@ -19,9 +19,33 @@ To place instance *i*: `final = Rotate(part, angle[i], origin) + (tx[i], ty[i])`
 
 ## Runnable example
 
-[`examples/cpp_console`](https://github.com/petrasvestartas/OpenNest/tree/main/examples/cpp_console) is a standalone
-C++ console that calls **both** engines through this C ABI. Build and run it with the CMake **superbuild** in
-[`examples/`](https://github.com/petrasvestartas/OpenNest/tree/main/examples):
+The easiest way to nest from C++ is the header‑only
+[`opennest.hpp`](https://github.com/petrasvestartas/OpenNest/blob/main/examples/cpp_console/opennest.hpp) binding,
+which mirrors the [compas_nest](python.md) Python API — build a `nest_geo`, build a `nest_sheets`, call `.solve()`,
+read the placed outlines:
+
+```cpp
+#include "opennest.hpp"
+using namespace opennest;
+
+nest_geo geo;
+geo.add_part({{0,0},{30,0},{30,12},{0,12}}, /*holes*/ {}, /*copies*/ 4);
+geo.add_part({{0,0},{20,0},{20,20},{0,20}}, {{{6,6},{14,6},{14,14},{6,14}}}, 3);
+
+nest_sheets sheets;
+sheets.add_sheet({{0,0},{120,0},{120,120},{0,120}}, {{{50,50},{65,50},{65,65},{50,65}}});
+
+nest_result r = opennest_collision{}.solve(geo, sheets);   // physics — or opennest_nfp{} for NFP + GA
+for (const auto& group : r.placed_polylines())
+    for (const auto& part : group.parts) {
+        part.shape.outer;   // placed (transformed) outer ring
+        part.shape.holes;   // placed holes
+    }
+```
+
+The full program is
+[`examples/cpp_console`](https://github.com/petrasvestartas/OpenNest/tree/main/examples/cpp_console). Build & run it
+with the CMake **superbuild** in [`examples/`](https://github.com/petrasvestartas/OpenNest/tree/main/examples):
 
 ```bash
 cmake -S examples -B examples/build                                  # add -A x64 on Windows
@@ -29,8 +53,10 @@ cmake --build examples/build --config Release
 cmake --build examples/build --target run_examples --config Release  # builds + runs both apps
 ```
 
-It's built & run on Windows, macOS and Linux by
+Built & run on Windows, macOS and Linux by
 [`examples.yml`](https://github.com/petrasvestartas/OpenNest/blob/main/.github/workflows/examples.yml).
+`opennest.hpp` is a thin wrapper over the raw C ABI documented below — call the ABI directly only when binding
+from another language.
 
 ---
 

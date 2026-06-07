@@ -505,7 +505,10 @@ namespace nest_rhino_lib
                     this.curve_to_polyline_unfillet(boundary_curves_non_sorted[ids[i]], segment_division_length, hull);
                 BoundingBox bbox = pline.Count == 2 ? new BoundingBox(pline[0], pline[1]) : pline.BoundingBox;
                 bbox.Inflate(RhinoDoc.ActiveDoc.ModelAbsoluteTolerance * 2);
-                plines_simplified[i] = Tuple.Create(boudary_indices_non_sorted[i], pline, bbox, boundary_curves_non_sorted[i]);
+                // Use the GLOBAL index ids[i] (not the local loop index i) for the source index and the original
+                // curve — matching the curve read above (boundary_curves_non_sorted[ids[i]]). With local i, every
+                // group's rings took the first global curves' index/curve, corrupting per-part source/Item4.
+                plines_simplified[i] = Tuple.Create(boudary_indices_non_sorted[ids[i]], pline, bbox, boundary_curves_non_sorted[ids[i]]);
                 double_lengths[i] = (bbox.Diagonal.Length);
 
 

@@ -22,19 +22,6 @@ namespace opennest_gh2.components
 
         protected override Grasshopper2.UI.Icon.IIcon IconInternal => opennest_gh2.icons.SvgVectorIcon.Load("element.svg");
 
-        // Explicit viewport preview (GH1 DrawViewportWires equivalent) so the prepared part borders show
-        // without baking. Cached from the last Process.
-        private volatile List<Curve> _previewWires;
-        private BoundingBox _previewBox = BoundingBox.Empty;
-        public override bool DisplayCapable => true;
-        public override BoundingBox DisplayBounds() => _previewBox.IsValid ? _previewBox : base.DisplayBounds();
-        public override void DisplayWires(Rhino.Display.DisplayPipeline pipeline, Grasshopper2.Display.Guises guises, ref BoundingBox region)
-        {
-            var w = _previewWires; if (w == null) return;
-            var col = System.Drawing.Color.FromArgb(40, 40, 40);
-            foreach (var c in w) if (c != null) { pipeline.DrawCurve(c, col); region.Union(c.GetBoundingBox(false)); }
-        }
-
         protected override void AddInputs(InputAdder inputs)
         {
             // Whole TREE (like GH1 GH_ParamAccess.tree). FLAT LIST (one branch) -> each curve is its own part
@@ -100,12 +87,10 @@ namespace opennest_gh2.components
             access.SetItem(0, geo);
 
             var borders = new List<Curve>();
-            var bb = BoundingBox.Empty;
             foreach (var grp in geo.boundary_sorted)
                 foreach (var tup in grp)
-                    if (tup.Item2 != null && tup.Item2.Count >= 2) { var c = tup.Item2.ToNurbsCurve(); borders.Add(c); bb.Union(c.GetBoundingBox(false)); }
+                    if (tup.Item2 != null && tup.Item2.Count >= 2) borders.Add(tup.Item2.ToNurbsCurve());
             access.SetTwig(1, borders.ToArray());
-            _previewWires = borders; _previewBox = bb;
         }
     }
 }

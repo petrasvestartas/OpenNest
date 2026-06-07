@@ -71,28 +71,15 @@ namespace opennest_gh2.components
         private Action<IDataAccess> _emit;
         protected void CacheResult(Action<IDataAccess> emit) => _emit = emit;
 
-        // Final placed wires for the GH2 viewport preview (the live tightening preview is the conduit; the
-        // FINAL result is drawn here so it shows without baking). Set by the subclass in Assemble.
+        // Final placed wires, shown by the CONDUIT after the solve (kept visible without baking). We deliberately
+        // do NOT override DisplayBounds/DisplayWires/DisplayCapable: returning an empty/invalid DisplayBounds gets
+        // unioned into GH2's global scene clip box and culls ALL viewport geometry (the "whole preview broke" bug).
         private volatile List<Curve> _finalWires;
-        private BoundingBox _finalBox = BoundingBox.Empty;
         protected void SetFinalWires(IEnumerable<Curve> wires)
         {
-            var list = new List<Curve>(); var bb = BoundingBox.Empty;
-            if (wires != null) foreach (var c in wires) if (c != null) { list.Add(c); bb.Union(c.GetBoundingBox(false)); }
-            _finalWires = list; _finalBox = bb;
-        }
-
-        // GH2 viewport preview. We draw explicitly (GH1's DrawViewportWires equivalent) so output geometry shows
-        // without baking. While solving, the DisplayConduit draws the live preview; when idle we draw the result.
-        public override bool DisplayCapable => true;
-        public override BoundingBox DisplayBounds() => _finalBox.IsValid ? _finalBox : base.DisplayBounds();
-        public override void DisplayWires(Rhino.Display.DisplayPipeline pipeline, Grasshopper2.Display.Guises guises, ref BoundingBox region)
-        {
-            if (Solving) return;   // the conduit draws the live tightening preview during the solve
-            var w = _finalWires;
-            if (w == null) return;
-            var col = System.Drawing.Color.FromArgb(40, 40, 40);
-            foreach (var c in w) if (c != null) { pipeline.DrawCurve(c, col); region.Union(c.GetBoundingBox(false)); }
+            var list = new List<Curve>();
+            if (wires != null) foreach (var c in wires) if (c != null) list.Add(c);
+            _finalWires = list;
         }
 
         // ---- subclass hooks ----
@@ -108,6 +95,7 @@ namespace opennest_gh2.components
                 case Phase.Ready:
                     try { Assemble(access); }
                     catch (Exception ex) { Rhino.RhinoApp.WriteLine(ex.ToString()); access.AddError("Nest failed", ex.Message); }
+                    ShowFinalOnConduit();        // keep the result visible (conduit), no display-pipeline override
                     _phase = Phase.Idle;
                     return;
 
@@ -158,9 +146,8 @@ namespace opennest_gh2.components
             {
                 try
                 {
-                    EnableConduit(false);
-                    // Publish pass via the NORMAL solution machinery so outputs AND the viewport display + any
-                    // downstream previews are rebuilt (Process then sees Ready and sets the outputs).
+                    // Keep the conduit enabled (it switches to the final result in ShowFinalOnConduit). Publish via
+                    // the NORMAL solution machinery so outputs + any downstream previews rebuild.
                     Document?.Solution.DelayedExpire(this);
                 }
                 catch (Exception ex) { Rhino.RhinoApp.WriteLine(ex.ToString()); }
@@ -207,30 +194,64 @@ namespace opennest_gh2.components
             if (_phase == Phase.Computing && mm != null) { try { mm.Start(); } catch { } }
         }
 
+        // Turn on the LIVE (orange) preview at the start of a solve.
         private void EnableConduit(bool on)
         {
             try
             {
-                if (on) { _conduit.Borders = new List<Polyline>(); _conduit.Sheets = new List<Polyline>(); }
+                if (on)
+                {
+                    _conduit.Borders = new List<Polyline>();
+                    _conduit.Sheets = new List<Polyline>();
+                    _conduit.Live = true;
+                    _conduit.AliveCheck = () => Document != null;   // self-disable once the component is removed
+                }
                 _conduit.Enabled = on;
+                Rhino.RhinoDoc.ActiveDoc?.Views.Redraw();
+            }
+            catch { }
+        }
+
+        // After the solve: switch the conduit to draw the FINAL result and keep it enabled (so the nested
+        // geometry stays visible without baking, and without any DisplayBounds override that would break GH2).
+        private void ShowFinalOnConduit()
+        {
+            try
+            {
+                _conduit.Final = _finalWires;
+                _conduit.Live = false;
+                _conduit.AliveCheck = () => Document != null;
+                _conduit.Enabled = true;
                 Rhino.RhinoDoc.ActiveDoc?.Views.Redraw();
             }
             catch { }
         }
     }
 
-    // Draws the live "tightening" preview into the Rhino viewport while a nest solves (the final result then
-    // displays via the component's normal output once the publish pass completes).
+    // Draws the nest into the Rhino viewport: the live tightening preview (orange) while solving, then the final
+    // placed result (dark) when idle. Independent of GH2's display pipeline, so it never affects other previews.
     internal sealed class NestPreviewConduit : Rhino.Display.DisplayConduit
     {
-        public volatile List<Polyline> Borders = new List<Polyline>();
-        public volatile List<Polyline> Sheets = new List<Polyline>();
+        public volatile List<Polyline> Borders = new List<Polyline>();   // live
+        public volatile List<Polyline> Sheets = new List<Polyline>();    // live
+        public volatile List<Curve> Final;                                // final result
+        public volatile bool Live = true;
+        public Func<bool> AliveCheck;                                     // false -> component removed, self-disable
 
         protected override void PostDrawObjects(Rhino.Display.DrawEventArgs e)
         {
-            var sh = Sheets; var bo = Borders;
-            if (sh != null) foreach (var pl in sh) if (pl != null && pl.Count > 1) e.Display.DrawPolyline(pl, System.Drawing.Color.Gray);
-            if (bo != null) foreach (var pl in bo) if (pl != null && pl.Count > 1) e.Display.DrawPolyline(pl, System.Drawing.Color.OrangeRed, 2);
+            try { if (AliveCheck != null && !AliveCheck()) { Enabled = false; return; } } catch { }
+            if (Live)
+            {
+                var sh = Sheets; var bo = Borders;
+                if (sh != null) foreach (var pl in sh) if (pl != null && pl.Count > 1) e.Display.DrawPolyline(pl, System.Drawing.Color.Gray);
+                if (bo != null) foreach (var pl in bo) if (pl != null && pl.Count > 1) e.Display.DrawPolyline(pl, System.Drawing.Color.OrangeRed, 2);
+            }
+            else
+            {
+                var f = Final;
+                if (f != null) foreach (var c in f) if (c != null) e.Display.DrawCurve(c, System.Drawing.Color.FromArgb(40, 40, 40));
+            }
         }
     }
 }

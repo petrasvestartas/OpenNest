@@ -119,7 +119,6 @@ namespace opennest_2
             pManager.AddIntegerParameter("Rotations", "Rotations", "Orientation angles per part. Fewer = much faster on large sets (the cold NFP cache grows with rotations); more = slightly tighter.", GH_ParamAccess.item, 2);
             pManager.AddIntegerParameter("Iterations", "Iterations", "Solver generations to evolve. You watch each one tighten in the preview; higher = tighter but slower. ~4–10 typical.", GH_ParamAccess.item, 6);
             pManager.AddIntegerParameter("Seed", "Seed", "Random seed for reproducible results.", GH_ParamAccess.item, 1);
-            pManager.AddIntegerParameter("Tries", "Tries", "Multi-start: run this many attempts (seed, seed+1, …) and keep the TIGHTEST layout. 1 = single run; 4–8 beats run-to-run variance (but multiplies time).", GH_ParamAccess.item, 1);
             pManager.AddBooleanParameter("Reset", "Reset", "Set TRUE (wire a Button) to clear the whole component instantly and drop any running solve.", GH_ParamAccess.item, false);
             pManager.AddBooleanParameter("Run", "Run", "Wire a Boolean Toggle. TRUE = solve now and re-solve automatically when an input changes (background thread, Rhino stays responsive, live preview). FALSE = hold the last result. Use Reset to clear.", GH_ParamAccess.item, false);
 
@@ -136,6 +135,7 @@ namespace opennest_2
         }
 
         // Read the scalar param ports (2..7) into the positional list the rhino_example ctor reads BY INDEX.
+        // Tries is a fixed default (single run) — no longer exposed as an input.
         private List<double> process_inputs(IGH_DataAccess DA)
         {
             spacing = 1; placement = 1; tolerance = 0.1; rotations = 2; iterations = 6; seed = 1;
@@ -256,9 +256,8 @@ namespace opennest_2
         {
             bool reset = false;
             this.run = false; this.tries = 1;
-            DA.GetData(8, ref this.tries);
-            DA.GetData(9, ref reset);
-            DA.GetData(10, ref this.run);
+            DA.GetData(8, ref reset);
+            DA.GetData(9, ref this.run);
             var parameters = process_inputs(DA);   // reads ports 2..7
 
             // ===== RESET (any phase): clear the whole component INSTANTLY =====
@@ -566,23 +565,27 @@ namespace opennest_2
             }
 
             this.x = 0;
-            if (sheetSets.Count == 1)
+            // AUTO-OVERFLOW: duplicate the sheet SET to the right so parts that don't fit spill onto copies.
+            // Size the number of copies to the part area (min 3, max 40) — matches the OpenNest Rhino command,
+            // and works whether the user supplies one sheet or several (the whole set is duplicated).
             {
-                var template = sheetSets[0];
-                var bb = BoundingBox.Empty;
-                foreach (var pl in template) bb.Union(pl.BoundingBox);
-                double w = (bb.Max.X - bb.Min.X) + 0.01;
-                for (int i = 1; i < 11; i++)
-                {
-                    var copy = new List<Polyline>();
-                    foreach (var pl in template)
+                var setBB = BoundingBox.Empty;
+                foreach (var s in sheetSets) foreach (var pl in s) setBB.Union(pl.BoundingBox);
+                double setW = (setBB.IsValid ? (setBB.Max.X - setBB.Min.X) : 0) + 0.01;
+                var partGoo = new List<IGH_GeometricGoo>(); DA.GetDataList(1, partGoo);
+                double partAreaSum = 0;
+                foreach (var pg in partGoo) { if (pg == null) continue; var b = pg.Boundingbox; if (b.IsValid) partAreaSum += (b.Max.X - b.Min.X) * (b.Max.Y - b.Min.Y); }
+                double sheetAreaSum = 0;
+                foreach (var s in sheetSets) if (s.Count > 0) { var b = s[0].BoundingBox; sheetAreaSum += (b.Max.X - b.Min.X) * (b.Max.Y - b.Min.Y); }
+                int sheetCopies = Math.Min(40, Math.Max(3, (int)Math.Ceiling(partAreaSum * 1.8 / Math.Max(1.0, sheetAreaSum)) + 2));
+                var baseSheets = sheetSets.ToList();
+                for (int copy = 1; copy < sheetCopies && setW > 1e-6; copy++)
+                    foreach (var s in baseSheets)
                     {
-                        var p = new Polyline(pl);
-                        p.Transform(Transform.Translation(new Vector3d(i * w, 0, 0)));
-                        copy.Add(p);
+                        var dup = new List<Polyline>();
+                        foreach (var pl in s) { var p = new Polyline(pl); p.Transform(Transform.Translation(copy * setW, 0, 0)); dup.Add(p); }
+                        sheetSets.Add(dup);
                     }
-                    sheetSets.Add(copy);
-                }
             }
 
             var gaps = new List<double> { 0.0 };
@@ -729,7 +732,13 @@ namespace opennest_2
                     return null;
                 }
 
-                return nest_rhino_lib.nest_geo_util.geo_to_nest_geo(outlines.Item1, outlines.Item3, new List<double> { 0, 0 }, outlines.Item2, false);
+                // hard_coded_input = TRUE: keep each input goo as its OWN part using its pre-grouped Curve[] —
+                // a plain Curve is one ring (NO holes), a planar surface is its outer ring + its own trim loops
+                // (holes). This does NOT run the global containment pass (identify_groups), so separate curves are
+                // never auto-paired as holes just because one happens to sit inside another. Holes come ONLY from
+                // surface input. (hard_coded_input sorts each group's rings largest-first, so the outer boundary is
+                // ring 0 and the rest are holes.)
+                return nest_rhino_lib.nest_geo_util.geo_to_nest_geo(outlines.Item1, outlines.Item3, new List<double> { 0, 0 }, outlines.Item2, true);
             }
             catch (Exception ex)
             {

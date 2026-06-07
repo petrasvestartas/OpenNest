@@ -10,9 +10,8 @@
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <AssemblyName>opennest_csharp_example</AssemblyName>
-    <!-- The solver DLLs are native x64; force an x64 process so the bare-name P/Invoke binds. -->
-    <Platforms>x64</Platforms>
-    <PlatformTarget>x64</PlatformTarget>
+    <!-- Run as the host architecture (64-bit on every CI runner: x64 Windows/Linux, arm64 macOS) so the
+         process matches the natively-built engine libraries. Do NOT pin x64 — that breaks arm64 macOS. -->
   </PropertyGroup>
 
   <!-- Copy whichever native solver libraries exist next to the exe so the bare-name P/Invoke resolves.

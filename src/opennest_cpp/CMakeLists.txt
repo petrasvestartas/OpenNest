@@ -4,6 +4,10 @@ project(opennest_cpp LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Position-independent code so the static libs (Clipper2, nest_lib) link into the shared nfp_nest
+# library on Linux (ld: "final link failed: bad value" otherwise). No-op on MSVC; harmless on macOS.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 # Static-link the MSVC runtime across ALL targets so nfp_nest.dll is self-contained
 # (the Rhino/.gha host then needs no extra VC++ redistributable). CMP0091 (NEW by
 # default on CMake >= 3.15) makes this property authoritative.

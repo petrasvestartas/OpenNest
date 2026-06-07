@@ -33,6 +33,7 @@ namespace opennest_gh2.components
             inputs.AddInteger("Rotations", "Rotations", "Orientation angles per part.", Access.Item, Requirement.MayBeMissing).Set(2);
             inputs.AddInteger("Iterations", "Iterations", "GA generations to evolve.", Access.Item, Requirement.MayBeMissing).Set(6);
             inputs.AddInteger("Seed", "Seed", "Random seed.", Access.Item, Requirement.MayBeMissing).Set(1);
+            inputs.AddBoolean("Reset", "Reset", "Set true to clear the outputs.", Access.Item, Requirement.MayBeMissing).Set(false);
             inputs.AddBoolean("Run", "Run", "Set true to nest.", Access.Item, Requirement.MayBeMissing).Set(true);
         }
 
@@ -47,7 +48,9 @@ namespace opennest_gh2.components
 
         protected override void Process(IDataAccess access)
         {
-            access.GetItem(8, out bool run);
+            access.GetItem(8, out bool reset);
+            access.GetItem(9, out bool run);
+            if (reset) { access.AddRemark("Reset", "Cleared. Set Reset = false."); return; }
             if (!run) { access.AddRemark("Stopped", "Set Run = true."); return; }
             if (!access.GetItemArray(0, out Curve[] sheetCrv) || sheetCrv == null || sheetCrv.Length == 0) { access.AddError("No sheets", "Connect closed sheet curves."); return; }
             if (!access.GetItemArray(1, out Curve[] partCrv) || partCrv == null || partCrv.Length == 0) { access.AddError("No parts", "Connect closed part curves."); return; }
@@ -61,10 +64,31 @@ namespace opennest_gh2.components
             var plinesList = sheetCrv.Where(c => c != null && c.IsClosed).Select(c => helper.curve_to_polyline(c, seg)).Where(p => p != null && p.Count >= 4).Select(p => new List<Polyline> { p }).ToList();
             if (plinesList.Count == 0) { access.AddError("No sheets", "Sheets must be closed."); return; }
             double g = diag * 0.03;
+            // AUTO-OVERFLOW: duplicate the sheet set to the right so parts that don't fit spill onto copies,
+            // sized to the part area (min 3, max 40) — matches the OpenNest Rhino command. No need to array
+            // sheets by hand.
+            {
+                var setBB = BoundingBox.Empty;
+                foreach (var s in plinesList) foreach (var pl in s) setBB.Union(pl.BoundingBox);
+                double setW = (setBB.IsValid ? (setBB.Max.X - setBB.Min.X) : 0) + g;
+                double partAreaSum = 0;
+                foreach (var c in partCrv) { if (c == null) continue; var b = c.GetBoundingBox(false); if (b.IsValid) partAreaSum += (b.Max.X - b.Min.X) * (b.Max.Y - b.Min.Y); }
+                double sheetAreaSum = 0;
+                foreach (var s in plinesList) if (s.Count > 0) { var b = s[0].BoundingBox; sheetAreaSum += (b.Max.X - b.Min.X) * (b.Max.Y - b.Min.Y); }
+                int sheetCopies = Math.Min(40, Math.Max(3, (int)Math.Ceiling(partAreaSum * 1.8 / Math.Max(1.0, sheetAreaSum)) + 2));
+                var baseSheets = plinesList.ToList();
+                for (int copy = 1; copy < sheetCopies && setW > 1e-6; copy++)
+                    foreach (var s in baseSheets)
+                        plinesList.Add(s.Select(pl => { var p = new Polyline(pl); p.Transform(Transform.Translation(copy * setW, 0, 0)); return p; }).ToList());
+            }
             var sheets = new nest_sheets(plinesList, new List<double> { g, g }, new List<int>(), plinesList.Count);
 
             var grouped = partCrv.Where(c => c != null && c.IsClosed).Select(c => new[] { c }).ToList();
-            var geo = nest_geo_util.geo_to_nest_geo(grouped, Enumerable.Repeat(1, grouped.Count).ToList(), new List<double> { seg, 0 }, null, hard_coded_input: false);
+            // hard_coded_input: TRUE — each input curve is its OWN no-hole part (Curve[1]); do NOT run the global
+            // containment pass that would auto-pair a curve sitting inside another as a hole. (This component takes
+            // curves only, so it never makes holes — holes come from surface input elsewhere.) Also fixes the wrong
+            // transforms that resulted when a separate curve was swallowed as a hole and lost its own placement.
+            var geo = nest_geo_util.geo_to_nest_geo(grouped, Enumerable.Repeat(1, grouped.Count).ToList(), new List<double> { seg, 0 }, null, hard_coded_input: true);
             if (geo.boundary_sorted == null || geo.boundary_sorted.Count == 0) { access.AddError("No parts", "Could not extract part boundaries."); return; }
 
             // rhino_example parameters[0..8]: rotations, wiggle, placement, spacing, seed, curveTol, mutation, population, time.
