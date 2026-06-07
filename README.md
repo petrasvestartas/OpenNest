@@ -12,6 +12,12 @@ The nesting engines are **C++ implementations** for Rhino .NET user interface.
 
 Install, components, build & publish: **https://petrasvestartas.github.io/OpenNest/**
 
+## Python
+
+The same nesting engines are also available from **Python** as the COMPAS plugin **compas_nest**
+(`pip install compas_nest`; runs in the Rhino 8 Script Editor too):
+**https://petrasvestartas.github.io/compas_nest/**
+
 ## License
 
 OpenNest is released under the **MIT License** — see [LICENSE](LICENSE).
