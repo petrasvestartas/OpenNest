@@ -1,14 +1,26 @@
 # C# API
 
-!!! tip "Runnable example"
-    [`examples/csharp_console`](https://github.com/petrasvestartas/OpenNest/tree/main/examples/csharp_console) is a
-    standalone, Rhino‑free console that `P/Invoke`s the engines directly (the low‑level *Talk to the engines
-    directly* path shown further down). Build it with the CMake
-    **superbuild** in [`examples/`](https://github.com/petrasvestartas/OpenNest/tree/main/examples); it's built &
-    run on Windows, macOS and Linux by
-    [`examples.yml`](https://github.com/petrasvestartas/OpenNest/blob/main/.github/workflows/examples.yml).
+## Runnable example
 
-The high‑level path below uses RhinoCommon; **3 steps**: build the parts + sheets, run the solver, read where each part went.
+[`examples/csharp_console`](https://github.com/petrasvestartas/OpenNest/tree/main/examples/csharp_console) is a
+standalone, Rhino‑free console that `P/Invoke`s **both** engines directly (the low‑level *Talk to the engines
+directly* path shown further down). Build and run it with the CMake **superbuild** in
+[`examples/`](https://github.com/petrasvestartas/OpenNest/tree/main/examples):
+
+```bash
+cmake -S examples -B examples/build                                  # add -A x64 on Windows
+cmake --build examples/build --config Release
+cmake --build examples/build --target run_examples --config Release  # builds + runs both apps
+```
+
+It's built & run on Windows, macOS and Linux by
+[`examples.yml`](https://github.com/petrasvestartas/OpenNest/blob/main/.github/workflows/examples.yml).
+
+---
+
+## Using the library (RhinoCommon)
+
+The high‑level path uses RhinoCommon; **3 steps**: build the parts + sheets, run the solver, read where each part went.
 
 ```csharp
 // 1) PARTS + SHEETS  — one Curve[] per part (outer ring first, then hole rings)

@@ -32,13 +32,13 @@ namespace opennest_gh2.components
         public bool Solving => _phase == Phase.Computing;
         public string StatusText => _status;
 
-        // Run button (one-shot): launch a solve; stop the running one.
+        // Run button (one-shot): launch a solve; stop the running one. DelayedExpire goes through the document's
+        // NORMAL solution machinery (which rebuilds the viewport display) — unlike the headless Solution.Start().
         public void RequestLaunch()
         {
             if (_phase != Phase.Idle) return;     // already computing/publishing
             _launchRequested = true;
-            try { Expire(); } catch { }
-            try { Document?.Solution.Start(); } catch (Exception ex) { Rhino.RhinoApp.WriteLine(ex.ToString()); }
+            try { Document?.Solution.DelayedExpire(this); } catch (Exception ex) { Rhino.RhinoApp.WriteLine(ex.ToString()); }
         }
         public void RequestStop()
         {
@@ -159,8 +159,9 @@ namespace opennest_gh2.components
                 try
                 {
                     EnableConduit(false);
-                    Expire();
-                    Document?.Solution.Start();   // ONE publish pass -> Process sees Ready -> sets outputs + display
+                    // Publish pass via the NORMAL solution machinery so outputs AND the viewport display + any
+                    // downstream previews are rebuilt (Process then sees Ready and sets the outputs).
+                    Document?.Solution.DelayedExpire(this);
                 }
                 catch (Exception ex) { Rhino.RhinoApp.WriteLine(ex.ToString()); }
             }));
