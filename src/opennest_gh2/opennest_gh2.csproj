@@ -7,7 +7,10 @@
        Reuses the existing nesting logic in opennest_2 via a ProjectReference (re-enabled after the spike loads). -->
 
   <PropertyGroup>
-    <TargetFramework>net7.0-windows</TargetFramework>
+    <!-- net7.0-windows for the Windows Yak package; net7.0 (portable) for the macOS package. The plugin uses
+         only cross-platform APIs (Eto, Rhino.Geometry, GH2), so the net7.0 build is cross-built on the Windows
+         CI runner — mirroring opennest_2 / opennest_commands. -->
+    <TargetFrameworks>net7.0-windows;net7.0</TargetFrameworks>
     <TargetExt>.rhp</TargetExt>
     <EnableDynamicLoading>true</EnableDynamicLoading>
     <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>

@@ -37,21 +37,76 @@ namespace opennest_gh2.components
         public void RequestLaunch()
         {
             if (_phase != Phase.Idle) return;     // already computing/publishing
+            ClearAll();                           // wipe the previous run's geometry/preview -> start from scratch
+            _aborted = false;
             _launchRequested = true;
             try { Document?.Solution.DelayedExpire(this); } catch (Exception ex) { Rhino.RhinoApp.WriteLine(ex.ToString()); }
         }
         public void RequestStop()
         {
-            if (_phase == Phase.Computing) { try { RequestCancel(); } catch { } _status = "stopping…"; }
+            if (_phase == Phase.Computing)
+            {
+                _aborted = true;                  // discard best-so-far: the publish pass clears instead of assembling
+                try { RequestCancel(); } catch { }
+                StopMonitor();                    // stop animating the live preview immediately
+                ClearAll();                       // drop the in-progress preview now
+                _status = "stopped";
+            }
+        }
+
+        // Hard reset of everything this component is showing/holding: cached outputs, final wires, and the conduit.
+        // The next solution pass then emits NOTHING (outputs blank) until a fresh solve publishes, so no stale
+        // geometry from a previous Run/Stop persists.
+        private void ClearAll()
+        {
+            _emit = null;
+            _finalWires = null;
+            try
+            {
+                _conduit.Final = null;
+                _conduit.Borders = new List<Polyline>();
+                _conduit.Sheets = new List<Polyline>();
+                _conduit.Enabled = false;
+                Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+                {
+                    try { ExpireDisplay(); } catch { }
+                    try { Rhino.RhinoDoc.ActiveDoc?.Views.Redraw(); } catch { }
+                }));
+            }
+            catch { }
         }
         // Relayout + repaint without a re-solve (proxies the protected ExpireDisplay).
         public void RefreshDisplay() { try { ExpireDisplay(); } catch { } }
+
+        // Is this component still a LIVE, on-canvas object in an OPEN document? The conduit calls this every draw
+        // frame and self-disables when it returns false. WHY all three checks: after the component is deleted OR
+        // the file is closed, GH2 does NOT null our Document reference, so "Document != null" alone leaks the final
+        // preview forever (the reported bug). We additionally reject closed/closing/inert documents (file closed)
+        // and documents that no longer contain this object by id (component deleted while the file stays open).
+        internal bool IsComponentLive()
+        {
+            try
+            {
+                var d = Document;
+                if (d == null) return false;
+                switch (d.State)
+                {
+                    case Grasshopper2.Doc.DocumentState.Closing:
+                    case Grasshopper2.Doc.DocumentState.Closed:
+                    case Grasshopper2.Doc.DocumentState.Inert:
+                        return false;
+                }
+                return d.Objects?.Find(InstanceId) != null;   // deleted from the canvas -> Find returns null
+            }
+            catch { return false; }
+        }
 
         protected override IAttributes CreateAttributes() => new NestAttributes(this);
 
         // ---- state ----
         private volatile Phase _phase = Phase.Idle;
         private volatile bool _launchRequested;
+        private volatile bool _aborted;           // Stop pressed -> discard the result, publish a clear instead
         private volatile string _status;
         private Task _task;
         private System.Timers.Timer _monitor;
@@ -93,6 +148,15 @@ namespace opennest_gh2.components
             switch (_phase)
             {
                 case Phase.Ready:
+                    if (_aborted)
+                    {
+                        // Stop was pressed: publish a CLEAR (emit nothing) instead of the best-so-far result.
+                        _aborted = false;
+                        ClearAll();
+                        access.AddRemark("Stopped", "Run was stopped; press Run to nest from scratch.");
+                        _phase = Phase.Idle;
+                        return;
+                    }
                     try { Assemble(access); }
                     catch (Exception ex) { Rhino.RhinoApp.WriteLine(ex.ToString()); access.AddError("Nest failed", ex.Message); }
                     ShowFinalOnConduit();        // keep the result visible (conduit), no display-pipeline override
@@ -204,7 +268,7 @@ namespace opennest_gh2.components
                     _conduit.Borders = new List<Polyline>();
                     _conduit.Sheets = new List<Polyline>();
                     _conduit.Live = true;
-                    _conduit.AliveCheck = () => Document != null;   // self-disable once the component is removed
+                    _conduit.AliveCheck = IsComponentLive;   // self-disable once removed / file closed
                 }
                 _conduit.Enabled = on;
                 Rhino.RhinoDoc.ActiveDoc?.Views.Redraw();
@@ -220,7 +284,7 @@ namespace opennest_gh2.components
             {
                 _conduit.Final = _finalWires;
                 _conduit.Live = false;
-                _conduit.AliveCheck = () => Document != null;
+                _conduit.AliveCheck = IsComponentLive;
                 _conduit.Enabled = true;
                 Rhino.RhinoDoc.ActiveDoc?.Views.Redraw();
             }

@@ -174,15 +174,19 @@ namespace opennest_gh2.components
 
         protected override void AddInputs(InputAdder inputs)
         {
-            inputs.AddGeneric("Mesh or Brep", "M", "Mesh or Brep to unroll.");
-            inputs.AddCurve("Curves", "C", "Curves to unroll along.", Access.Twig, Requirement.MayBeMissing);
-            inputs.AddPoint("Points", "P", "Points to unroll along.", Access.Twig, Requirement.MayBeMissing);
+            inputs.AddGeneric("Mesh or Brep", "M", "Mesh or Brep to unroll.", Access.Item, Requirement.MayBeMissing);
+            inputs.AddCurve("Curves", "C", "Curves to unroll along the surface.", Access.Twig, Requirement.MayBeMissing);
+            inputs.AddPoint("Points", "P", "Points to unroll along the surface.", Access.Twig, Requirement.MayBeMissing);
+            inputs.AddText("Text", "TXT", "Text labels to unroll along the surface.", Access.Twig, Requirement.MayBeMissing);
+            inputs.AddPoint("Text point", "TP", "Anchor points for the text labels.", Access.Twig, Requirement.MayBeMissing);
         }
         protected override void AddOutputs(OutputAdder outputs)
         {
             outputs.AddGeneric("Brep", "B", "Unrolled Brep.", Access.Twig);
             outputs.AddCurve("Curves", "C", "Unrolled curves.", Access.Twig);
             outputs.AddPoint("Points", "P", "Unrolled points.", Access.Twig);
+            outputs.AddPoint("TextDotsLocation", "TXT L", "Unrolled text label locations.", Access.Twig);
+            outputs.AddText("TextDots", "TXT", "Unrolled text labels.", Access.Twig);
         }
 
         protected override void Process(IDataAccess access)
@@ -191,39 +195,62 @@ namespace opennest_gh2.components
             double mtol = Rhino.RhinoDoc.ActiveDoc?.ModelAbsoluteTolerance ?? 0.001;
 
             Brep brep = null;
-            if (geo is Brep b) brep = b;
-            else if (geo is Mesh mesh)
+            switch (geo)
             {
-                var faceBreps = new List<Brep>();
-                foreach (MeshFace mf in mesh.Faces)
-                    faceBreps.Add(mf.IsQuad
-                        ? NurbsSurface.CreateFromCorners(mesh.Vertices[mf.A], mesh.Vertices[mf.B], mesh.Vertices[mf.C], mesh.Vertices[mf.D]).ToBrep()
-                        : NurbsSurface.CreateFromCorners(mesh.Vertices[mf.A], mesh.Vertices[mf.B], mesh.Vertices[mf.C]).ToBrep());
-                var joined = Brep.JoinBreps(faceBreps, mtol);
-                if (joined != null && joined.Length > 0) brep = joined[0];
+                case Brep b: brep = b; break;
+                case Extrusion ex: brep = ex.ToBrep(true); break;        // boxes/extrusions arrive as Extrusion, not Brep
+                case Surface srf: brep = srf.ToBrep(); break;            // a single (untrimmed) surface
+                case Mesh mesh:
+                {
+                    var faceBreps = new List<Brep>();
+                    foreach (MeshFace mf in mesh.Faces)
+                        faceBreps.Add(mf.IsQuad
+                            ? NurbsSurface.CreateFromCorners(mesh.Vertices[mf.A], mesh.Vertices[mf.B], mesh.Vertices[mf.C], mesh.Vertices[mf.D]).ToBrep()
+                            : NurbsSurface.CreateFromCorners(mesh.Vertices[mf.A], mesh.Vertices[mf.B], mesh.Vertices[mf.C]).ToBrep());
+                    var joined = Brep.JoinBreps(faceBreps, mtol);
+                    if (joined != null && joined.Length > 0) brep = joined[0];
+                    break;
+                }
             }
-            if (brep == null || !brep.IsValid) { access.AddError("Invalid", "Input must be a valid Brep or mesh."); return; }
+            if (brep == null) { access.AddError("Invalid", "Input must be a Brep, surface, extrusion, SubD or mesh — got " + geo.GetType().Name + "."); return; }
 
             access.GetItemArray(1, out Curve[] crvs); access.GetItemArray(2, out Point3d[] pts);
+            access.GetItemArray(3, out string[] txtIn); access.GetItemArray(4, out Point3d[] txtLoc);
             var unroller = new Unroller(brep);
             if (crvs != null && crvs.Length > 0) unroller.AddFollowingGeometry(crvs);
             if (pts != null && pts.Length > 0) unroller.AddFollowingGeometry(pts);
+            // Text dots ride along too: pair each label with its anchor point (GH1 Unroll: Text + Text point).
+            if (txtIn != null && txtLoc != null && txtIn.Length > 0 && txtLoc.Length > 0)
+            {
+                int n = Math.Min(txtIn.Length, txtLoc.Length);
+                for (int i = 0; i < n; i++)
+                    if (txtIn[i] != null) unroller.AddFollowingGeometry(txtLoc[i], txtIn[i]);
+            }
 
-            Brep[] flat = unroller.PerformUnroll(out Curve[] outCrvs, out Point3d[] outPts, out _);
-            if (flat == null || flat.Length == 0) { access.AddWarning("Unroll failed", "Surface may not be developable."); return; }
+            Brep[] flat; Curve[] outCrvs; Point3d[] outPts; TextDot[] outDots;
+            try { flat = unroller.PerformUnroll(out outCrvs, out outPts, out outDots); }
+            catch (Exception ex) { access.AddError("Unroll failed", "Rhino could not unroll this geometry: " + ex.Message); return; }
+            if (flat == null || flat.Length == 0) { access.AddWarning("Unroll failed", "Surface may not be developable (closed solids must have unrollable faces)."); return; }
             Transform xform = TransformToWorldXY(flat);
             foreach (var f in flat) f.Transform(xform);
             if (outCrvs != null) foreach (var c in outCrvs) c.Transform(xform);
             var movedPts = new List<Point3d>();
             if (outPts != null) foreach (var p in outPts) { var pp = new Point3d(p); pp.Transform(xform); movedPts.Add(pp); }
+            // Unrolled text dots -> split into locations + label strings (GH1 outputs TextDotsLocation + TextDots).
+            var dotLocs = new List<Point3d>(); var dotTxt = new List<string>();
+            if (outDots != null) foreach (var d in outDots) { if (d == null) continue; d.Transform(xform); dotLocs.Add(d.Point); dotTxt.Add(d.Text); }
 
             var joinedFlat = Brep.JoinBreps(flat, mtol) ?? flat;
             access.SetTwig(0, joinedFlat);
             access.SetTwig(1, outCrvs ?? new Curve[0]);
             access.SetTwig(2, movedPts.ToArray());
+            access.SetTwig(3, dotLocs.ToArray());
+            access.SetTwig(4, dotTxt.ToArray());
         }
 
         // GH1 transformThem: pick the rotation (0..pi/10 steps) giving the smallest footprint, map onto WorldXY.
+        // Hardened: a degenerate orientation (e.g. some faces of a closed box) makes Box.GetCorners() return an
+        // EMPTY array, so the original's c[0]/c[3] indexing throws on box breps — we skip those orientations.
         private static Transform TransformToWorldXY(Brep[] breps)
         {
             var area = new double[11]; var planes = new Plane[11];
@@ -232,15 +259,22 @@ namespace opennest_gh2.components
                 var pts = new List<Point3d>();
                 Plane plane = Plane.WorldXY;
                 plane.Transform(Transform.Rotation(num / 10.0 * Math.PI, Point3d.Origin));
-                foreach (var brep in breps) pts.AddRange(new Box(plane, brep).GetCorners());
+                foreach (var brep in breps)
+                {
+                    var bc = new Box(plane, brep).GetCorners();
+                    if (bc != null && bc.Length >= 8) pts.AddRange(bc);
+                }
+                if (pts.Count < 2) { area[num] = double.MaxValue; planes[num] = Plane.WorldXY; continue; }
                 Box box2 = new Box(plane, pts);
                 var c = box2.GetCorners();
+                if (c == null || c.Length < 4) { area[num] = double.MaxValue; planes[num] = Plane.WorldXY; continue; }
                 area[num] = c[0].DistanceTo(c[1]) * c[0].DistanceTo(c[3]);
-                planes[num] = c[0].DistanceTo(c[1]) < c[0].DistanceTo(c[3])
+                var pl = c[0].DistanceTo(c[1]) < c[0].DistanceTo(c[3])
                     ? new Plane(c[0], c[1], c[3]) : new Plane(c[0], c[3], c[1]);
+                planes[num] = pl.IsValid ? pl : Plane.WorldXY;
             }
             Array.Sort(area, planes);
-            return Transform.PlaneToPlane(planes[0], Plane.WorldXY);
+            return planes[0].IsValid ? Transform.PlaneToPlane(planes[0], Plane.WorldXY) : Transform.Identity;
         }
     }
 }

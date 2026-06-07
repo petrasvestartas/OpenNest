@@ -60,8 +60,8 @@ namespace opennest_gh2.upgraders
         public IDocumentObject Upgrade(IGH_Component component)
         {
             var c = new SheetsComponent();
-            // GH1 Sheets inputs: 0 Polylines,1 Gap,2 Rows,3 Copies,4 Offset -> GH2: 0 Sheets,1 Copies,2 Gap,3 Offset
-            Safe(() => component.TransferInputs(c, new[] { (0, 0), (3, 1), (1, 2), (4, 3) }));
+            // GH1 Sheets inputs now map 1:1 to GH2: 0 Polylines,1 Gap,2 Rows,3 Copies,4 Offset.
+            Safe(() => component.TransferInputs(c, new[] { (0, 0), (1, 1), (2, 2), (3, 3), (4, 4) }));
             Safe(() => component.TransferOutputs(c, new[] { (0, 0), (1, 1) }));
             Safe(() => component.TransferInstanceId(c));
             return c;
@@ -75,8 +75,8 @@ namespace opennest_gh2.upgraders
         public IDocumentObject Upgrade(IGH_Component component)
         {
             var c = new GeometryComponent();
-            // GH1 Geometry inputs: 0 Outlines,1 Simplify,2 Hull,3 Copies,4 Offset,5 Attributes -> GH2: 0 Parts,1 Simplify,2 Hull,3 Copies
-            Safe(() => component.TransferInputs(c, new[] { (0, 0), (1, 1), (2, 2), (3, 3) }));
+            // GH1 Geometry inputs now map 1:1 to GH2: 0 Parts,1 Simplify,2 Hull,3 Copies,4 Offset,5 Attributes.
+            Safe(() => component.TransferInputs(c, new[] { (0, 0), (1, 1), (2, 2), (3, 3), (4, 4), (5, 5) }));
             Safe(() => component.TransferOutputs(c, new[] { (0, 0), (1, 1) }));
             Safe(() => component.TransferInstanceId(c));
             return c;

@@ -296,10 +296,13 @@ namespace opennest_gh2.icons
                             .Select(x => x.Value).ToList();
             int i = 0; double cx = 0, cy = 0, sx = 0, sy = 0; char cmd = ' ';
             List<PointF> cur = null;
-            double px = 0, py = 0; // last control reflection
+            // Last cubic control point, for S/s smooth reflection. Kept EQUAL to the current point after any
+            // non-cubic command, so an S that follows a line/move uses the current point as its first control
+            // (SVG spec) instead of a stale reflection — this is what mis-rendered simplify.svg's outline.
+            double px = 0, py = 0;
             Func<double> N = () => double.Parse(toks[i++], CultureInfo.InvariantCulture);
-            void MoveTo(double X, double Y) { cur = new List<PointF>(); runs.Add(cur); cx = X; cy = Y; sx = X; sy = Y; cur.Add(Pt(m, cx, cy)); }
-            void LineTo(double X, double Y) { if (cur == null) MoveTo(X, Y); else { cx = X; cy = Y; cur.Add(Pt(m, cx, cy)); } }
+            void MoveTo(double X, double Y) { cur = new List<PointF>(); runs.Add(cur); cx = X; cy = Y; sx = X; sy = Y; px = X; py = Y; cur.Add(Pt(m, cx, cy)); }
+            void LineTo(double X, double Y) { if (cur == null) MoveTo(X, Y); else { cx = X; cy = Y; px = X; py = Y; cur.Add(Pt(m, cx, cy)); } }
             void Cubic(double x1, double y1, double x2, double y2, double X, double Y)
             {
                 const int N2 = 16; double ax = cx, ay = cy;
@@ -325,7 +328,7 @@ namespace opennest_gh2.icons
                     case 'Q': { double qx = N(), qy = N(), x = N(), y = N(); if (rel) { qx += cx; qy += cy; x += cx; y += cy; } if (cur == null) MoveTo(cx, cy); Cubic(cx + 2.0/3*(qx-cx), cy + 2.0/3*(qy-cy), x + 2.0/3*(qx-x), y + 2.0/3*(qy-y), x, y); break; }
                     case 'T': { double x = N(), y = N(); if (rel) { x += cx; y += cy; } if (cur == null) MoveTo(cx, cy); Cubic(cx, cy, x, y, x, y); break; }
                     case 'A': { N(); N(); N(); N(); N(); double x = N(), y = N(); if (rel) { x += cx; y += cy; } LineTo(x, y); break; } // arc -> line (rare)
-                    case 'Z': if (cur != null) cur.Add(Pt(m, sx, sy)); cx = sx; cy = sy; break;
+                    case 'Z': if (cur != null) cur.Add(Pt(m, sx, sy)); cx = sx; cy = sy; px = cx; py = cy; break;
                     default: i++; break;
                 }
             }

@@ -23,12 +23,13 @@ namespace opennest_gh2.components
 
         protected override void AddInputs(InputAdder inputs)
         {
-            // ALL inputs whole-TREE so NO input can drive GH2 per-branch iteration: builds exactly ONE
-            // nest_sheets from all branches (each branch = one sheet: outer + optional holes), like GH1.
-            inputs.AddCurve("Sheets", "S", "Closed sheet outline polylines; one branch per sheet (outer + holes).", Access.Tree);
-            inputs.AddInteger("Copies", "C", "Total sheets to array from the input.", Access.Tree, Requirement.MayBeMissing).Set(100);
+            // Inputs mirror the current GH1 Sheets component 1:1 (so the upgrader maps directly). All Access.Tree
+            // so the component runs ONCE and builds exactly ONE nest_sheets (each branch = one sheet: outer + holes).
+            inputs.AddCurve("Polylines", "P", "Closed sheet outline polylines; one branch per sheet (outer + optional holes).", Access.Tree);
             inputs.AddNumber("Gap", "G", "Gap between arrayed sheets.", Access.Tree, Requirement.MayBeMissing).Set(0.1);
-            inputs.AddNumber("Offset", "O", "Inward margin for nesting (0 = off).", Access.Tree, Requirement.MayBeMissing).Set(0.0);
+            inputs.AddInteger("Rows", "R", "Sheets per row before partitioning (0/empty = one row).", Access.Tree, Requirement.MayBeMissing);
+            inputs.AddInteger("Copies", "C", "Total sheets to array from the input.", Access.Tree, Requirement.MayBeMissing).Set(100);
+            inputs.AddNumber("Offset", "O", "Inward MARGIN for nesting (model units; 0 = off). Parts keep this setback from the sheet edge; any sheet holes grow by it.", Access.Tree, Requirement.MayBeMissing).Set(0.0);
         }
 
         protected override void AddOutputs(OutputAdder outputs)
@@ -41,9 +42,10 @@ namespace opennest_gh2.components
         {
             if (!access.GetTree(0, out Tree<Curve> tree) || tree == null || tree.LeafCount == 0)
             { access.AddWarning("No sheets", "Connect closed sheet outline curves."); return; }
-            access.GetTree(1, out Tree<int> copiesT); int copies = NestGh2Util.First(copiesT, 100);
-            access.GetTree(2, out Tree<double> gapT); double gap = NestGh2Util.First(gapT, 0.1);
-            access.GetTree(3, out Tree<double> offsetT); double offset = NestGh2Util.First(offsetT, 0.0);
+            access.GetTree(1, out Tree<double> gapT); double gap = NestGh2Util.First(gapT, 0.1);
+            access.GetTree(2, out Tree<int> rowsT); var rows = NestGh2Util.AllOr(rowsT, 0); if (rows.Count == 1 && rows[0] == 0) rows = new List<int>();
+            access.GetTree(3, out Tree<int> copiesT); int copies = NestGh2Util.First(copiesT, 100);
+            access.GetTree(4, out Tree<double> offsetT); double offset = NestGh2Util.First(offsetT, 0.0);
 
             // One branch = one sheet (outer + holes). Use the input polylines DIRECTLY (no resampling),
             // exactly like GH1 component_sheets (TryGetPolyline). Build ONE nest_sheets from all branches.
@@ -69,7 +71,9 @@ namespace opennest_gh2.components
             }
             if (plinesList.Count == 0) { access.AddWarning("No closed sheet outlines", "Sheets need closed polyline curves."); return; }
 
-            var sheets = new nest_sheets(plinesList, new List<double> { gap, gap }, new List<int>(), copies < 1 ? 1 : copies);
+            var sheets = new nest_sheets(plinesList, new List<double> { gap, gap }, rows, copies < 1 ? 1 : copies);
+            // Inward MARGIN: per sheet, the OUTER loop (index 0) shrinks and holes grow, so placed parts keep the
+            // setback (GH1 parity via the public nest_sheets helper, which uses the same offset_closed_polyline).
             if (offset != 0) sheets.offset_sheet_boundary(offset);
 
             access.SetItem(0, sheets);

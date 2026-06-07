@@ -66,3 +66,7 @@ obj/
 site/
 # Claude Code local settings / scratch
 .claude/
+/_gh2probe/
+/_svg2png/
+_probe*/
+_iconcheck/

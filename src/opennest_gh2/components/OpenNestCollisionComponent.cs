@@ -158,7 +158,11 @@ namespace opennest_gh2.components
                     ids.Add(slist != null && j < slist.Count ? slist[j] : -1);
                     foreach (var tup in geo.boundary_sorted[i])
                     {
-                        var pl = new Polyline(tup.Item2); pl.Transform(x); borders.Add(pl.ToNurbsCurve());
+                        // Borders = the ORIGINAL outline (Item4), transformed — never the simplified collision
+                        // boundary (Item2). So the placed result is always the true input shape; the Geometry
+                        // component's Simplify only ever speeds up internal collision (default 0 = no simplify).
+                        Curve oc = tup.Item4 != null ? tup.Item4.DuplicateCurve() : tup.Item2.ToNurbsCurve();
+                        if (oc != null) { oc.Transform(x); borders.Add(oc); }
                     }
                     foreach (var gi in geo.geometry_sorted[i])
                     {

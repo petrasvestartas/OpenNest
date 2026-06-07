@@ -1,7 +1,0 @@
-# Build output from the examples superbuild and the C# project — never commit.
-build/
-build_local/
-bin/
-obj/
-_localtest/
-*.log

@@ -90,8 +90,9 @@ namespace opennest_gh2.upgraders
         public IDocumentObject Upgrade(IGH_Component c)
         {
             var g = new UnrollComponent();
-            Up.Safe(() => c.TransferInputs(g, new[] { (0, 0), (1, 1), (2, 2) }));   // Text(3)/TextPoint(4) dropped
-            Up.Safe(() => c.TransferOutputs(g, new[] { (0, 0), (1, 1), (2, 2) }));  // TextDots(3,4) dropped
+            // 1:1 with GH1: inputs Mesh/Brep,Curves,Points,Text,Text point; outputs Brep,Curves,Points,TextDotsLocation,TextDots.
+            Up.Safe(() => c.TransferInputs(g, new[] { (0, 0), (1, 1), (2, 2), (3, 3), (4, 4) }));
+            Up.Safe(() => c.TransferOutputs(g, new[] { (0, 0), (1, 1), (2, 2), (3, 3), (4, 4) }));
             Up.Safe(() => c.TransferInstanceId(g));
             return g;
         }

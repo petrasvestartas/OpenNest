@@ -61,19 +61,6 @@ namespace opennest_gh2.upgraders
         }
     }
 
-    public sealed class BBoxEdgesUpgrader : IUpgradeGh1Component
-    {
-        public Guid Grasshopper1Id => new Guid("e47a4beb-a453-4915-90a7-a18adc13f91c");
-        public IDocumentObject Upgrade(IGH_Component c)
-        {
-            var g = new BBoxEdgesComponent();
-            Up.Safe(() => c.TransferInputs(g, new[] { (0, 0), (1, 1) }));
-            Up.Safe(() => c.TransferOutputs(g, new[] { (0, 0), (1, 1), (2, 2), (3, 3), (4, 4) }));
-            Up.Safe(() => c.TransferInstanceId(g));
-            return g;
-        }
-    }
-
     public sealed class ProjectUpgrader : IUpgradeGh1Component
     {
         public Guid Grasshopper1Id => new Guid("3278ccf2-1258-1478-ae14-1b125e166bbd");

@@ -154,8 +154,12 @@ namespace opennest_gh2.components
                     Curve firstBorder = null;
                     foreach (var tup in geo.boundary_sorted[i])
                     {
-                        var pl = new Polyline(tup.Item2); pl.Transform(x);
-                        var crv = pl.ToNurbsCurve(); borders.Add(crv);
+                        // Borders = the ORIGINAL outline (Item4), transformed — never the simplified collision
+                        // boundary (Item2). Placed result is always the true input shape (Simplify, default 0,
+                        // only affects internal collision speed). Fall back to the boundary polyline if null.
+                        Curve crv = tup.Item4 != null ? tup.Item4.DuplicateCurve() : tup.Item2.ToNurbsCurve();
+                        if (crv == null) continue;
+                        crv.Transform(x); borders.Add(crv);
                         if (firstBorder == null) firstBorder = crv;
                     }
                     ids.Add(SheetOf(firstBorder, sheetBox));

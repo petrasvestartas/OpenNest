@@ -234,71 +234,76 @@ namespace opennest_gh2.components
         }
     }
 
-    // Pack Objects: lay objects out in a row, orienting each from 3D to 2D (GH1 Pack 3278ccf2-7220-1478-ae14-1b111e786bbd).
-    // Flat-list port (one row); pure geometry.
+    // Pack Objects: orient each object from its plane to 2D and lay them out — one ROW per input branch (X spaces
+    // objects within a row), rows stacked down by Y (GH1 Pack 3278ccf2-7220-1478-ae14-1b111e786bbd, tree-based).
     [IoId("3278ccf2-7220-1478-ae14-1b111e786bbd")]
     public class PackComponent : Component
     {
-        public PackComponent() : base(new Nomen("Pack Objects", "Lay objects out in a row, oriented from 3D to 2D.", "OpenNest", "Util")) { }
+        public PackComponent() : base(new Nomen("Pack Objects", "Lay objects out in rows (one per branch), oriented from 3D to 2D.", "OpenNest", "Util")) { }
         public PackComponent(IReader reader) : base(reader) { }
         protected override Grasshopper2.UI.Icon.IIcon IconInternal => icons.SvgVectorIcon.Load("pack_objects.svg");
 
         protected override void AddInputs(InputAdder inputs)
         {
-            inputs.AddGeneric("Geo", "G", "Objects to pack.", Access.Twig);
-            inputs.AddPlane("Plane", "P", "Base plane per object to orient from 3D to 2D.", Access.Twig);
-            inputs.AddNumber("X", "X", "Offset distance in X.", Access.Item, Requirement.MayBeMissing).Set(1.0);
-            inputs.AddNumber("Y", "Y", "Offset distance in Y.", Access.Item, Requirement.MayBeMissing).Set(1.0);
-            inputs.AddNumber("tolerance", "t", "Rotation step (radians) searching the min bounding box; 0 = no rotation.", Access.Item, Requirement.MayBeMissing).Set(0.0);
+            inputs.AddGeneric("Geo", "G", "Objects to pack (one branch per row).", Access.Tree);
+            inputs.AddPlane("Plane", "P", "Base plane per object to orient from 3D to 2D (matched per branch/item).", Access.Tree);
+            inputs.AddNumber("X", "X", "Spacing between objects along a row (negative = pack tight by -X).", Access.Tree, Requirement.MayBeMissing).Set(1.0);
+            inputs.AddNumber("Y", "Y", "Spacing between rows (negative = -Y).", Access.Tree, Requirement.MayBeMissing).Set(1.0);
+            inputs.AddNumber("tolerance", "t", "0 = no rotation; non-zero = allow the orientation flip to the smaller footprint.", Access.Tree, Requirement.MayBeMissing).Set(0.0);
         }
         protected override void AddOutputs(OutputAdder outputs)
         {
-            outputs.AddGeneric("Geo", "G", "Packed objects.", Access.Twig);
-            outputs.AddTransform("Transformation", "T", "Transform applied to each object.", Access.Twig);
+            outputs.AddGeneric("Geo", "G", "Packed objects (laid out in rows: one row per input branch).", Access.Twig);
+            outputs.AddTransform("Transformation", "T", "Transform applied to each object, in the same order.", Access.Twig);
         }
 
         protected override void Process(IDataAccess access)
         {
-            if (!access.GetItemArray(0, out GeometryBase[] geos) || geos == null || geos.Length == 0) return;
-            access.GetItemArray(1, out Plane[] planes);
-            access.GetItem(2, out double x); access.GetItem(3, out double y); access.GetItem(4, out double t);
-            bool noRotation = (t == 0);
-            double max = 3.14; t = Math.Max(3.14, 0.01);
+            if (!access.GetTree(0, out Tree<GeometryBase> geoTree) || geoTree == null || geoTree.LeafCount == 0) return;
+            access.GetTree(1, out Tree<Plane> planeTree);
+            access.GetTree(2, out Tree<double> xT); double x = NestGh2Util.First(xT, 1.0);
+            access.GetTree(3, out Tree<double> yT); double y = NestGh2Util.First(yT, 1.0);
+            access.GetTree(4, out Tree<double> tT); double tol = NestGh2Util.First(tT, 0.0);
+            bool noRotation = (tol == 0);   // GH1 forces a single orientation test; tolerance only toggles the flip
+
+            geoTree.ToArrays(out GeometryBase[][] geoBr);
+            Plane[][] planeBr = null; if (planeTree != null) planeTree.ToArrays(out planeBr);
 
             var outGeo = new List<GeometryBase>(); var outX = new List<Transform>();
-            double massAddition = 0;
-            for (int j = 0; j < geos.Length; j++)
+            double rowY = 0;   // each branch (row) is offset down by this; grows by Y after each row
+            for (int i = 0; i < geoBr.Length; i++)
             {
-                if (geos[j] == null) continue;
-                Plane basePlane = (planes != null && j < planes.Length && planes[j].IsValid) ? planes[j] : Plane.WorldXY;
-
-                Transform orient = Transform.PlaneToPlane(basePlane, Plane.WorldXY);
-                var g = geos[j].Duplicate(); g.Transform(orient);
-                Transform all = orient;
-
-                BoundingBox bbox = g.GetBoundingBox(true);
-                var gBest = g; Transform rotBest = Transform.Identity; double vol = 0;
-                for (double k = 0.0; k < max; k += t)
+                var branch = geoBr[i]; if (branch == null) continue;
+                var planeBrI = (planeBr != null && i < planeBr.Length) ? planeBr[i] : null;
+                double massAddition = 0;
+                for (int j = 0; j < branch.Length; j++)
                 {
-                    Transform rot = noRotation ? Transform.Rotation(0, bbox.Center) : Transform.Rotation(k, bbox.Center);
-                    var gT = g.Duplicate(); gT.Transform(rot);
-                    BoundingBox tb = gT.GetBoundingBox(true); double tv = new Box(tb).Volume;
-                    if (k == 0.0 || tv < vol) { vol = tv; gBest = gT; rotBest = rot; bbox = tb; }
-                }
-                all = rotBest * all;
-                Point3d[] corners = bbox.GetCorners();
-                if (corners[1].DistanceTo(corners[0]) < corners[1].DistanceTo(corners[2]))
-                {
-                    Transform xf = noRotation ? Transform.Rotation(0, bbox.Center) : Transform.Rotation(Math.PI * 0.5, bbox.Center);
-                    all = xf * all; gBest.Transform(xf); bbox = gBest.GetBoundingBox(true);
-                }
-                corners = bbox.GetCorners();
-                Vector3d vec = (Vector3d)Point3d.Origin - (Vector3d)corners[3];
-                Transform tr0 = Transform.Translation(vec); gBest.Transform(tr0); all = tr0 * all;
-                Transform tr1 = Transform.Translation(new Vector3d(massAddition, 0, 0)); gBest.Transform(tr1); all = tr1 * all;
-                double dist = corners[0].DistanceTo(corners[1]) + x; if (x < 0) dist = -x; massAddition += dist;
+                    if (branch[j] == null) continue;
+                    Plane basePlane = (planeBrI != null && j < planeBrI.Length && planeBrI[j].IsValid) ? planeBrI[j] : Plane.WorldXY;
 
-                outGeo.Add(gBest); outX.Add(all);
+                    Transform orient = Transform.PlaneToPlane(basePlane, Plane.WorldXY);
+                    var g = branch[j].Duplicate(); g.Transform(orient);
+                    Transform all = orient;
+
+                    BoundingBox bbox = g.GetBoundingBox(true);
+                    var gBest = g;
+                    // Orientation flip to the smaller footprint (width < height -> rotate 90°), like GH1.
+                    Point3d[] corners = bbox.GetCorners();
+                    if (!noRotation && corners[1].DistanceTo(corners[0]) < corners[1].DistanceTo(corners[2]))
+                    {
+                        Transform xf = Transform.Rotation(Math.PI * 0.5, bbox.Center);
+                        all = xf * all; gBest.Transform(xf); bbox = gBest.GetBoundingBox(true);
+                    }
+                    corners = bbox.GetCorners();
+                    Vector3d vec = (Vector3d)Point3d.Origin - (Vector3d)corners[3];
+                    Transform tr0 = Transform.Translation(vec); gBest.Transform(tr0); all = tr0 * all;          // to origin
+                    Transform tr1 = Transform.Translation(new Vector3d(massAddition, 0, 0)); gBest.Transform(tr1); all = tr1 * all;   // X within row
+                    Transform tr2 = Transform.Translation(new Vector3d(0, -rowY, 0)); gBest.Transform(tr2); all = tr2 * all;          // Y stack rows
+                    double dist = corners[0].DistanceTo(corners[1]) + x; if (x < 0) dist = -x; massAddition += dist;
+
+                    outGeo.Add(gBest); outX.Add(all);
+                }
+                rowY += y;   // next branch starts a new row, stacked down by Y
             }
             access.SetTwig(0, outGeo.ToArray());
             access.SetTwig(1, outX.ToArray());

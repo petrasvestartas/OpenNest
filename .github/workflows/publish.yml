@@ -136,6 +136,15 @@ jobs:
       - name: Build opennest_commands.rhp
         run: dotnet build src/opennest_commands/opennest_commands.csproj -c Release
 
+      # ---- 4c) Build the Grasshopper 2 plug-in (.rhp) for BOTH TFMs (net7.0-windows + net7.0). It reuses
+      #          opennest_2 (ProjectReference) and ships in the SAME Yak folder, so one install delivers the
+      #          GH1 components, the Rhino commands AND the GH2 components. continue-on-error: the GH2 SDK is
+      #          pre-alpha (WIP NuGet) — never let a GH2 hiccup block the proven GH1 + commands release; the
+      #          packaging steps below guard on the .rhp existing. ----
+      - name: Build opennest_gh2.rhp (Grasshopper 2)
+        continue-on-error: true
+        run: dotnet build src/opennest_gh2/opennest_gh2.csproj -c Release
+
       # ---- 5) Pull the universal macOS dylibs built by the mac job ----
       - name: Download macOS dylibs
         uses: actions/download-artifact@v4
@@ -157,6 +166,15 @@ jobs:
           # Drop the Rhino command plug-in next to the .gha so the Yak package installs commands too.
           Copy-Item "src/opennest_commands/bin/Release/net7.0-windows/opennest_commands.rhp" $stage -Force
           Copy-Item "src/opennest_commands/bin/Release/net7.0-windows/opennest_commands.deps.json" $stage -Force
+          # Grasshopper 2 plug-in (net7.0-windows). Co-located so its AssemblyResolve finds opennest_2.gha + the
+          # native DLLs already staged here. Guarded: the GH2 build is continue-on-error (pre-alpha SDK).
+          $gh2 = "src/opennest_gh2/bin/Release/net7.0-windows"
+          if (Test-Path "$gh2/opennest_gh2.rhp") {
+            Copy-Item "$gh2/opennest_gh2.rhp" $stage -Force
+            Copy-Item "$gh2/opennest_gh2.deps.json" $stage -Force -ErrorAction SilentlyContinue
+            Copy-Item "$gh2/opennest_gh2.runtimeconfig.json" $stage -Force -ErrorAction SilentlyContinue
+            Write-Host "Staged opennest_gh2.rhp (win)"
+          } else { Write-Host "WARNING: opennest_gh2.rhp (win) not found — GH2 build may have failed; shipping without it." }
           Copy-Item "grasshopper_plugin/opennest_win/manifest.yml" $stage -Force
           Copy-Item "grasshopper_plugin/opennest_win/icon.png"     $stage -Force
           if (Test-Path "README.md") { Copy-Item "README.md" "$stage/" -Force }
@@ -179,6 +197,14 @@ jobs:
           # The Rhino command plug-in (.rhp) is platform-neutral managed code; ship it on mac too.
           Copy-Item "src/opennest_commands/bin/Release/net7.0/opennest_commands.rhp" $stage -Force
           Copy-Item "src/opennest_commands/bin/Release/net7.0/opennest_commands.deps.json" $stage -Force
+          # Grasshopper 2 plug-in (net7.0 portable build) for macOS.
+          $gh2 = "src/opennest_gh2/bin/Release/net7.0"
+          if (Test-Path "$gh2/opennest_gh2.rhp") {
+            Copy-Item "$gh2/opennest_gh2.rhp" $stage -Force
+            Copy-Item "$gh2/opennest_gh2.deps.json" $stage -Force -ErrorAction SilentlyContinue
+            Copy-Item "$gh2/opennest_gh2.runtimeconfig.json" $stage -Force -ErrorAction SilentlyContinue
+            Write-Host "Staged opennest_gh2.rhp (mac)"
+          } else { Write-Host "WARNING: opennest_gh2.rhp (mac/net7.0) not found — GH2 build may have failed; shipping without it." }
           Copy-Item "grasshopper_plugin/opennest_mac/manifest.yml" $stage -Force
           Copy-Item "grasshopper_plugin/opennest_mac/icon.png"     $stage -Force
           if (Test-Path "README.md") { Copy-Item "README.md" "$stage/" -Force }
