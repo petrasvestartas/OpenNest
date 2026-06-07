@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" data-name="Layer 1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <defs>
+    <style>
+      .cls-1 {
+        fill: none;
+      }
+
+      .cls-2 {
+        fill: #010101;
+        fill-rule: evenodd;
+      }
+
+      .cls-3 {
+        fill: #fff;
+        font-family: OpenSans-ExtraBold, WZEINQ+OpenSans-ExtraBold;
+        font-size: 10px;
+        font-weight: 700;
+      }
+    </style>
+  </defs>
+  <g id="POLYLINE">
+    <polygon class="cls-1" points="27.66 15.45 31.34 21.83 21.7 27.39 5.13 21.42 2.52 15.57 12.58 9.23 27.66 15.45"/>
+  </g>
+  <g id="POLYLINE-2" data-name="POLYLINE">
+    <polygon class="cls-1" points="26.82 28.06 26.93 34.08 14.81 45.68 2.52 46.98 2.88 39.82 14.8 26.49 26.82 28.06"/>
+  </g>
+  <g id="POLYLINE-3" data-name="POLYLINE">
+    <polygon class="cls-1" points="21.62 7.44 22.6 13.3 36.24 19.09 46.72 13.42 45.27 7.39 32.79 1.38 21.62 7.44"/>
+  </g>
+  <g id="POLYLINE-4" data-name="POLYLINE">
+    <polygon class="cls-1" points="33.67 18.16 39.51 20.77 45.47 37.36 39.89 46.98 33.53 43.29 27.31 28.21 33.67 18.16"/>
+  </g>
+  <g id="HATCH">
+    <polygon class="cls-2" points="27.66 15.45 31.34 21.83 21.7 27.39 5.13 21.42 2.52 15.57 12.58 9.23 27.66 15.45"/>
+  </g>
+  <g id="HATCH-2" data-name="HATCH">
+    <polygon class="cls-2" points="26.82 28.06 26.93 34.08 14.81 45.68 2.52 46.98 2.88 39.82 14.8 26.49 26.82 28.06"/>
+  </g>
+  <g id="HATCH-3" data-name="HATCH">
+    <polygon class="cls-2" points="33.67 18.16 39.51 20.77 45.47 37.36 39.89 46.98 33.53 43.29 27.31 28.21 33.67 18.16"/>
+  </g>
+  <g id="HATCH-4" data-name="HATCH">
+    <polygon class="cls-2" points="21.62 7.44 22.6 13.3 36.24 19.09 46.72 13.42 45.27 7.39 32.79 1.38 21.62 7.44"/>
+  </g>
+  <text class="cls-3" transform="translate(10.53 41) scale(.9 1)"><tspan x="0" y="0">N</tspan></text>
+  <text class="cls-3" transform="translate(13.59 22.62) scale(.9 1)"><tspan x="0" y="0">E</tspan></text>
+  <text class="cls-3" transform="translate(31.58 14.33) scale(.9 1)"><tspan x="0" y="0">S</tspan></text>
+  <text class="cls-3" transform="translate(34.2 37.86) scale(.9 1)"><tspan x="0" y="0">T</tspan></text>
+</svg>

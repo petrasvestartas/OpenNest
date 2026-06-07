@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" data-name="Layer 1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <defs>
+    <style>
+      .cls-1 {
+        fill: none;
+        stroke: #010101;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+    </style>
+  </defs>
+  <g id="POLYLINE">
+    <polygon class="cls-1" points="7.63 19.54 14.27 12.9 17.59 16.22 20.42 13.39 10.95 3.93 8.12 6.76 11.44 10.07 4.81 16.71 7.63 19.54"/>
+  </g>
+</svg>

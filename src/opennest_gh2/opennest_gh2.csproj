@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- OpenNest for Grasshopper 2. The active GH2 (packages\8.0\Grasshopper2\manifest.txt) is
+       2.0.9231-wip.35834 and Rhino 8 loads its .NET 7 variant, so this targets net7.0-windows and compiles
+       against McNeel's official "Grasshopper2" reference-assembly NuGet (closest published version to the
+       installed 9231). Using the NuGet avoids the version skew (Eto/RhinoCommon) that HintPath references hit.
+       Reuses the existing nesting logic in opennest_2 via a ProjectReference (re-enabled after the spike loads). -->
+
+  <PropertyGroup>
+    <TargetFramework>net7.0-windows</TargetFramework>
+    <TargetExt>.rhp</TargetExt>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <AssemblyName>opennest_gh2</AssemblyName>
+    <RootNamespace>opennest_gh2</RootNamespace>
+    <NoWarn>NU1701;NU1603;NETSDK1086;CA1416;CS0618</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Self-consistent GH2 reference assemblies (Grasshopper2 + GrasshopperIO + matching RhinoCommon/Eto).
+         ExcludeAssets=runtime: the installed GH2 + Rhino supply these at load time. -->
+    <!-- The Grasshopper2 reference-assembly NuGet (closest published version to the installed 9231).
+         It transitively brings the matching RhinoCommon compile assets, so no explicit RhinoCommon ref. -->
+    <PackageReference Include="Grasshopper2" Version="2.0.9225-wip.14825" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Component icons (SVG, vector) embedded so AbstractIcon.FromResource can load them.
+         Logical resource name = opennest_gh2.icons.<file>.svg -->
+    <EmbeddedResource Include="icons\*.svg" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Reuse nest_geo/nest_sheets/NpRun/rhino_example/wrappers from the GH1 assembly (net7.0-windows build).
+         Private=false: opennest_2.gha + native DLLs are bundled next to the .rhp and resolved by an
+         AssemblyResolve hook in the plugin (so we don't depend on GH1 having loaded them). -->
+    <ProjectReference Include="..\opennest_2\opennest_2.csproj" Private="false" />
+  </ItemGroup>
+
+</Project>

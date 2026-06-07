@@ -1,6 +1,8 @@
-# OpenNest Rhino commands
+# OpenNest Rhino commands (`opennest_commands.rhp`)
 
-Command-line (no Grasshopper) front-end for the two nesting engines, added to the `opennest_2` assembly.
+Command-line (no Grasshopper) front-end for the two nesting engines. A Grasshopper `.gha` **cannot**
+expose Rhino commands, so these live in a separate Rhino plug-in (`.rhp`) that reuses the nesting code in
+`opennest_2` via a project reference. Both files install into the same folder from one Yak package.
 
 | Command | Engine | Native DLL |
 |---|---|---|
@@ -31,9 +33,12 @@ Each selection is reduced to its WorldXY outline before nesting (the flat "shado
 
 ## Build / load
 
-`dotnet build opennest_2.csproj -c Release` produces `opennest_2.gha` with `nest_physics.dll` + `nfp_nest.dll`
-copied alongside. Load it in Rhino 8 (drag-drop or Libraries folder) — the `Rhino.PlugIns.PlugIn` subclass in
-`OpenNestCommandPlugIn.cs` registers the two commands.
+`dotnet build opennest_commands.csproj -c Release` also builds `opennest_2` (project reference) and produces
+`opennest_commands.rhp`. For Rhino to find both, the `.rhp` must sit in the **same folder** as `opennest_2.gha`
++ `nest_physics.dll` + `nfp_nest.dll`. The Yak workflow (`publish.yml`) does this automatically: it copies the
+`.rhp` into each per-OS package next to the `.gha`, so one Yak install delivers the Grasshopper components and
+the Rhino commands together.
 
-> If a Rhino build does not surface commands from a `.gha`, compile these `commands/*.cs` (plus the reused
-> `nest_rhino_lib`/`nest_lib` classes) into a thin separate `.rhp` — the command logic is identical either way.
+To load locally, copy `opennest_commands.rhp` next to `opennest_2.gha` and drag it onto Rhino (or add it via
+`PlugInManager`). `OpenNestCommandPlugIn.OnLoad` installs an `AssemblyResolve` handler so the `.rhp` can find
+`opennest_2.gha` even if Grasshopper hasn't loaded it yet (the `.gha` extension defeats the default resolver).

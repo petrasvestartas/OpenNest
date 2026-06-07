@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" data-name="Layer 1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <defs>
+    <style>
+      .cls-1 {
+        fill: none;
+        stroke: #010101;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+    </style>
+  </defs>
+  <g id="POLYLINE">
+    <rect class="cls-1" x="8.92" y="10.13" width="8.98" height="8.98" transform="translate(-5.23 21.42) rotate(-67.5)"/>
+  </g>
+  <g id="SPLINE">
+    <path class="cls-1" d="M8.33,10.63c.25-.1.35-.37.24-.65s-.37-.4-.63-.29-.35.37-.24.65.37.4.63.29Z"/>
+  </g>
+  <g id="SPLINE-2" data-name="SPLINE">
+    <path class="cls-1" d="M14.38,8.25c.25-.1.35-.37.24-.65s-.37-.4-.63-.29-.35.37-.24.65.37.4.63.29Z"/>
+  </g>
+  <g id="SPLINE-3" data-name="SPLINE">
+    <path class="cls-1" d="M13.61,14.9c.25-.1.35-.37.24-.65s-.37-.4-.63-.29-.35.37-.24.65.37.4.63.29Z"/>
+  </g>
+  <g id="LINE">
+    <line class="cls-1" x1="10.98" y1="8.76" x2="8.56" y2="2.91"/>
+  </g>
+  <g id="POLYLINE-2" data-name="POLYLINE">
+    <polygon class="cls-1" points="16.86 6.34 19.28 12.19 15.84 20.49 7.55 17.05 5.13 11.2 8.56 2.91 16.86 6.34"/>
+  </g>
+</svg>

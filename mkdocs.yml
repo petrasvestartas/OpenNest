@@ -37,6 +37,7 @@ extra_css:
 
 nav:
   - Home: index.md
+  - Rhino Command: rhino/index.md
   - Build & Publish: developing.md
   - Credits: references.md
   - Components:

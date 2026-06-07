@@ -4,6 +4,8 @@ VisualStudioVersion = 17.5.2.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "opennest_2", "opennest_2.csproj", "{F16B35FF-D243-FB36-F9D6-C4F5D3A42F69}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "opennest_commands", "..\opennest_commands\opennest_commands.csproj", "{A7C3E914-2B6D-4F81-9E0A-3D5C8B1F4A22}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -14,6 +16,10 @@ Global
 		{F16B35FF-D243-FB36-F9D6-C4F5D3A42F69}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F16B35FF-D243-FB36-F9D6-C4F5D3A42F69}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{F16B35FF-D243-FB36-F9D6-C4F5D3A42F69}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A7C3E914-2B6D-4F81-9E0A-3D5C8B1F4A22}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A7C3E914-2B6D-4F81-9E0A-3D5C8B1F4A22}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A7C3E914-2B6D-4F81-9E0A-3D5C8B1F4A22}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A7C3E914-2B6D-4F81-9E0A-3D5C8B1F4A22}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

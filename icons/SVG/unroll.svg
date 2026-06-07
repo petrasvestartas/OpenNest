@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" data-name="Layer 1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <defs>
+    <style>
+      .cls-1 {
+        fill: none;
+        stroke: #010101;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+    </style>
+  </defs>
+  <g id="LINE">
+    <line class="cls-1" x1="13.18" y1="21.63" x2="5.74" y2="14.18"/>
+  </g>
+  <g id="LINE-2" data-name="LINE">
+    <line class="cls-1" x1="13.18" y1="15.62" x2="13.18" y2="21.63"/>
+  </g>
+  <g id="LINE-3" data-name="LINE">
+    <line class="cls-1" x1="5.74" y1="6.75" x2="5.74" y2="14.18"/>
+  </g>
+  <g id="ARC">
+    <path class="cls-1" d="M14.19,16.63c1.35,1.35,3.53,1.35,4.87,0,1.35-1.35,1.35-3.53,0-4.87h0"/>
+  </g>
+  <g id="CIRCLE">
+    <circle class="cls-1" cx="9.18" cy="6.75" r="3.44"/>
+  </g>
+  <g id="LINE-4" data-name="LINE">
+    <line class="cls-1" x1="11.62" y1="4.31" x2="19.06" y2="11.76"/>
+  </g>
+  <g id="LINE-5" data-name="LINE">
+    <line class="cls-1" x1="6.75" y1="9.18" x2="14.19" y2="16.63"/>
+  </g>
+</svg>

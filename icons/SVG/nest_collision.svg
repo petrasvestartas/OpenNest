@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" data-name="Layer 1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <defs>
+    <style>
+      .cls-1 {
+        fill: #fff;
+      }
+
+      .cls-2 {
+        fill-rule: evenodd;
+      }
+    </style>
+  </defs>
+  <polygon class="cls-2" points="12.64 8.52 14.21 11.23 10.12 13.59 3.08 11.05 1.98 8.57 6.25 5.88 12.64 8.52"/>
+  <polygon class="cls-2" points="7.38 14.11 2.32 19.77 2.17 22.81 7.38 22.25 12.53 17.33 12.48 14.78 7.38 14.11"/>
+  <polygon class="cls-2" points="13.83 14.75 16.47 21.15 19.17 22.71 21.54 18.63 19.01 11.59 16.53 10.48 13.83 14.75"/>
+  <polygon class="cls-2" points="11.37 4.91 11.78 7.4 17.57 9.86 22.02 7.45 21.41 4.89 16.11 2.34 11.37 4.91"/>
+  <circle class="cls-1" cx="8.26" cy="9.73" r="1.63"/>
+  <circle class="cls-1" cx="16.58" cy="6.32" r="1.78"/>
+  <circle class="cls-1" cx="17.68" cy="16.01" r="1.63"/>
+  <circle class="cls-1" cx="7.62" cy="18.1" r="1.63"/>
+</svg>

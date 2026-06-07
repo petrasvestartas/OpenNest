@@ -1,0 +1,2 @@
+Response enum: Ignored, Release, Handled, Capture
+=== Component expire/recompute-ish methods ===

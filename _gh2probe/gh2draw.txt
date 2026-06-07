@@ -1,0 +1,76 @@
+=== candidate type full names ===
+  Eto.Drawing.Context
+  Grasshopper2.FileTypes.ESRI.Shape
+  Grasshopper2.Imaging.Raycasting.Shape
+  Grasshopper2.Types.Colour.Colour
+  Grasshopper2.UI.Primitives.Capsule
+  Grasshopper2.UI.Skinning.FontDescription
+  Grasshopper2.UI.Skinning.Shade
+  Grasshopper2.UI.Skinning.Shape
+  Grasshopper2.UI.Skinning.Skin
+
+### Eto.Drawing.Context
+  T Animate(Animated`1 animated)
+  ? CreateFromBitmap(?)
+  ? CreateFromBitmap(?)
+  Context CreateFromContent(ControlGraphics graphics)
+  Context CreateFromControl(ControlGraphics graphics)
+  ? CreateFromGraphics(?)
+  ? CreateFromScratch(?)
+  Void Invalidate()
+  ? OverrideIconProperties(?)
+  prop ? Graphics
+  prop IFlexControl Control
+  prop ? Bitmap
+  prop Single Zoom
+  prop Single ZoomInverse
+  prop Boolean RedrawRequired
+  prop ? IconFilter
+  prop IconPalette IconPalette
+  prop ? BackColour
+### Grasshopper2.UI.Primitives.Capsule
+  Void AddCustomPlug(Plug plug)
+  Void AddInputPlug(Single yPosition, GripKind kind)
+  Void AddOutputPlug(Single yPosition, GripKind kind)
+  ? CreateFromInner(?)
+  ? CreateFromOuter(?)
+  ? Draw(?)
+  ? Draw(?)
+  ? DrawEdges(?)
+  ? DrawFaces(?)
+  ? DrawGlint(?)
+  ? DrawGrips(?)
+  ? DrawMessaging(?)
+  ? DrawOverlay(?)
+  Plug InputPlug(Int32 index)
+  Plug OutputPlug(Int32 index)
+  prop ? Bounds
+  prop SlabF Slab
+  prop Single BarHeight
+  prop Int32 InputPlugCount
+  prop Int32 OutputPlugCount
+  prop Boolean HasInputPlugs
+  prop Boolean HasOutputPlugs
+  prop Boolean HasInfoMessage
+  prop Boolean HasWarningMessage
+  prop Boolean HasErrorMessage
+  prop Boolean HasAnyMessage
+### Grasshopper2.UI.Skinning.Skin
+  Skin Interpolate(Skin other, Single factor)
+  Skin LoadFromFile(String file)
+  Void SaveToFile(String file, Skin skin)
+  Void Store(IWriter writer)
+  Skin WithCanvasses(CanvassesSkin canvassesSkin)
+  Skin WithFades(Fades fades)
+  Skin WithGrips(GripsSkin gripsSkin)
+  Skin WithMessages(MessagingSkin messagingSkin)
+  Skin WithShades(Shades shades)
+  Skin WithShape(Shape shape)
+  Skin WithWires(WiresSkin wiresSkin)
+  prop Shape Shape
+  prop Shades Shades
+  prop WiresSkin Wires
+  prop GripsSkin Grips
+  prop MessagingSkin Messaging
+  prop CanvassesSkin Canvasses
+  prop Fades Fades
