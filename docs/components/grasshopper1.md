@@ -7,7 +7,7 @@ downloadable example — see **Nesting** ([OpenNest2](opennest2.md), [OpenNest1]
 The same components also run in [Grasshopper 2](grasshopper2.md) (the new Rhino 8 editor) — identical inputs,
 outputs and behaviour.
 
-![Parts nested with OpenNest in Grasshopper](../assets/screenshot05.png)
+![Parts nested with OpenNest in Grasshopper](../assets/gh1_nesting.jpg)
 
 ## Example files
 
