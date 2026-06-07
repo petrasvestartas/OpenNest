@@ -67,6 +67,7 @@ nav:
   - API Reference:
       - "C++ API": api/cpp.md
       - "C# API": api/csharp.md
+      - "Python API": api/python.md
   - Build & Publish: developing.md
   - Credits: references.md
 

@@ -1,179 +1,133 @@
-# C++ API (native C ABI)
+# C++ API
 
-OpenNest's nesting is done by two native libraries you can call from any language through a flat **C ABI**
-(`extern "C"`, `cdecl`). Geometry crosses the boundary as **interleaved `x,y` `double[]` arrays** plus
-**per‑ring vertex counts**; the caller pre‑allocates the output buffers.
+OpenNest nests with **two native engines**. Both do the same simple thing:
 
-| Library | Header | Engine |
+> **You give:** part shapes + sheet shapes.
+> **You get back:** for each part — *move it by (tx, ty)*, *rotate it by an angle*, and *which sheet* it landed on.
+
+You call them through a plain **C ABI** (works from any language). Shapes cross as flat `x,y` number arrays.
+
+| Want this… | Call | In |
 | --- | --- | --- |
-| `nfp_nest.dll` / `.dylib` | `src/opennest_cpp/src/capi/nfp_nest_capi.h` | No‑fit‑polygon + genetic algorithm (SvgNest port) |
-| `nest_physics.dll` / `.dylib` | `src/nest_physics_cpp/nest_physics_capi.h` | Penetration‑depth overlap relaxation (sparrow port) |
+| Clean polygon packing, no overlap | **`nfp_nest`** | `nfp_nest.dll` / `.dylib` |
+| Dense packing, parts into holes | **`np_nest`** | `nest_physics.dll` / `.dylib` |
 
-## Calling convention
-
-- A ring is a list of vertices given **CCW or CW, not closed** (a trailing duplicate point is tolerated).
-- For *N* rings you pass an `int[N]` of vertex counts and one `double[2·Σcounts]` of interleaved `x,y`.
-- Holes are passed as parallel "count" + "xy" arrays, grouped per part / per sheet.
-- Output buffers are **caller‑allocated**; `out_sheet_id == -1` marks an unplaced instance.
-
-**Placement contract** — apply rotation about the origin, then translate; `(tx, ty)` are **sheet‑local** (add the
-sheet's own world origin yourself):
-
-```text
-final_point = Rotate(part_point, angle, about (0,0)) + (tx, ty)
-```
-
-!!! warning "Angle units differ"
-    `nfp_nest` returns `out_angle` in **degrees**; `np_nest` returns it in **radians**.
+To place instance *i*: `final = Rotate(part, angle[i], origin) + (tx[i], ty[i])`, on sheet `sheet_id[i]`
+(`-1` = didn't fit). `(tx, ty)` are sheet‑local — add the sheet's own position.
 
 ---
 
-## `nfp_nest.dll`
+## `nfp_nest` — clean polygon packing
+
+Give it parts (+ optional holes) and sheets; it returns the placements and **how many it placed**.
 
 ```c
-// Returns the number of placed instances (>=0), or a negative error code.
-// Output arrays have length = instance_count = sum(part_quantities), in expansion order.
-int nfp_nest(
-    int           part_count,
-    const int*    part_vertex_counts,        // [part_count]
-    const double* part_xy,                   // [2*sum(part_vertex_counts)]
-    const int*    part_quantities,           // [part_count] (>=1 each)
-    const int*    part_hole_counts,          // [part_count]
-    const int*    part_hole_vertex_counts,   // [sum(part_hole_counts)]
-    const double* part_hole_xy,              // [2*sum(part_hole_vertex_counts)]
-    int           sheet_count,
-    const int*    sheet_vertex_counts,       // [sheet_count]
-    const double* sheet_xy,                  // [2*sum(sheet_vertex_counts)]
-    const int*    sheet_hole_counts,         // [sheet_count]
-    const int*    sheet_hole_vertex_counts,  // [sum(sheet_hole_counts)]
-    const double* sheet_hole_xy,             // [2*sum(sheet_hole_vertex_counts)]
-    const NfpParams* params,
-    double* out_tx, double* out_ty, double* out_angle,  // [instance_count]; angle in DEGREES
-    int*    out_sheet_id,                    // [instance_count] (-1 = unplaced)
-    int*    out_part_index,                  // [instance_count] source part index
-    int*    out_n_sheets,                    // single
-    double* out_fitness);                    // single
-
-void      nfp_cancel(void);        // ask the solve to stop at the next generation, keep best-so-far
-void      nfp_cancel_reset(void);  // clear the cancel flag (also cleared on nfp_nest entry)
-long long nfp_progress(void);      // GA generation reached so far
-double    nfp_fitness(void);       // best fitness so far
-
-// Snapshot the current best layout mid-solve (UI-thread safe). Returns placed-instance count.
-int nfp_poll_layout(int instance_count, double* out_tx, double* out_ty, double* out_angle,
-                    int* out_sheet_id, int* out_part_index, int* out_n_sheets);
+int n = nfp_nest(parts…, sheets…, &params,
+                 out_tx, out_ty, out_angle,   // angle in DEGREES
+                 out_sheet_id, out_part_index, &out_n_sheets, &out_fitness);
 ```
 
-### `NfpParams`
+The few knobs that matter: `rotations` (orientations to try), `seed`, `generations` (how long to search),
+`spacing` (gap), `useHoles`. Everything else has a sensible default.
 
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `placementType` | int | 0 = box, 1 = gravity, 2 = squeeze |
-| `rotations` | int | discrete rotation count (e.g. 4) |
-| `mutationRate` | int | GA mutation rate (applied as `0.01 * rate`) |
-| `populationSize` | int | GA pool size (one generation = this many candidates) |
-| `seed` | int | RNG seed (`-1` = time‑based, non‑deterministic) |
-| `curveTolerance` | double | simplification tolerance |
-| `clipperScale` | double | Clipper integer scale (e.g. `1e7`) |
-| `spacing` | double | gap between parts |
-| `sheetSpacing` | double | gap inside the sheet edge |
-| `rotationLimit` | double | max continuous rotation jitter (degrees), default 360 |
-| `useHoles` | int (bool) | nest parts into holes |
-| `exploreConcave` | int (bool) | explore concave regions |
-| `clipByHull` | int (bool) | clip by convex hull |
-| `clipByRects` | int (bool) | clip by rectangles |
-| `simplify` | int (bool) | convex‑hull simplify |
-| `mode` | int | 0 = faithful (parity, single‑thread), 1 = default, 2 = turbo (multi‑seed) |
-| `generations` | int | GA generations (= the component "Iterations") |
-| `numSeeds` | int | turbo: parallel independent seeds |
-| `useParallel` | int (bool) | parallel NFP / population evaluation |
-| `timeBudgetSecs` | double | `>0` ⇒ run until elapsed (overrides the generations loop length) |
-| `maxSheets` | int | 0 = use all provided sheets |
-| `edgeSamples` | int | feasible‑region edge samples per part (0 = off; lower = faster) |
-| `compactionPasses` | int | post‑placement compaction passes (0 = off; lower = faster) |
-| `tryAllRotations` | int (bool) | evaluate every rotation per placement (slower, tighter) |
-| `exactNfp` | int (bool) | full‑resolution exact NFP (no simplify/dilate ⇒ no gap, slower) |
+??? info "Full signature + all 25 NfpParams options"
+
+    ```c
+    int nfp_nest(
+        int part_count, const int* part_vertex_counts, const double* part_xy,
+        const int* part_quantities, const int* part_hole_counts,
+        const int* part_hole_vertex_counts, const double* part_hole_xy,
+        int sheet_count, const int* sheet_vertex_counts, const double* sheet_xy,
+        const int* sheet_hole_counts, const int* sheet_hole_vertex_counts, const double* sheet_hole_xy,
+        const NfpParams* params,
+        double* out_tx, double* out_ty, double* out_angle,
+        int* out_sheet_id, int* out_part_index, int* out_n_sheets, double* out_fitness);
+    ```
+
+    | Field | Type | Meaning |
+    | --- | --- | --- |
+    | `placementType` | int | 0 = box, 1 = gravity, 2 = squeeze |
+    | `rotations` | int | discrete rotation count (e.g. 4) |
+    | `mutationRate` | int | GA mutation rate (applied as `0.01 * rate`) |
+    | `populationSize` | int | GA pool size per generation |
+    | `seed` | int | RNG seed (`-1` = time‑based) |
+    | `curveTolerance` | double | simplification tolerance |
+    | `clipperScale` | double | Clipper integer scale (e.g. `1e7`) |
+    | `spacing` | double | gap between parts |
+    | `sheetSpacing` | double | gap inside the sheet edge |
+    | `rotationLimit` | double | max continuous rotation jitter (degrees), default 360 |
+    | `useHoles` | int | nest parts into holes |
+    | `exploreConcave` | int | explore concave regions |
+    | `clipByHull` | int | clip by convex hull |
+    | `clipByRects` | int | clip by rectangles |
+    | `simplify` | int | convex‑hull simplify |
+    | `mode` | int | 0 = faithful, 1 = default, 2 = turbo (multi‑seed) |
+    | `generations` | int | GA generations (= the "Iterations" knob) |
+    | `numSeeds` | int | turbo: parallel independent seeds |
+    | `useParallel` | int | parallel NFP / population evaluation |
+    | `timeBudgetSecs` | double | `>0` ⇒ run until elapsed (overrides generations) |
+    | `maxSheets` | int | 0 = use all provided sheets |
+    | `edgeSamples` | int | feasible‑region edge samples (0 = off, faster) |
+    | `compactionPasses` | int | post‑placement compaction passes (0 = off) |
+    | `tryAllRotations` | int | score every rotation per placement (tighter, slower) |
+    | `exactNfp` | int | full‑resolution exact NFP (no gap, slower) |
 
 ---
 
-## `nest_physics.dll`
+## `np_nest` — physics packing (into holes)
+
+Same idea, plus parts can nest **into** holes. Returns `0` on success.
 
 ```c
-// Returns 0 on success, non-zero on failure. Outputs have length part_count (indexed by INPUT order).
-int np_nest(
-    int           part_count,
-    const int*    part_vertex_counts,
-    const double* part_xy,
-    int           sheet_count,
-    const int*    sheet_outer_vertex_counts,
-    const double* sheet_outer_xy,
-    const int*    sheet_hole_counts,        // may be NULL => no sheet holes
-    const int*    hole_vertex_counts,       // sheet-major (may be NULL)
-    const double* hole_xy,                  // sheet-major (may be NULL)
-    const int*    part_hole_counts,         // [part_count] (NULL => no part holes)
-    const int*    part_hole_vertex_counts,  // part-major (NULL ok)
-    const double* part_hole_xy,             // part-major (NULL ok)
-    const NpParams* params,
-    double* out_tx, double* out_ty, double* out_angle,  // angle in RADIANS
-    int*    out_sheet_id,                   // -1 = unplaced
-    int*    out_n_sheets);                  // length 1
-
-void      np_cancel(void);        // stop at next round, keep best-so-far
-void      np_cancel_reset(void);  // clear the flag (np_nest clears it on entry too)
-long long np_progress(void);      // relaxation rounds completed so far
-
-// Snapshot the current best layout mid-solve. Returns placed-part count (0 if idle).
-int np_poll_layout(int part_count, double* out_tx, double* out_ty, double* out_angle,
-                   int* out_sheet_id, int* out_n_sheets);
+int rc = np_nest(parts…, sheets…, part_holes…, &params,
+                 out_tx, out_ty, out_angle,   // angle in RADIANS
+                 out_sheet_id, &out_n_sheets);
 ```
 
-### `NpParams`
+The few knobs that matter: `num_rotations`, `seed`, `iter_budget` (how long), `n_starts` (tries), `pole_max`
+(accuracy), `fit_mode` (one sheet vs. fewest sheets).
 
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `num_rotations` | int | discrete orientations sampled per part (≥1) |
-| `spacing` | double | min gap between parts / from holes (0 = touching allowed) |
-| `simplify_tolerance` | double | geometry simplification (≤0 keeps the lean default) |
-| `seed` | int | base RNG seed (≥0) |
-| `time_budget_secs` | double | wall‑clock budget, used when `iter_mode == 0` |
-| `iter_budget` | long long | relaxation‑round budget, used when `iter_mode != 0` (deterministic) |
-| `iter_mode` | int | 0 = wall‑clock, 1 = deterministic iteration count |
-| `max_sheets` | int | cap on sheets used (0 → default 6) |
-| `n_starts` | int | multi‑start: run this many seeds, keep the densest (0/1 → single) |
-| `part_holes_mode` | int | 0 = keep part holes empty; 1 = fill (parts nest into other parts' holes) |
-| `pole_max` | int | surrogate poles per part (0 → default 48; ~16 ≈ 2.7× faster per round) |
-| `final_compact` | int | 1 = post‑relaxation left/down compaction slide (tighter pack) |
-| `fit_mode` | int | 0 = all parts on fewest sheets; 1 = ONE sheet, max fill (overflow reported unplaced) |
+??? info "Full signature + all 13 NpParams options"
+
+    ```c
+    int np_nest(
+        int part_count, const int* part_vertex_counts, const double* part_xy,
+        int sheet_count, const int* sheet_outer_vertex_counts, const double* sheet_outer_xy,
+        const int* sheet_hole_counts, const int* hole_vertex_counts, const double* hole_xy,
+        const int* part_hole_counts, const int* part_hole_vertex_counts, const double* part_hole_xy,
+        const NpParams* params,
+        double* out_tx, double* out_ty, double* out_angle, int* out_sheet_id, int* out_n_sheets);
+    ```
+
+    | Field | Type | Meaning |
+    | --- | --- | --- |
+    | `num_rotations` | int | orientations sampled per part (≥1) |
+    | `spacing` | double | min gap (0 = touching allowed) |
+    | `simplify_tolerance` | double | ≤0 keeps the lean default |
+    | `seed` | int | base RNG seed (≥0) |
+    | `time_budget_secs` | double | wall‑clock budget (when `iter_mode == 0`) |
+    | `iter_budget` | long long | relaxation rounds (when `iter_mode != 0`, deterministic) |
+    | `iter_mode` | int | 0 = wall‑clock, 1 = deterministic count |
+    | `max_sheets` | int | cap on sheets (0 → default 6) |
+    | `n_starts` | int | multi‑start: run N seeds, keep the densest |
+    | `part_holes_mode` | int | 0 = keep part holes empty; 1 = fill them |
+    | `pole_max` | int | poles per part (0 → 48; ~16 ≈ 2.7× faster) |
+    | `final_compact` | int | 1 = post‑relaxation tighten slide |
+    | `fit_mode` | int | 0 = fewest sheets; 1 = one sheet, max fill |
 
 ---
 
-## Running on a background thread (live preview)
+## Run it without freezing
 
-Both engines are designed to run on a worker thread while the host polls progress and draws an animated preview:
+Both engines run on a worker thread while you watch:
 
-1. Start `nfp_nest` / `np_nest` on a worker thread.
-2. On a UI timer, read `*_progress()` for the round/generation and call `*_poll_layout(...)` for the current best
-   layout to draw.
-3. Call `*_cancel()` to stop early (the solve returns its best‑so‑far). `*_cancel_reset()` clears the flag; the
-   `*_nest` entry also clears it.
+1. Start `nfp_nest` / `np_nest` on a background thread.
+2. On a timer, read **`*_progress()`** (round reached) and **`*_poll_layout(...)`** (current best layout) to draw.
+3. **`*_cancel()`** stops early and keeps the best so far.
 
-This is exactly how the Grasshopper components and the `OpenNest` command drive the engines.
+??? note "Under the hood (for maintainers)"
 
----
-
-## Internal architecture (for maintainers)
-
-The NFP engine (`src/opennest_cpp/src/`) is organised as:
-
-| Class | Role |
-| --- | --- |
-| `NestingEngine` | core geometry: polygon offset, NFP computation, placement‑cost evaluation |
-| `NestingContext` | GA solver orchestration; drives generations, tracks the best layout, multi‑seed runs |
-| `NfpWorker` | NFP cache + Minkowski‑convolution executor, keyed by `(partA, partB, rotations)` |
-| `GeneticAlgorithm` | population evolution (mutation/crossover/selection); "faithful" + heuristic modes |
-| `NFP` | polygon with an outer ring + child holes |
-| `GeometryUtil` | static geometry helpers (area, bounds, point‑in‑polygon, rotate, offset) |
-| `NestConfig` | configuration struct |
-
-The physics engine lives under `src/nest_physics_cpp/` (header‑only solver + the `nest_physics_capi.cpp`
-translation unit). Both are built from source by CMake (`cmake --build … --target nfp_nest | nest_physics`).
+    NFP engine in `src/opennest_cpp/src/`: `NestingEngine` (geometry + NFP + placement cost), `NestingContext`
+    (GA orchestration), `NfpWorker` (NFP cache + Minkowski), `GeneticAlgorithm` (evolve), `NFP`, `GeometryUtil`,
+    `NestConfig`. Physics engine in `src/nest_physics_cpp/`. Both build from source via CMake.
+    Headers: `src/opennest_cpp/src/capi/nfp_nest_capi.h`, `src/nest_physics_cpp/nest_physics_capi.h`.

@@ -153,47 +153,61 @@ namespace opennest_gh2.icons
             finally { for (int i = disp.Count - 1; i >= 0; i--) disp[i].Dispose(); }
         }
 
-        // ---- style ----
-        private sealed class Style { public Color? Fill = Color.FromArgb(0, 0, 0); public Color? Stroke = null; public double StrokeWidth = 1.0; }
+        // ---- style ---- (SVG defaults: fill=black, stroke=none, stroke-width=1). A class/inline rule only
+        // overrides a property it actually declares (tracked by the *Set flags), so a class with no `fill`
+        // does NOT wipe the inherited/default black fill.
+        private sealed class Style
+        {
+            public Color? Fill = Colors.Black; public bool FillSet = true;
+            public Color? Stroke = null; public bool StrokeSet = false;
+            public double StrokeWidth = 1.0;
+            public Style Clone() => new Style { Fill = Fill, FillSet = FillSet, Stroke = Stroke, StrokeSet = StrokeSet, StrokeWidth = StrokeWidth };
+        }
 
         private static Style ResolveStyle(XElement c, Dictionary<string, Style> css, Style inherited)
         {
-            var st = new Style { Fill = inherited.Fill, Stroke = inherited.Stroke, StrokeWidth = inherited.StrokeWidth };
+            var st = inherited.Clone();
             var cls = (string)c.Attribute("class");
-            if (cls != null) foreach (var k in cls.Split(' ')) if (css.TryGetValue(k.Trim(), out var s)) Apply(st, s);
-            ApplyDecls(st, (string)c.Attribute("style"));
-            var f = (string)c.Attribute("fill"); if (f != null) st.Fill = ParseColor(f);
-            var sk = (string)c.Attribute("stroke"); if (sk != null) st.Stroke = ParseColor(sk);
+            if (cls != null) foreach (var k in cls.Split(' ')) if (css.TryGetValue(k.Trim(), out var s)) Merge(st, s);
+            Merge(st, ParseDecls((string)c.Attribute("style")));
+            var f = (string)c.Attribute("fill"); if (f != null) { st.Fill = ParseColor(f); st.FillSet = true; }
+            var sk = (string)c.Attribute("stroke"); if (sk != null) { st.Stroke = ParseColor(sk); st.StrokeSet = true; }
             var sw = (string)c.Attribute("stroke-width"); if (sw != null) st.StrokeWidth = D(sw);
             return st;
         }
-        private static void Apply(Style dst, Style src) { dst.Fill = src.Fill; dst.Stroke = src.Stroke; dst.StrokeWidth = src.StrokeWidth; }
+
+        // copy only the properties the source actually declared
+        private static void Merge(Style dst, Style src)
+        {
+            if (src == null) return;
+            if (src.FillSet) { dst.Fill = src.Fill; dst.FillSet = true; }
+            if (src.StrokeSet) { dst.Stroke = src.Stroke; dst.StrokeSet = true; }
+            if (src.StrokeWidth > 0 && src.StrokeWidth != 1.0) dst.StrokeWidth = src.StrokeWidth;
+        }
 
         private static Dictionary<string, Style> Parsecss(XElement root)
         {
             var map = new Dictionary<string, Style>();
             foreach (var styleEl in root.Descendants().Where(e => e.Name.LocalName == "style"))
                 foreach (Match mm in Regex.Matches(styleEl.Value, @"\.([A-Za-z0-9_-]+)\s*\{([^}]*)\}"))
-                {
-                    var s = new Style { Fill = null, Stroke = null };
-                    ApplyDecls(s, mm.Groups[2].Value);
-                    map["." + mm.Groups[1].Value] = s;   // CSS class selectors are referenced as ".clsName" -> but class attr has bare name
-                    map[mm.Groups[1].Value] = s;
-                }
+                    map[mm.Groups[1].Value] = ParseDecls(mm.Groups[2].Value);   // class attr uses the bare name
             return map;
         }
 
-        private static void ApplyDecls(Style st, string decls)
+        // a Style carrying ONLY the declared properties (flags off unless declared)
+        private static Style ParseDecls(string decls)
         {
-            if (string.IsNullOrEmpty(decls)) return;
+            var st = new Style { FillSet = false, StrokeSet = false };
+            if (string.IsNullOrEmpty(decls)) return st;
             foreach (var d in decls.Split(';'))
             {
                 var kv = d.Split(':'); if (kv.Length != 2) continue;
                 string k = kv[0].Trim(), v = kv[1].Trim();
-                if (k == "fill") st.Fill = ParseColor(v);
-                else if (k == "stroke") st.Stroke = ParseColor(v);
+                if (k == "fill") { st.Fill = ParseColor(v); st.FillSet = true; }
+                else if (k == "stroke") { st.Stroke = ParseColor(v); st.StrokeSet = true; }
                 else if (k == "stroke-width") st.StrokeWidth = D(v);
             }
+            return st;
         }
 
         private static Color? ParseColor(string s)

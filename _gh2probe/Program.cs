@@ -19,26 +19,27 @@ class Probe
         var mlc = new MetadataLoadContext(new PathAssemblyResolver(paths.Distinct()), "System.Private.CoreLib");
         _gh = mlc.LoadFromAssemblyPath(Path.Combine(ghRef, "Grasshopper2.dll"));
 
-        var sw = new StreamWriter(@"C:\pc\3_code\code_cpp\OpenNest\_gh2probe\gh2builder.txt", false) { AutoFlush = true };
+        var sw = new StreamWriter(@"C:\pc\3_code\code_cpp\OpenNest\_gh2probe\gh2interop.txt", false) { AutoFlush = true };
         Console.SetOut(sw);
 
-        Dump("Grasshopper2.UI.Icon.Vector.Builder", new[] { "WithFill", "WithEdge", "Polyline", "Line", "Box", "Circle", "Ellipse", "Bezier", "Arc", "Text", "Curve", "Element" });
-        Dump("Grasshopper2.UI.Icon.Vector.VectorIcon", null);
-        Dump("Grasshopper2.UI.Icon.AbstractIcon", new[] { "FromBitmap" });
+        Console.WriteLine("=== all public Grasshopper2.Interop types ===");
+        Type[] all; try { all = _gh.GetTypes(); } catch (ReflectionTypeLoadException ex) { all = ex.Types.Where(t => t != null).ToArray(); }
+        foreach (var t in all.Where(t => t.IsPublic && t.Namespace == "Grasshopper2.Interop").OrderBy(t => t.FullName))
+            Console.WriteLine("  " + t.FullName);
+
+        foreach (var n in new[] { "Grasshopper2.Interop.IGH_Component", "Grasshopper2.Interop.IGH_DocumentObject", "Grasshopper2.Interop.IGH_Param", "Grasshopper2.Interop.IGH_Structure", "Grasshopper2.Interop.GH_IReader" })
+            Dump(n);
     }
 
-    static void Dump(string typeName, string[] only)
+    static void Dump(string name)
     {
-        var t = _gh.GetType(typeName);
-        if (t == null) { Console.WriteLine("### " + typeName + " <NOT FOUND>"); return; }
-        Console.WriteLine("### " + typeName);
-        foreach (var c in t.GetConstructors(BindingFlags.Public | BindingFlags.Instance))
-            try { Console.WriteLine("  ctor(" + Pars(c.GetParameters()) + ")"); } catch { Console.WriteLine("  ctor(?)"); }
-        foreach (var m in t.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly)
-                          .Where(m => !m.IsSpecialName && (only == null || only.Contains(m.Name))).OrderBy(m => m.Name))
-            try { Console.WriteLine("  " + Short(m.ReturnType) + " " + m.Name + "(" + Pars(m.GetParameters()) + ")"); }
-            catch { Console.WriteLine("  ? " + m.Name + "(?)"); }
+        var t = _gh.GetType(name);
+        if (t == null) { Console.WriteLine("### " + name + " <NOT FOUND>"); return; }
+        Console.WriteLine("### " + t.FullName + (t.IsInterface ? " (interface)" : ""));
+        foreach (var m in t.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.FlattenHierarchy).Where(m => !m.IsSpecialName))
+            try { Console.WriteLine("  " + Short(m.ReturnType) + " " + m.Name + "(" + string.Join(", ", m.GetParameters().Select(p => Short(p.ParameterType) + " " + p.Name)) + ")"); } catch { Console.WriteLine("  ? " + m.Name); }
+        foreach (var p in t.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.FlattenHierarchy))
+            try { Console.WriteLine("  prop " + Short(p.PropertyType) + " " + p.Name); } catch { }
     }
-    static string Pars(ParameterInfo[] ps) { try { return string.Join(", ", ps.Select(p => Short(p.ParameterType) + " " + p.Name + (p.HasDefaultValue ? "=" + (p.RawDefaultValue ?? "null") : ""))); } catch { return "?"; } }
     static string Short(Type t) => t == null ? "void" : t.Name;
 }
