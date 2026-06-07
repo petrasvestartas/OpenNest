@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using Grasshopper2.Components;
+using Grasshopper2.Data;
 using Grasshopper2.Parameters;
 using Grasshopper2.UI;
 using GrasshopperIO;
@@ -23,8 +24,11 @@ namespace opennest_gh2.components
 
         protected override void AddInputs(InputAdder inputs)
         {
-            inputs.AddCurve("Parts", "P", "Closed part curves (outer boundaries + holes; holes auto-detected).", Access.Twig);
-            inputs.AddNumber("Simplify", "S", "Segment division length (0 = keep all vertices).", Access.Item, Requirement.MayBeMissing).Set(0.0);
+            // Whole TREE (like GH1 GH_ParamAccess.tree). FLAT LIST (one branch) -> each curve is its own part
+            // and holes are auto-detected by containment. DATA TREE (many branches) -> each branch is one
+            // pre-grouped part (outer + holes). Either way it builds ONE nest_geo (not one per branch).
+            inputs.AddCurve("Parts", "P", "Closed part curves. Flat list = each curve a part (holes auto-detected); data tree = one branch per part.", Access.Tree);
+            inputs.AddNumber("Simplify", "S", "Segment divisions: 0 = keep all vertices; x>0 divide by distance; x<0 merge near-colinear (default).", Access.Item, Requirement.MayBeMissing).Set(-100.0);
             inputs.AddBoolean("Hull", "H", "Replace each part with its convex hull.", Access.Item, Requirement.MayBeMissing).Set(false);
             inputs.AddInteger("Copies", "C", "Copies per part.", Access.Item, Requirement.MayBeMissing).Set(1);
         }
@@ -37,22 +41,40 @@ namespace opennest_gh2.components
 
         protected override void Process(IDataAccess access)
         {
-            if (!access.GetItemArray(0, out Curve[] parts) || parts == null || parts.Length == 0) return;
+            if (!access.GetTree(0, out Tree<Curve> tree) || tree == null || tree.LeafCount == 0)
+            { access.AddWarning("No parts", "Connect closed part curves."); return; }
             access.GetItem(1, out double simplify);
             access.GetItem(2, out bool hull);
             access.GetItem(3, out int copies);
 
-            var closed = parts.Where(c => c != null && c.IsClosed).ToList();
-            if (closed.Count == 0) { access.AddWarning("No closed parts", "Parts must be closed curves."); return; }
+            // One List<Curve[]> entry per input BRANCH (closed curves only), mirroring GH1.
+            tree.ToArrays(out Curve[][] branches);
+            var curves = new List<Curve[]>();
+            foreach (var br in branches)
+            {
+                if (br == null) continue;
+                var cl = new List<Curve>();
+                foreach (var c in br) if (c != null && c.IsClosed) cl.Add(c);
+                if (cl.Count > 0) curves.Add(cl.ToArray());
+            }
+            if (curves.Count == 0) { access.AddWarning("No closed parts", "Parts must be closed curves."); return; }
 
-            double diag = NestGh2Util.Diagonal(closed);
-            double seg = simplify > 0 ? simplify : (diag > 0 ? diag * 0.01 : 1.0);
+            // FLAT LIST (single branch) -> explode to one curve per part so identify_groups auto-pairs each
+            // outer ring with the smaller rings it contains. DATA TREE -> keep each branch pre-grouped.
+            bool flatList = (curves.Count == 1);
+            if (flatList)
+            {
+                var temp = new List<Curve[]>();
+                foreach (var c in curves[0]) temp.Add(new[] { c });
+                curves = temp;
+            }
 
-            var curvesGrouped = closed.Select(c => new[] { c }).ToList();
-            var copiesList = Enumerable.Repeat(copies < 1 ? 1 : copies, curvesGrouped.Count).ToList();
-            var simp = new List<double> { seg, hull ? 1.0 : 0.0 };
+            int cps = copies < 1 ? 1 : copies;
+            var copiesList = Enumerable.Repeat(cps, curves.Count).ToList();
+            // Pass the simplify VALUE through exactly like GH1 (NOT a computed segment length).
+            var simp = new List<double> { simplify, hull ? 1.0 : 0.0 };
 
-            var geo = nest_geo_util.geo_to_nest_geo(curvesGrouped, copiesList, simp, null, hard_coded_input: false);
+            var geo = nest_geo_util.geo_to_nest_geo(curves, copiesList, simp, null, hard_coded_input: !flatList);
             if (geo.boundary_sorted == null || geo.boundary_sorted.Count == 0)
             {
                 access.AddWarning("No boundaries detected", "Could not extract closed part boundaries.");

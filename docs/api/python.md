@@ -10,45 +10,58 @@ holes) and `opennest()` (NFP + genetic algorithm). Every nest is **3 steps**: bu
 
 ## Example 1 — collision engine
 
-The minimal nest: a few parts (one with a hole) onto a sheet (with a hole), drawn into Rhino.
+A mix of parts — bars, a square with a hole, strips, triangles and an L — onto a sheet with a hole. The sheet
+outlines are drawn black, the placed parts blue.
 
 ```python
 #! python3
 # r: compas_nest
 
+from compas.colors import Color
 from compas.geometry import Polyline
 from compas.scene import Scene
 from compas_nest import nest_geo, nest_sheets, opennest_collision
+
+BLACK = Color.from_hex("#000000")
+BLUE = Color.from_hex("#0072B2")
 
 def rect(x0, y0, w, h):
     return Polyline([[x0, y0, 0], [x0 + w, y0, 0],
                      [x0 + w, y0 + h, 0], [x0, y0 + h, 0], [x0, y0, 0]])
 
-# 1) PARTS + SHEETS  (outer ring = Polyline; holes = list of Polylines)
+# 1) PARTS — several shapes (one with a hole) + a SHEET with a hole
 geo = nest_geo()
-geo.add_part(rect(0, 0, 20, 10), copies=3)
-geo.add_part(rect(0, 0, 15, 15), holes=[rect(5, 5, 5, 5)], copies=2)
+geo.add_part(rect(0, 0, 30, 12), copies=4)                              # bars
+geo.add_part(rect(0, 0, 20, 20), holes=[rect(6, 6, 8, 8)], copies=3)    # square with a hole
+geo.add_part(rect(0, 0, 40, 8), copies=3)                              # strips
+geo.add_part(Polyline([[0, 0, 0], [24, 0, 0], [0, 24, 0], [0, 0, 0]]), copies=5)   # triangles
+geo.add_part(Polyline([[0, 0, 0], [24, 0, 0], [24, 8, 0], [8, 8, 0],
+                       [8, 24, 0], [0, 24, 0], [0, 0, 0]]), copies=2)   # L-shapes
 
 sheets = nest_sheets()
-sheets.add_sheet(rect(0, 0, 100, 100), holes=[rect(40, 40, 10, 10)])
+sheets.add_sheet(rect(0, 0, 150, 150), holes=[rect(60, 60, 20, 20)])
 
 # 2) NEST
 result = opennest_collision().solve(geo, sheets)
 
-# 3) DRAW the placed geometry into the Rhino document (grouped per sheet)
+# 3) DRAW the sheets (black) + placed parts (blue) into the Rhino document
 scene = Scene()
 scene.clear()
+for sheet in sheets.sheets:
+    scene.add(sheet["outline"], color=BLACK)
+    for hole in sheet["holes"]:
+        scene.add(hole, color=BLACK)
 for group in result.placed_polylines():
     for part in group["parts"]:
-        scene.add(part["outline"])      # placed COMPAS Polyline
+        scene.add(part["outline"], color=BLUE)
         for hole in part["holes"]:
-            scene.add(hole)
+            scene.add(hole, color=BLUE)
 scene.draw()
 ```
 
 ## Example 2 — NFP + genetic algorithm
 
-Same shape, but construct **`opennest`** instead (and add a triangle part). Sheets drawn black, parts blue.
+The same richer mix of parts, but construct **`opennest`** (NFP + GA) instead. Sheets drawn black, parts blue.
 
 ```python
 #! python3
@@ -62,26 +75,26 @@ from compas_nest import nest_geo, nest_sheets, opennest
 BLACK = Color.from_hex("#000000")
 BLUE = Color.from_hex("#0072B2")
 
-# 1) parts (one with a hole, plus a triangle) and a sheet (with a hole)
+def rect(x0, y0, w, h):
+    return Polyline([[x0, y0, 0], [x0 + w, y0, 0],
+                     [x0 + w, y0 + h, 0], [x0, y0 + h, 0], [x0, y0, 0]])
+
+# 1) a richer mix of parts (one with a hole, triangles, an L) + a sheet with a hole
 geo = nest_geo()
-geo.add_part(Polyline([[0, 0, 0], [30, 0, 0], [30, 12, 0], [0, 12, 0], [0, 0, 0]]), copies=4)
-geo.add_part(
-    Polyline([[0, 0, 0], [20, 0, 0], [20, 20, 0], [0, 20, 0], [0, 0, 0]]),
-    holes=[Polyline([[6, 6, 0], [14, 6, 0], [14, 14, 0], [6, 14, 0], [6, 6, 0]])],
-    copies=2,
-)
-geo.add_part(Polyline([[0, 0, 0], [22, 0, 0], [0, 22, 0], [0, 0, 0]]), copies=4)
+geo.add_part(rect(0, 0, 30, 12), copies=4)
+geo.add_part(rect(0, 0, 20, 20), holes=[rect(6, 6, 8, 8)], copies=3)
+geo.add_part(rect(0, 0, 40, 8), copies=3)
+geo.add_part(Polyline([[0, 0, 0], [24, 0, 0], [0, 24, 0], [0, 0, 0]]), copies=5)
+geo.add_part(Polyline([[0, 0, 0], [24, 0, 0], [24, 8, 0], [8, 8, 0],
+                       [8, 24, 0], [0, 24, 0], [0, 0, 0]]), copies=2)
 
 sheets = nest_sheets()
-sheets.add_sheet(
-    Polyline([[0, 0, 0], [120, 0, 0], [120, 120, 0], [0, 120, 0], [0, 0, 0]]),
-    holes=[Polyline([[50, 50, 0], [65, 50, 0], [65, 65, 0], [50, 65, 0], [50, 50, 0]])],
-)
+sheets.add_sheet(rect(0, 0, 150, 150), holes=[rect(60, 60, 20, 20)])
 
 # 2) nest with the NFP + genetic‑algorithm engine
 result = opennest(generations=20, rotations=8, seed=7).solve(geo, sheets)
 
-# 3) draw into the Rhino document
+# 3) draw the sheets (black) + placed parts (blue)
 scene = Scene()
 scene.clear()
 for sheet in sheets.sheets:
@@ -98,7 +111,8 @@ scene.draw()
 
 ## Example 3 — attributes that travel with the part
 
-Each part carries a centroid `Point` as an attribute; it's transformed with the part and drawn in red.
+Several parts, each carrying a centroid `Point` as an attribute; it's transformed with the part and drawn in red.
+Sheet outlines (with the hole) are drawn black.
 
 ```python
 #! python3
@@ -113,28 +127,38 @@ BLACK = Color.from_hex("#000000")
 BLUE = Color.from_hex("#0072B2")
 RED = Color.from_hex("#C0392B")
 
+def rect(x0, y0, w, h):
+    return Polyline([[x0, y0, 0], [x0 + w, y0, 0],
+                     [x0 + w, y0 + h, 0], [x0, y0 + h, 0], [x0, y0, 0]])
+
 def centroid(polyline):
     return Point(*centroid_points(list(polyline.points)[:-1]))
 
-# 1) parts, each carrying a centroid point that travels with the placement
+# 1) several parts, each carrying a centroid point that travels with the placement
 geo = nest_geo()
 for outline in [
-    Polyline([[0, 0, 0], [30, 0, 0], [30, 12, 0], [0, 12, 0], [0, 0, 0]]),
-    Polyline([[0, 0, 0], [20, 0, 0], [20, 20, 0], [0, 20, 0], [0, 0, 0]]),
+    rect(0, 0, 30, 12),
+    rect(0, 0, 20, 20),
+    rect(0, 0, 40, 8),
+    Polyline([[0, 0, 0], [24, 0, 0], [0, 24, 0], [0, 0, 0]]),                 # triangle
+    Polyline([[0, 0, 0], [24, 0, 0], [24, 8, 0], [8, 8, 0],
+              [8, 24, 0], [0, 24, 0], [0, 0, 0]]),                            # L-shape
 ]:
-    geo.add_part(outline, attributes=[centroid(outline)], copies=4)
+    geo.add_part(outline, attributes=[centroid(outline)], copies=3)
 
 sheets = nest_sheets()
-sheets.add_sheet(Polyline([[0, 0, 0], [120, 0, 0], [120, 120, 0], [0, 120, 0], [0, 0, 0]]))
+sheets.add_sheet(rect(0, 0, 150, 150), holes=[rect(60, 60, 20, 20)])
 
 # 2) nest
 result = opennest_collision().solve(geo, sheets)
 
-# 3) draw placed outlines (blue) + their carried centroid points (red) into Rhino
+# 3) draw sheets (black) + placed outlines (blue) + carried centroid points (red)
 scene = Scene()
 scene.clear()
 for sheet in sheets.sheets:
     scene.add(sheet["outline"], color=BLACK)
+    for hole in sheet["holes"]:
+        scene.add(hole, color=BLACK)
 for group in result.placed_polylines():
     for part in group["parts"]:
         scene.add(part["outline"], color=BLUE)

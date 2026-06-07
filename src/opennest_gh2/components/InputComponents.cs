@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Grasshopper2.Components;
+using Grasshopper2.Data;
 using Grasshopper2.Parameters;
 using Grasshopper2.UI;
 using GrasshopperIO;
@@ -20,16 +21,16 @@ namespace opennest_gh2.components
 
         protected override void AddInputs(InputAdder inputs)
         {
-            inputs.AddGeneric("Geometry A", "A", "OpenNest Geometry.", Access.Twig);
-            inputs.AddGeneric("Geometry B", "B", "OpenNest Geometry.", Access.Twig);
+            inputs.AddGeneric("Geometry A", "A", "OpenNest Geometry.", Access.Tree);
+            inputs.AddGeneric("Geometry B", "B", "OpenNest Geometry.", Access.Tree);
         }
         protected override void AddOutputs(OutputAdder outputs) => outputs.AddGeneric("Geometry", "G", "Merged OpenNest Geometry.");
 
         protected override void Process(IDataAccess access)
         {
             var list = new List<nest_geo>();
-            if (access.GetItemArray(0, out nest_geo[] a) && a != null) list.AddRange(a.Where(x => x != null));
-            if (access.GetItemArray(1, out nest_geo[] b) && b != null) list.AddRange(b.Where(x => x != null));
+            if (access.GetTree(0, out Tree<nest_geo> a) && a != null) list.AddRange(a.NonNullItems.Where(x => x != null));
+            if (access.GetTree(1, out Tree<nest_geo> b) && b != null) list.AddRange(b.NonNullItems.Where(x => x != null));
             if (list.Count == 0) { access.AddWarning("No geometry", "Connect Geometry streams."); return; }
             access.SetItem(0, nest_geo.Merge(list));
         }
@@ -45,7 +46,7 @@ namespace opennest_gh2.components
 
         protected override void AddInputs(InputAdder inputs)
         {
-            inputs.AddGeneric("Surfaces", "S", "Planar surfaces/breps (with optional holes).", Access.Twig);
+            inputs.AddGeneric("Surfaces", "S", "Planar surfaces/breps (with optional holes); one sheet each.", Access.Tree);
             inputs.AddInteger("Copies", "C", "Total sheets to array.", Access.Item, Requirement.MayBeMissing).Set(100);
             inputs.AddNumber("Gap", "G", "Gap between arrayed sheets.", Access.Item, Requirement.MayBeMissing).Set(0.1);
             inputs.AddNumber("Offset", "O", "Inward margin (0 = off).", Access.Item, Requirement.MayBeMissing).Set(0.0);
@@ -58,7 +59,9 @@ namespace opennest_gh2.components
 
         protected override void Process(IDataAccess access)
         {
-            if (!access.GetItemArray(0, out Brep[] breps) || breps == null || breps.Length == 0) return;
+            if (!access.GetTree(0, out Tree<Brep> tree) || tree == null || tree.LeafCount == 0) return;
+            var breps = tree.NonNullItems.ToArray();
+            if (breps.Length == 0) return;
             access.GetItem(1, out int copies); access.GetItem(2, out double gap); access.GetItem(3, out double offset);
             var helper = new nest_geo();
             var plinesList = new List<List<Polyline>>();
@@ -90,8 +93,8 @@ namespace opennest_gh2.components
 
         protected override void AddInputs(InputAdder inputs)
         {
-            inputs.AddGeneric("Surfaces", "S", "Planar surfaces/breps (holes auto-detected).", Access.Twig);
-            inputs.AddNumber("Simplify", "Sm", "Segment division length (0 = keep all).", Access.Item, Requirement.MayBeMissing).Set(0.0);
+            inputs.AddGeneric("Surfaces", "S", "Planar surfaces/breps (holes auto-detected); one part each.", Access.Tree);
+            inputs.AddNumber("Simplify", "Sm", "Segment divisions (0 = keep all; <0 = merge near-colinear).", Access.Item, Requirement.MayBeMissing).Set(-100.0);
             inputs.AddBoolean("Hull", "H", "Convex hull each part.", Access.Item, Requirement.MayBeMissing).Set(false);
             inputs.AddInteger("Copies", "C", "Copies per part.", Access.Item, Requirement.MayBeMissing).Set(1);
         }
@@ -103,15 +106,21 @@ namespace opennest_gh2.components
 
         protected override void Process(IDataAccess access)
         {
-            if (!access.GetItemArray(0, out Brep[] breps) || breps == null || breps.Length == 0) return;
+            if (!access.GetTree(0, out Tree<Brep> tree) || tree == null || tree.LeafCount == 0) return;
+            var breps = tree.NonNullItems.ToArray();
+            if (breps.Length == 0) return;
             access.GetItem(1, out double simplify); access.GetItem(2, out bool hull); access.GetItem(3, out int copies);
-            var curves = new List<Curve>();
-            foreach (var brep in breps) if (brep != null) curves.AddRange(ComponentGeoUtil.BrepLoops(brep).Where(c => c != null && c.IsClosed));
-            if (curves.Count == 0) return;
-            double diag = NestGh2Util.Diagonal(curves); double seg = simplify > 0 ? simplify : (diag > 0 ? diag * 0.01 : 1.0);
-            var grouped = curves.Select(c => new[] { c }).ToList();
+            // Each brep is ONE part: its boundary loops (outer + holes) are kept together (hard_coded_input).
+            var grouped = new List<Curve[]>();
+            foreach (var brep in breps)
+            {
+                if (brep == null) continue;
+                var loops = ComponentGeoUtil.BrepLoops(brep).Where(c => c != null && c.IsClosed).ToArray();
+                if (loops.Length > 0) grouped.Add(loops);
+            }
+            if (grouped.Count == 0) return;
             var copiesList = Enumerable.Repeat(copies < 1 ? 1 : copies, grouped.Count).ToList();
-            var geo = nest_geo_util.geo_to_nest_geo(grouped, copiesList, new List<double> { seg, hull ? 1.0 : 0.0 }, null, hard_coded_input: false);
+            var geo = nest_geo_util.geo_to_nest_geo(grouped, copiesList, new List<double> { simplify, hull ? 1.0 : 0.0 }, null, hard_coded_input: true);
             access.SetItem(0, geo);
             var borders = new List<Curve>();
             foreach (var grp in geo.boundary_sorted) foreach (var tup in grp) if (tup.Item2 != null && tup.Item2.Count >= 2) borders.Add(tup.Item2.ToNurbsCurve());

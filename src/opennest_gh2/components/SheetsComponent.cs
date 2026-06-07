@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Grasshopper2.Components;
+using Grasshopper2.Data;
 using Grasshopper2.Parameters;
 using Grasshopper2.UI;
 using GrasshopperIO;
@@ -22,7 +23,9 @@ namespace opennest_gh2.components
 
         protected override void AddInputs(InputAdder inputs)
         {
-            inputs.AddCurve("Sheets", "S", "Closed sheet outline curves (one sheet each).", Access.Twig);
+            // Whole TREE (like GH1 GH_ParamAccess.tree): each BRANCH is one sheet (outer + optional holes).
+            // Builds ONE nest_sheets from all branches (not one per branch).
+            inputs.AddCurve("Sheets", "S", "Closed sheet outline polylines; one branch per sheet (outer + holes).", Access.Tree);
             inputs.AddInteger("Copies", "C", "Total sheets to array from the input.", Access.Item, Requirement.MayBeMissing).Set(100);
             inputs.AddNumber("Gap", "G", "Gap between arrayed sheets.", Access.Item, Requirement.MayBeMissing).Set(0.1);
             inputs.AddNumber("Offset", "O", "Inward margin for nesting (0 = off).", Access.Item, Requirement.MayBeMissing).Set(0.0);
@@ -36,23 +39,35 @@ namespace opennest_gh2.components
 
         protected override void Process(IDataAccess access)
         {
-            if (!access.GetItemArray(0, out Curve[] curves) || curves == null || curves.Length == 0) return;
+            if (!access.GetTree(0, out Tree<Curve> tree) || tree == null || tree.LeafCount == 0)
+            { access.AddWarning("No sheets", "Connect closed sheet outline curves."); return; }
             access.GetItem(1, out int copies);
             access.GetItem(2, out double gap);
             access.GetItem(3, out double offset);
 
-            double diag = NestGh2Util.Diagonal(curves);
-            double seg = diag > 0 ? diag * 0.01 : 1.0;
-
-            var helper = new nest_geo();
+            // One branch = one sheet (outer + holes). Use the input polylines DIRECTLY (no resampling),
+            // exactly like GH1 component_sheets (TryGetPolyline). Build ONE nest_sheets from all branches.
+            tree.ToArrays(out Curve[][] branches);
             var plinesList = new List<List<Polyline>>();
-            foreach (var c in curves)
+            foreach (var branch in branches)
             {
-                if (c == null || !c.IsClosed) continue;
-                var pl = helper.curve_to_polyline(c, seg);
-                if (pl != null && pl.Count >= 4) plinesList.Add(new List<Polyline> { pl });
+                if (branch == null || branch.Length == 0) continue;
+                var plines = new List<Polyline>();
+                foreach (var c in branch)
+                {
+                    if (c == null) continue;
+                    if (c.TryGetPolyline(out Polyline pline) && pline != null && pline.Count >= 2)
+                        plines.Add(pline);
+                    else if (c.IsClosed)
+                    {
+                        // closed non-polyline curve -> fall back to a fine polyline approximation
+                        var pc = c.ToPolyline(0, 1, 0.01, 0.01, 0, 0, 0, 0, true);
+                        if (pc != null && pc.TryGetPolyline(out Polyline ap) && ap != null && ap.Count >= 2) plines.Add(ap);
+                    }
+                }
+                if (plines.Count > 0) plinesList.Add(plines);
             }
-            if (plinesList.Count == 0) { access.AddWarning("No closed sheet outlines", "Sheets need closed curves."); return; }
+            if (plinesList.Count == 0) { access.AddWarning("No closed sheet outlines", "Sheets need closed polyline curves."); return; }
 
             var sheets = new nest_sheets(plinesList, new List<double> { gap, gap }, new List<int>(), copies < 1 ? 1 : copies);
             if (offset != 0) sheets.offset_sheet_boundary(offset);

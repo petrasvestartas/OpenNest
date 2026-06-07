@@ -20,7 +20,14 @@ namespace opennest_gh2.components
         private readonly List<NestOption> _options = BuildOptions();
 
         public OpenNest2Component()
-            : base(new Nomen("OpenNest2", "NFP + genetic algorithm nesting (nfp_nest).", "OpenNest", "Nest")) { }
+            : base(new Nomen("OpenNest2", "NFP + genetic algorithm nesting (nfp_nest).", "OpenNest", "Nest"))
+        {
+            // nfp_nest engine keeps process-global state; SingleThreaded + a static lock serialize solves.
+            Threading = ThreadingState.SingleThreaded;
+        }
+
+        // Serialize all native nfp solves across instances (process-global engine state).
+        private static readonly object s_engineLock = new object();
 
         public OpenNest2Component(IReader reader) : base(reader) { }
 
@@ -88,7 +95,8 @@ namespace opennest_gh2.components
             nest.ExactNfp = 1;
             nest.TryAllRotations = OptToken("all_rotations", 1);
             nest.UseHoles = OptToken("element_holes", 1);
-            nest.static_solver(ref geo);   // writes geo.xforms (one transform list per part group)
+            lock (s_engineLock)
+                nest.static_solver(ref geo);   // writes geo.xforms (one transform list per part group)
 
             // sheet world bboxes (for sheet-id assignment)
             int nsheet = 0;

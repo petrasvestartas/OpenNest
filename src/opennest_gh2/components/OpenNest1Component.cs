@@ -15,7 +15,11 @@ namespace opennest_gh2.components
     [IoId("30400898-3a5a-434f-a703-864b9309d79e")]
     public class OpenNest1Component : Component
     {
-        public OpenNest1Component() : base(new Nomen("OpenNest1", "No-fit-polygon nesting from raw closed curves.", "OpenNest", "Nest")) { }
+        private static readonly object s_engineLock = new object();   // serialize the process-global nfp engine
+        public OpenNest1Component() : base(new Nomen("OpenNest1", "No-fit-polygon nesting from raw closed curves.", "OpenNest", "Nest"))
+        {
+            Threading = ThreadingState.SingleThreaded;
+        }
         public OpenNest1Component(IReader reader) : base(reader) { }
         protected override Grasshopper2.UI.Icon.IIcon IconInternal => icons.SvgVectorIcon.Load("opennest.svg");
 
@@ -67,7 +71,8 @@ namespace opennest_gh2.components
             var parameters = new List<double> { rotations, 0, placement, spacing, seed, tol, 10, 10, 0 };
             var nest = new nest_lib.rhino_example(ref sheets, ref geo, parameters, iterations < 1 ? 1 : iterations);
             nest.Engine = "cpp"; nest.ExactNfp = 1;
-            nest.static_solver(ref geo);
+            lock (s_engineLock)
+                nest.static_solver(ref geo);
 
             int nsheet = 0; while (nsheet < sheets.sheets.Length && sheets.sheets[nsheet] != null && sheets.sheets[nsheet].Length > 0) nsheet++;
             var sheetBox = new BoundingBox[nsheet];

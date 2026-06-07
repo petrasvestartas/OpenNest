@@ -18,11 +18,22 @@ namespace opennest_gh2.components
     [IoId("c3d5f9b7-4a28-4e03-9b16-2d8c0a1e3b03")]
     public class OpenNestCollisionComponent : Component, attributes.INestOptionsHost
     {
+        // Serialize all native nest_physics solves across every OpenNestCollision instance (the C++ engine
+        // keeps process-global state: np_cancel / np_progress). GH2 runs solutions on a worker thread, so two
+        // collision components could otherwise enter np_nest concurrently.
+        private static readonly object s_engineLock = new object();
+
         // Exact GH1 option set (component_nest.cs BuildOptions), reused via the shared NestOption model.
         private readonly List<NestOption> _options = BuildCollisionOptions();
 
         public OpenNestCollisionComponent()
-            : base(new Nomen("OpenNestCollision", "Penetration-depth nesting (nest_physics).", "OpenNest", "Nest")) { }
+            : base(new Nomen("OpenNestCollision", "Penetration-depth nesting (nest_physics).", "OpenNest", "Nest"))
+        {
+            // GH2 solves OFF the UI thread already; SingleThreaded keeps Rhino responsive AND guarantees the
+            // process-global native engine (np_nest) is never entered by two solves at once (no GH1 EngineGate
+            // / Task / timer machinery needed). A static lock in Process is the final reentrancy guard.
+            Threading = ThreadingState.SingleThreaded;
+        }
 
         public OpenNestCollisionComponent(IReader reader) : base(reader) { }
 
@@ -95,10 +106,14 @@ namespace opennest_gh2.components
 
             var run = new NpRun();
             // NpRun.Flatten reads parameters positionally: [0]=rotations [1]=seed [2]=starts.
-            run.Flatten(sheets, geo, new List<double> { rotations, seed, starts < 1 ? 1 : starts },
-                        iterations < 1 ? 1 : iterations, partHolesMode, poles, compactOn, fitMode);
-            run.Solve();
-            run.Assemble();
+            // The native solve holds process-global state, so serialize it across all instances.
+            lock (s_engineLock)
+            {
+                run.Flatten(sheets, geo, new List<double> { rotations, seed, starts < 1 ? 1 : starts },
+                            iterations < 1 ? 1 : iterations, partHolesMode, poles, compactOn, fitMode);
+                run.Solve();
+                run.Assemble();
+            }
 
             var sheetCurves = new List<Curve>();
             foreach (var s in run.output_sheets)
