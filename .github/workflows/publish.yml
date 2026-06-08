@@ -217,13 +217,39 @@ jobs:
           Copy-Item yak_win/*.yak grasshopper_plugin/opennest_win/ -Force
           Copy-Item yak_mac/*.yak grasshopper_plugin/opennest_mac/ -Force
 
-      # ---- 10) Commit the version bump + refreshed packages, tag, push ----
+      # ---- 9b) Auto-maintain CHANGELOG.md: prepend this version's changes (commits since the previous tag,
+      #          excluding the Release/[skip ci] noise) so every release is connected to what changed. ----
+      - name: Update CHANGELOG
+        shell: pwsh
+        run: |
+          $ver  = "${{ steps.ver.outputs.version }}"
+          $date = (Get-Date -Format 'yyyy-MM-dd')
+          $prev = (git describe --tags --abbrev=0 2>$null)
+          $range = if ($prev) { "$prev..HEAD" } else { "HEAD" }
+          $changes = git log $range --no-merges --pretty=format:"%s" |
+            Where-Object { $_ -and ($_ -notmatch '^\s*Release v') -and ($_ -notmatch '\[skip ci\]') } |
+            ForEach-Object { "- $_" }
+          if (-not $changes) { $changes = @("- Maintenance release (no functional changes).") }
+          $entry = "## [$ver] - $date`n" + ($changes -join "`n") + "`n`n"
+          $cl = "CHANGELOG.md"
+          if (Test-Path $cl) {
+            $raw = Get-Content $cl -Raw
+            $idx = $raw.IndexOf("`n## [")           # insert above the newest existing version section
+            if ($idx -ge 0) {
+              Set-Content $cl ($raw.Substring(0, $idx + 1) + $entry + $raw.Substring($idx + 1)) -NoNewline
+            } else { Add-Content $cl ("`n" + $entry) }
+          } else {
+            Set-Content $cl ("# Changelog`n`n" + $entry) -NoNewline
+          }
+          Write-Host "CHANGELOG updated for $ver`:"; Write-Host ($changes -join "`n")
+
+      # ---- 10) Commit the version bump + refreshed packages + changelog, tag, push ----
       - name: Commit + tag
         shell: pwsh
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A grasshopper_plugin
+          git add -A grasshopper_plugin CHANGELOG.md
           git commit -m "Release v${{ steps.ver.outputs.version }} [skip ci]"
           # A concurrent push (e.g. a docs edit) may have moved main; rebase the release commit on top so
           # the push fast-forwards. Tag AFTER the rebase so the tag points at the final commit.
@@ -235,6 +261,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "v${{ steps.ver.outputs.version }}"
+          generate_release_notes: true   # auto release notes (commits since last release) on the Release page
           files: |
             yak_win/*.yak
             yak_mac/*.yak
