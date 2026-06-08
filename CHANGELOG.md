@@ -9,6 +9,9 @@ and the matching `v<version>` git tags / GitHub Releases.
 > below were backfilled from git history (the auto-bumped minor versions are grouped
 > where several shared the same work).
 
+## [2.69.0.0] - 2026-06-08
+- add CHANGELOG.md (backfilled from release history) and auto-maintain it on every release: the publish CI prepends the commits since the last tag, plus GitHub auto release notes
+
 ## [2.68.0.0] - 2026-06-08
 - Stop publishing the `OpenNest_GH2` package. The Rhino 8 Grasshopper 2 SDK is a vestigial / broken WIP, and a GH2 plugin makes Rhino throw a `Grasshopper2` load error on every Grasshopper-1-only machine. The main **OpenNest** package is now Grasshopper-2-free; Grasshopper 2 will return later as a separate **Rhino 9** package built against the Rhino 9 SDK.
 
