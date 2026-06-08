@@ -1,8 +1,0 @@
----
-name: OpenNest_GH2
-version: 2.67.0.0
-authors:
-- Petras Vestartas
-description: 2D Polygonal Nesting — Grasshopper 2 edition (also includes the GH1 components + Rhino commands). Install only if you use Grasshopper 2; GH1 users want the "OpenNest" package.
-url: https://ko-fi.com/petrasvestartas
-icon: icon.png
