@@ -8,6 +8,9 @@ GitHub Releases. Each entry describes what the release actually changed.
 > the previous tag), so a clear commit subject per push becomes the changelog line — refine an entry
 > here anytime if you want more detail.
 
+## [2.72.0.0] - 2026-06-08
+- OpenNest2 + OpenNestCollision: Run is now a standard Grasshopper input (GH1 + GH2), replacing the on-canvas Run button; refresh docs/components example files (GH2 .ghz set) + component images
+
 ## [2.71.0.0] - 2026-06-08
 - rewrite CHANGELOG entries as plain-language descriptions of what each release actually changed (from the diffs), not raw commit subjects
 
