@@ -30,7 +30,7 @@ namespace opennest_gh2.components
             inputs.AddNumber("Spacing", "Spacing", "Gap kept between placed parts.", Access.Item, Requirement.MayBeMissing).Set(1.0);
             inputs.AddInteger("Placement", "Placement", "0 Box, 1 Gravity, 2 Squeeze, 3 Bottom-Left.", Access.Item, Requirement.MayBeMissing).Set(1);
             inputs.AddNumber("Tolerance", "Tolerance", "Curve simplification tolerance.", Access.Item, Requirement.MayBeMissing).Set(0.1);
-            inputs.AddInteger("Rotations", "Rotations", "Orientation angles per part.", Access.Item, Requirement.MayBeMissing).Set(2);
+            inputs.AddInteger("Rotations", "Rotations", "Orientation angles per part.", Access.Item, Requirement.MayBeMissing).Set(4);
             inputs.AddInteger("Iterations", "Iterations", "GA generations to evolve.", Access.Item, Requirement.MayBeMissing).Set(6);
             inputs.AddInteger("Seed", "Seed", "Random seed.", Access.Item, Requirement.MayBeMissing).Set(1);
             inputs.AddBoolean("Reset", "Reset", "Set true to clear the outputs.", Access.Item, Requirement.MayBeMissing).Set(false);
@@ -99,21 +99,22 @@ namespace opennest_gh2.components
                 nest.static_solver(ref geo);
 
             int nsheet = 0; while (nsheet < sheets.sheets.Length && sheets.sheets[nsheet] != null && sheets.sheets[nsheet].Length > 0) nsheet++;
-            var sheetBox = new BoundingBox[nsheet];
             var sheetOut = new List<Curve>();
-            for (int s = 0; s < nsheet; s++) { sheetBox[s] = sheets.sheets[s][0].BoundingBox; foreach (var pl in sheets.sheets[s]) if (pl != null) sheetOut.Add(pl.ToNurbsCurve()); }
+            for (int s = 0; s < nsheet; s++) foreach (var pl in sheets.sheets[s]) if (pl != null) sheetOut.Add(pl.ToNurbsCurve());
 
             var placed = new List<GeometryBase>(); var xforms = new List<Transform>(); var ids = new List<int>(); var sids = new List<int>();
             for (int i = 0; i < geo.boundary_sorted.Count; i++)
             {
                 var tlist = (geo.xforms != null && i < geo.xforms.Count) ? geo.xforms[i] : null; if (tlist == null) continue;
-                foreach (var x in tlist)
+                var slist = (nest.output_polygon_sheet_ids != null && i < nest.output_polygon_sheet_ids.Count) ? nest.output_polygon_sheet_ids[i] : null;
+                for (int k = 0; k < tlist.Count; k++)
                 {
+                    var x = tlist[k];
                     xforms.Add(x); ids.Add(i);
-                    var first = new Polyline(geo.boundary_sorted[i][0].Item2); first.Transform(x);
-                    Point3d c = first.BoundingBox.Center; int sid = -1;
-                    for (int s = 0; s < nsheet; s++) if (sheetBox[s].IsValid && sheetBox[s].Contains(c)) { sid = s; break; }
-                    sids.Add(sid);
+                    // Sheet id from the SOLVER's actual placement (-1 = did not fit), NOT a bbox-containment guess —
+                    // so an unplaced part left at its original location (identity transform) is reported -1 even if
+                    // it happens to sit inside a sheet's bounding box.
+                    sids.Add((slist != null && k < slist.Count) ? slist[k] : -1);
                     foreach (var gi in geo.geometry_sorted[i]) { var ge = geo.geometry[gi].Duplicate(); ge.Transform(x); placed.Add(ge); }
                 }
             }

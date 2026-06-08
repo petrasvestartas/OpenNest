@@ -116,7 +116,7 @@ namespace opennest_2
             pManager.AddNumberParameter("Spacing", "Spacing", "Gap to keep between placed parts.", GH_ParamAccess.item, 1);
             pManager.AddIntegerParameter("Placement", "Placement", "Placement strategy index (0 Box, 1 Gravity, 2 Squeeze, 3 Bottom-Left).", GH_ParamAccess.item, 1);
             pManager.AddNumberParameter("Tolerance", "Tolerance", "Curve simplification tolerance.", GH_ParamAccess.item, 0.1);
-            pManager.AddIntegerParameter("Rotations", "Rotations", "Orientation angles per part. Fewer = much faster on large sets (the cold NFP cache grows with rotations); more = slightly tighter.", GH_ParamAccess.item, 2);
+            pManager.AddIntegerParameter("Rotations", "Rotations", "Orientation angles per part. Fewer = much faster on large sets (the cold NFP cache grows with rotations); more = slightly tighter.", GH_ParamAccess.item, 4);
             pManager.AddIntegerParameter("Iterations", "Iterations", "Solver generations to evolve. You watch each one tighten in the preview; higher = tighter but slower. ~4–10 typical.", GH_ParamAccess.item, 6);
             pManager.AddIntegerParameter("Seed", "Seed", "Random seed for reproducible results.", GH_ParamAccess.item, 1);
             pManager.AddBooleanParameter("Reset", "Reset", "Set TRUE (wire a Button) to clear the whole component instantly and drop any running solve.", GH_ParamAccess.item, false);
@@ -138,7 +138,7 @@ namespace opennest_2
         // Tries is a fixed default (single run) — no longer exposed as an input.
         private List<double> process_inputs(IGH_DataAccess DA)
         {
-            spacing = 1; placement = 1; tolerance = 0.1; rotations = 2; iterations = 6; seed = 1;
+            spacing = 1; placement = 1; tolerance = 0.1; rotations = 4; iterations = 6; seed = 1;
             DA.GetData(2, ref spacing);
             DA.GetData(3, ref placement);
             DA.GetData(4, ref tolerance);

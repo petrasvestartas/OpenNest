@@ -442,6 +442,8 @@ namespace nest_lib
                 //orient original curves, if zero iteration keep them in the original place
                 if (max_iterations == 0)
                     output_transforms[(int)context.Polygons[i].source].Add(polygons_transforms[i]);//
+                else if (!context.Polygons[i].fitted)
+                    output_transforms[(int)context.Polygons[i].source].Add(Transform.Identity);   // unplaced -> keep at original input location (not parked off-sheet)
                 else
                     output_transforms[(int)context.Polygons[i].source].Add(polygons_transforms[i] * to_xy[(int)context.Polygons[i].source]);//
 
@@ -458,8 +460,8 @@ namespace nest_lib
                 // nesting frame; apply the same placement the old code used (to_xy_inv for the no-solve input
                 // preview, else the per-part placement transform).
                 Transform place_xf;
-                if (max_iterations == 0)
-                    to_xy[(int)context.Polygons[i].source].TryGetInverse(out place_xf);
+                if (max_iterations == 0 || !context.Polygons[i].fitted)
+                    to_xy[(int)context.Polygons[i].source].TryGetInverse(out place_xf);   // original location: no-solve OR unplaced
                 else
                     place_xf = polygons_transforms[i];
 
