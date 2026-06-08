@@ -8,6 +8,9 @@ Package Manager releases (`https://yak.rhino3d.com/packages/opennest`) and the m
 > section listing the commits since the previous tag. The entries below were generated from git
 > history (one section per released version).
 
+## [2.70.0.0] - 2026-06-08
+- expand CHANGELOG.md to every released version (v2.41-v2.69), generated from git history
+
 ## [2.69.0.0] - 2026-06-08
 - add CHANGELOG.md (backfilled from release history) and auto-maintain it on every release: the publish CI prepends the commits since the last tag, plus GitHub auto release notes
 
