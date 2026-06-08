@@ -54,6 +54,7 @@ namespace opennest_2
         private readonly System.Timers.Timer _debounce;      // one-shot; coalesces rapid input changes (slider drags)
         private volatile bool _restartRequested = false;     // a change arrived mid-solve -> restart once it unwinds
         private volatile bool _runActive = false;            // latched live session on/off
+        private bool _prevRunInput = false;                  // previous value of the Run input port (edge detect)
         private string _solvedSig = null, _pendingSig = null;
         private int _solvedIter = -1, _pendingIter = -1;
         private const int DEBOUNCE_EDIT_MS = 250, DEBOUNCE_ITER_MS = 350;
@@ -97,7 +98,7 @@ namespace opennest_2
                 args.Display.DrawCurve(geometry[i], col); // geometry_colors[i]
         }
 
-        private List<nest_rhino_lib.nest_geo> nest_geos;
+        private List<nest_rhino_lib.nest_geo> nest_geos = new List<nest_rhino_lib.nest_geo>();
 
         public override void BakeGeometry(RhinoDoc doc, List<Guid> obj_ids)
         {
@@ -207,8 +208,10 @@ namespace opennest_2
             // Nesting options are edited directly on the component body (dropdowns + type-in boxes), so there is
             // no longer an "Options" string input. See BuildOptions() / NestOptionsAttributes.
             pManager.AddIntegerParameter("Iterations", "Iterations", "Relaxation rounds; higher packs tighter but is slower. ~4000 = the tight all-on-one-sheet pack; lower for a quick rough preview.", GH_ParamAccess.item, 4000);
-            // No "Run" input: use the green Run button on the component body (it turns red "Stop" while solving).
+            // Standard Run input (replaces the old on-canvas Run button). Wire a Boolean Toggle.
+            pManager.AddBooleanParameter("Run", "Run", "Wire a Boolean Toggle. TRUE = solve now and re-solve when an input changes (background thread, live preview); FALSE = hold the last result. (Options are still edited on the component body; ESC also stops a running solve.)", GH_ParamAccess.item, false);
             pManager[2].Optional = true;
+            pManager[3].Optional = true;
         }
 
         protected override void RegisterOutputParams(GH_Component.GH_OutputParamManager pManager)
@@ -261,6 +264,20 @@ namespace opennest_2
 
         protected override void SolveInstance(IGH_DataAccess DA)
         {
+            // Run is a standard input port now (was the on-canvas Run button). Edge-drive the existing latch:
+            // a rising edge launches a live session; a falling edge stops it and holds the last result. Using the
+            // INPUT's previous value (not _runActive) means an ESC-stop mid-solve isn't immediately relaunched
+            // just because Run is still held TRUE.
+            bool runInput = false; DA.GetData(3, ref runInput);
+            if (runInput && !_prevRunInput) { _runActive = true; _runButtonRequested = true; }
+            else if (!runInput && _runActive)
+            {
+                _runActive = false; CancelSolve();
+                try { _debounce.Stop(); } catch { }
+                try { EngineGate.Physics.Dequeue(_wake); } catch { }
+            }
+            _prevRunInput = runInput;
+
             // ===== phases before the result is ready: gate on Run, launch the solve, or ignore re-solves
             if (_phase != Phase.Ready)
             {
@@ -298,6 +315,8 @@ namespace opennest_2
 
                 // read inputs on the UI thread, flatten, and launch the background solve.
                 ResetDisplayLists();
+                this.nest_geos = new List<nest_rhino_lib.nest_geo>();   // fresh (BeforeSolveInstance no longer resets on a button click)
+                this.bbox = new BoundingBox();
                 _previewBorders = new List<Polyline>();
                 _hasResult = false;
 

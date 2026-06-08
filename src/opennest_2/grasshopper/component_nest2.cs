@@ -66,9 +66,10 @@ namespace opennest_2
         private string _pendingSig = null;                      // signature computed by the most recent InputsChanged()
         private int _pendingIter = -1;
         private const int DEBOUNCE_EDIT_MS = 250, DEBOUNCE_ITER_MS = 350;
-        // The Run button is a LATCH: ON = a live session (solve now + auto-restart on every input change);
-        // OFF = idle (nothing runs, the last result is held). Replaces the old separate "Live" toggle.
+        // Run is a standard input port (a Boolean Toggle): TRUE = a live session (solve now + auto-restart on
+        // every input change); FALSE = idle (nothing runs, the last result is held). _prevRunInput edge-detects.
         private volatile bool _runActive = false;
+        private bool _prevRunInput = false;
 
         public override void DrawViewportWires(IGH_PreviewArgs args)
         {
@@ -100,7 +101,7 @@ namespace opennest_2
                 args.Display.DrawCurve(geometry[i], col); // geometry_colors[i]
         }
 
-        private List<nest_rhino_lib.nest_geo> nest_geos;
+        private List<nest_rhino_lib.nest_geo> nest_geos = new List<nest_rhino_lib.nest_geo>();
 
         public override void BakeGeometry(RhinoDoc doc, List<Guid> obj_ids)
         {
@@ -221,8 +222,10 @@ namespace opennest_2
             // Nesting options are edited directly on the component body (dropdowns + type-in boxes), so there is
             // no longer an "Options" string input. See BuildOptions() / NestOptionsAttributes.
             pManager.AddIntegerParameter("Iterations", "Iterations", "GA generations to evolve. Each generation evaluates the whole population and keeps the best, so the result improves over generations. ~10-40 typical (a live orange preview tightens as it runs; press ESC to stop and keep the best). Pair with the 'population' option (default 10).", GH_ParamAccess.item, 10);
-            // No "Run" input: use the green Run button on the component body (it turns red "Stop" while solving).
+            // Standard Run input (replaces the old on-canvas Run button). Wire a Boolean Toggle.
+            pManager.AddBooleanParameter("Run", "Run", "Wire a Boolean Toggle. TRUE = solve now and re-solve when an input changes (background thread, live preview); FALSE = hold the last result. (Options are still edited on the component body; ESC also stops a running solve.)", GH_ParamAccess.item, false);
             pManager[2].Optional = true;
+            pManager[3].Optional = true;
         }
 
         protected override void RegisterOutputParams(GH_Component.GH_OutputParamManager pManager)
@@ -278,6 +281,20 @@ namespace opennest_2
         {
             if (nest_geos == null) nest_geos = new List<nest_rhino_lib.nest_geo>();
 
+            // Run is a standard input port now (was the on-canvas Run button). Edge-drive the existing latch:
+            // a rising edge launches a live session; a falling edge stops it and holds the last result. Using the
+            // INPUT's previous value (not _runActive) means an ESC-stop mid-solve isn't immediately relaunched
+            // just because Run is still held TRUE.
+            bool runInput = false; DA.GetData(3, ref runInput);
+            if (runInput && !_prevRunInput) { _runActive = true; _runButtonRequested = true; }
+            else if (!runInput && _runActive)
+            {
+                _runActive = false; CancelSolve();
+                try { _debounce.Stop(); } catch { }
+                try { EngineGate.Nfp.Dequeue(_wake); } catch { }
+            }
+            _prevRunInput = runInput;
+
             // ===== phases before the result is ready: gate on Run, launch the solve, or ignore re-solves
             if (_phase != Phase.Ready)
             {
@@ -331,6 +348,8 @@ namespace opennest_2
 
                 // Fresh solve — clear the old result + preview, prep the solver, launch.
                 ResetDisplayLists();
+                this.nest_geos = new List<nest_rhino_lib.nest_geo>();   // fresh (BeforeSolveInstance no longer resets on a button click)
+                this.bbox = new BoundingBox();
                 _previewBorders = new List<Polyline>();
                 _previewSheets = new List<Polyline>();
                 _hasResult = false;

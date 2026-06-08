@@ -52,7 +52,7 @@ namespace opennest_gh2.attributes
             RectangleF b = Bounds;
             float left = b.X + Pad, innerW = b.Width - 2f * Pad, y = b.Bottom + Pad;
 
-            _runRect = new RectangleF(left, y, innerW, RunH); y += RunH + Pad;
+            _runRect = RectangleF.Empty;   // Run is a standard input port now (no on-canvas Run/Stop button)
 
             float statusH = ShowStatus ? StatusH : 0f;
             _statusRect = new RectangleF(left, y, innerW, statusH);
@@ -68,7 +68,7 @@ namespace opennest_gh2.attributes
                 for (int i = 0; i < n; i++) { _rowRects[i] = new RectangleF(left, y, innerW, RowH); y += RowH; }
             }
 
-            float extra = Pad + RunH + Pad + (statusH > 0f ? statusH + Pad : 0f) + HeaderH + (n > 0 ? Pad + n * RowH : 0f) + Pad;
+            float extra = Pad + (statusH > 0f ? statusH + Pad : 0f) + HeaderH + (n > 0 ? Pad + n * RowH : 0f) + Pad;
             b.Height += extra;
             Bounds = b;
         }
@@ -79,10 +79,7 @@ namespace opennest_gh2.attributes
             if (Host == null) return;
             Graphics g = context.Graphics;
 
-            // Run / Stop button. One-shot: red "Stop" while solving, green "Run" when idle.
-            bool solving = Host.Solving;
-            Button(g, _runRect, solving ? "Stop" : "Run", solving ? Color.FromArgb(176, 48, 48) : Color.FromArgb(40, 132, 56), Colors.White, true);
-
+            // Run is a standard input port now (no on-canvas Run/Stop button).
             // Live status strip (round/generation count) while solving.
             if (ShowStatus)
             {
@@ -125,14 +122,6 @@ namespace opennest_gh2.attributes
             if (Host != null && e.Buttons == MouseButtons.Primary)
             {
                 PointF p = e.Location;
-                if (_runRect.Contains(p))
-                {
-                    // One-shot: while solving the button is Stop (cancel); otherwise it launches a solve.
-                    if (Host.Solving) Host.RequestStop();
-                    else Host.RequestLaunch();
-                    Relayout();              // repaint the button state immediately
-                    return Response.Handled;
-                }
                 if (_headerRect.Contains(p))
                 {
                     // Pure UI state change: relayout + redraw only (NEVER a re-solve — that was the toggle bug).

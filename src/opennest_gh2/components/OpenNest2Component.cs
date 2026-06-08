@@ -36,6 +36,9 @@ namespace opennest_gh2.components
 
         protected override void RequestCancel() { var n = _activeNest; if (n != null) try { n.StopRequested = true; } catch { } }
 
+        // Read the standard "Run" boolean input (port 3) that drives the solve (replaces the on-canvas button).
+        protected override bool ReadRunInput(IDataAccess access) { access.GetItem(3, out bool run); return run; }
+
         // Exact GH1 option set (component_nest2.cs BuildOptions).
         private static List<NestOption> BuildOptions() => new List<NestOption>
         {
@@ -59,6 +62,7 @@ namespace opennest_gh2.components
             inputs.AddGeneric("Sheets", "Sheets", "From OpenNest tab, use component Sheets.");
             inputs.AddGeneric("Geometry", "Geometry", "From OpenNest tab, use component Geometry.");
             inputs.AddInteger("Iterations", "Iterations", "GA generations to evolve (~10-40 typical).", Access.Item, Requirement.MayBeMissing).Set(10);
+            inputs.AddBoolean("Run", "Run", "Wire a Boolean Toggle. TRUE = nest now; FALSE = hold the last result (toggle off then on to re-run after an input change). ESC also stops a running solve, keeping the best so far. (Options are still edited on the component body.)", Access.Item, Requirement.MayBeMissing).Set(false);
         }
 
         protected override void AddOutputs(OutputAdder outputs)

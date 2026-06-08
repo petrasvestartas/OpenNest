@@ -106,6 +106,7 @@ namespace opennest_gh2.components
         // ---- state ----
         private volatile Phase _phase = Phase.Idle;
         private volatile bool _launchRequested;
+        private bool _prevRunInput;               // previous value of the Run input port (rising/falling edge detect)
         private volatile bool _aborted;           // Stop pressed -> discard the result, publish a clear instead
         private volatile string _status;
         private Task _task;
@@ -142,9 +143,19 @@ namespace opennest_gh2.components
         protected abstract void SolveCore();                   // blocking native solve (lock inside) — background thread
         protected abstract void Assemble(IDataAccess access);  // set outputs + CacheResult — Ready (publish) pass
         protected abstract void RequestCancel();               // np_cancel / StopRequested
+        protected abstract bool ReadRunInput(IDataAccess access);   // read the standard "Run" boolean input port
 
         protected override void Process(IDataAccess access)
         {
+            // Run is a standard input port now (was the on-canvas Run/Stop button). Edge-drive the async machine:
+            // a rising edge (while Idle) launches a solve; a falling edge (while Computing) cancels it but keeps
+            // the best-so-far. Using the INPUT's previous value (not the phase) means an ESC-stop isn't relaunched
+            // just because Run is still held TRUE. To re-run after an input change, toggle Run off then on.
+            bool runInput = false; try { runInput = ReadRunInput(access); } catch { }
+            if (runInput && !_prevRunInput && _phase == Phase.Idle) { ClearAll(); _aborted = false; _launchRequested = true; }
+            else if (!runInput && _prevRunInput && _phase == Phase.Computing) { try { RequestCancel(); } catch { } _status = "stopping…"; }
+            _prevRunInput = runInput;
+
             switch (_phase)
             {
                 case Phase.Ready:
