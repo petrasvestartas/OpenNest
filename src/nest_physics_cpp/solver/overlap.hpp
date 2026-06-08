@@ -63,14 +63,23 @@ inline f32 overlap_depth_proxy(const Surrogate& sp1, const Surrogate& sp2, f32 e
     for (usize j = 0; j < n2; ++j) { x2[j] = sp2.poles[j].center.x; y2[j] = sp2.poles[j].center.y; r2[j] = sp2.poles[j].radius; }
     const f32 two_eps = 2.0f * epsilon, eps2 = epsilon * epsilon;
     f32 depth_sum = 0.0f, depth_max = 0.0f;
+    f32 dist[CAP];
     for (const auto& p1 : sp1.poles) {
         const f32 x1 = p1.center.x, y1 = p1.center.y, r1 = p1.radius;
-        f32 acc = 0.0f, mx = 0.0f;
-        #pragma omp simd reduction(+ : acc) reduction(max : mx)
+        // Phase 1: isolate the hot sqrt into a pure elementwise loop. With no branch/division in
+        // the body GCC auto-vectorizes it to SSE2 sqrtps (4-wide), and since sqrt is a per-element
+        // IEEE op the results are bit-identical to the scalar sqrtss path. (The fused loop the port
+        // shipped never vectorized: the omp-simd pragma is inert without -fopenmp-simd, and GCC
+        // won't reorder the float reduction without -ffast-math, so every sqrt ran scalar.)
         for (usize j = 0; j < n2; ++j) {
             f32 dx = x1 - x2[j], dy = y1 - y2[j];
-            f32 dist = std::sqrt(dx * dx + dy * dy);
-            f32 pd = (r1 + r2[j]) - dist;
+            dist[j] = std::sqrt(dx * dx + dy * dy);
+        }
+        // Phase 2 (scalar, sequential j=0..n2): the select's conditional division keeps this part
+        // scalar, but it preserves the original reduction's exact FP order -> bit-identical sum/max.
+        f32 acc = 0.0f, mx = 0.0f;
+        for (usize j = 0; j < n2; ++j) {
+            f32 pd = (r1 + r2[j]) - dist[j];
             f32 pdc = (pd >= epsilon) ? pd : eps2 / (two_eps - pd);
             acc += pdc;
             mx = max_f(mx, pdc);
@@ -240,6 +249,18 @@ struct OverlapTracker {
         f32 pair_loss = 0.0f;
         for (usize i = 0; i < size; ++i) pair_loss += pair_collisions.at(idx, i).loss;
         return container_collisions[idx].loss + hole_collisions[idx].loss + pair_loss;
+    }
+    // Early-exit equivalent of `get_loss(pk) > 0.0f`. All loss terms are non-negative (penetration
+    // depths / clipped areas), so the sum is positive iff ANY term is positive -> stop at the first
+    // hit instead of summing the whole O(size) triangular row. Bit-identical decision; the relax loop
+    // only ever asks "does this part still overlap?", and for overlapping parts (the candidates) this
+    // returns on the first nonzero entry instead of scanning every neighbour.
+    bool has_loss(PartKey pk) const {
+        usize idx = idx_of(pk);
+        if (container_collisions[idx].loss > 0.0f) return true;
+        if (hole_collisions[idx].loss > 0.0f) return true;
+        for (usize i = 0; i < size; ++i) if (pair_collisions.at(idx, i).loss > 0.0f) return true;
+        return false;
     }
     f32 get_weighted_loss(PartKey pk) const {
         usize idx = idx_of(pk);

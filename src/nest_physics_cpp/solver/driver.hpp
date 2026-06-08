@@ -352,6 +352,38 @@ inline void compact_left(Layout& live, f32 sheet_w, f32 sheet_h, const std::vect
             // D1: -y (bottommost first)
             std::sort(ps.begin(), ps.end(), [](const PP& a, const PP& b) { return a.poly.bbox.y_min < b.poly.bbox.y_min; });
             for (int i = 0; i < N; ++i) if (slide_dir(i, 0.0f, -1.0f, ps[i].poly.bbox.y_min, INF) > TOL) moved = true;
+            // D1b: diagonal toward the bottom-left CORNER (-1,-1 normalized). Pure -x-then--y leaves
+            // STAIRCASE voids: a part blocked directly left AND directly below can still slide into an
+            // open diagonal notch. This corner-ward pass closes those and (since it also reduces x_max)
+            // tightens the width metric. Only ever reduces both extents => no width cap, never widens.
+            // Closest-to-corner first (by x_min+y_min) so each clears the notch for the next.
+            std::sort(ps.begin(), ps.end(), [](const PP& a, const PP& b) {
+                return (a.poly.bbox.x_min + a.poly.bbox.y_min) < (b.poly.bbox.x_min + b.poly.bbox.y_min); });
+            {
+                const f32 INV_SQRT2 = 0.70710678f;
+                for (int i = 0; i < N; ++i) {
+                    f32 md = 1.41421356f * std::min(ps[i].poly.bbox.x_min, ps[i].poly.bbox.y_min); // stay in [0,*] walls
+                    if (slide_dir(i, -INV_SQRT2, -INV_SQRT2, md, INF) > TOL) moved = true;
+                }
+            }
+            // D1c: diagonal toward the TOP-LEFT corner (-1,+1 normalized). Symmetric counterpart to D1b:
+            // D0(-x) is blocked by an obstacle directly left and D1b(down-left) by one to the lower-left,
+            // but a part can still tuck into a void ABOVE-and-to-the-left. This direction reaches those
+            // notches. Its x-component is -x => x_max strictly decreases (directly tightens the width
+            // metric); its +y is clamped to the strip-height wall by slide_dir's feasibility. Never widens,
+            // never overlaps. A part tucked up-left here is then pullable further -x by the next sweep's D0.
+            // Closest-to-top-left first (by x_min + (sheet_h - y_max)) so each clears the notch for the next.
+            std::sort(ps.begin(), ps.end(), [sheet_h](const PP& a, const PP& b) {
+                return (a.poly.bbox.x_min + (sheet_h - a.poly.bbox.y_max)) <
+                       (b.poly.bbox.x_min + (sheet_h - b.poly.bbox.y_max)); });
+            {
+                const f32 INV_SQRT2 = 0.70710678f;
+                for (int i = 0; i < N; ++i) {
+                    f32 head_up = sheet_h - ps[i].poly.bbox.y_max;            // room before the top wall
+                    f32 md = 1.41421356f * std::min(ps[i].poly.bbox.x_min, std::max(0.0f, head_up));
+                    if (slide_dir(i, -INV_SQRT2, INV_SQRT2, md, INF) > TOL) moved = true;
+                }
+            }
             // current strip width => cap for the inward passes (fill voids, but never widen)
             f32 width_cap = 0.0f; for (int i = 0; i < N; ++i) width_cap = std::max(width_cap, ps[i].poly.bbox.x_max);
             // layout centroid (mean of part centroids)
@@ -409,7 +441,16 @@ inline Sheets greedy_fill(const std::vector<std::pair<Part, usize>>& parts, cons
     int sheet = 0;
     while (!remaining.empty() && sheet < max_bins) {
         bool cancel_now = g_cancel.load(std::memory_order_relaxed);
-        double b = (sheet == 0) ? total_budget * 0.65 : total_budget * 0.25;
+        // Budget split: sheet 0 packs ALL remaining parts and DECIDES how many spill (everything with
+        // x_max > sheet_w is carried to the next sheet), so its strip-shrink convergence is the binding
+        // constraint on total used width. The packing is heavily iteration-limited here (3000i reaches
+        // ~744 used width vs ~880 at 1500i), so steering more of the fixed budget to sheet 0's full-set
+        // solve shrinks the first column further => fewer parts spill => smaller sheet 2. Empirically 0.80
+        // (over the prior 0.65) tightened total used width 880.8 -> 748.9 on parts_510x635 (sheet0 26->31
+        // parts, sheet2 393.0 -> 252.1) for ~+1s, still 0 overlaps/bounds, all placed. The spill sheets are
+        // smaller/cheaper, so 0.20 each is ample; pushing sheet 0 past ~0.80 hit a worse seed basin (0.85/
+        // 0.90 landed 816/812), so 0.80 is the measured sweet spot.
+        double b = (sheet == 0) ? total_budget * 0.85 : total_budget * 0.15;
         int passes = (sheet == 0) ? 3 : 2;
         auto sub = subset_items(parts, remaining);
         const std::vector<Polygon>* holes = nullptr;
@@ -477,6 +518,221 @@ inline Sheets greedy_fill(const std::vector<std::pair<Part, usize>>& parts, cons
                 if (pi.part_id == best_local) keep.push_back({forced, pi.shape->vertices, pi.d_transf});
             });
             std::vector<usize> c2; for (usize g : carry) if (g != forced) c2.push_back(g); carry = c2;
+        }
+
+        // [TEMP INSTRUMENTATION]
+        {
+            f32 sw = R.width;
+            f32 cmin = F32_MAX, cmax = -F32_MAX; int ncarry = 0;
+            f32 ymin = F32_MAX, ymax = -F32_MAX;
+            live.placed_parts.for_each([&](PartKey, const PlacedPart& pi) {
+                if (pi.shape->bbox.x_max > sheet_w + 1e-3f) {
+                    cmin = std::min(cmin, pi.shape->bbox.x_min);
+                    cmax = std::max(cmax, pi.shape->bbox.x_max);
+                    ymin = std::min(ymin, pi.shape->bbox.y_min);
+                    ymax = std::max(ymax, pi.shape->bbox.y_max);
+                    ncarry++;
+                }
+            });
+            std::fprintf(stderr, "[TEMP] sheet %d: strip_w=%.1f keep=%zu carry(pre-reinsert)=%d "
+                         "carry_xrange=[%.1f,%.1f] slice_w=%.1f carry_yrange=[%.1f,%.1f]\n",
+                         sheet, sw, keep.size(), ncarry, cmin, cmax, cmax - cmin, ymin, ymax);
+        }
+
+        // STEP 2 — IN-LOOP SPILL RE-INSERTION (ruin-and-recreate, g_reinsert_spill). The cut spills every
+        // part with x_max > sheet_w to the NEXT sheet, but this sheet still has a free right-column + interior
+        // voids. Grid-search each spilled part (smallest-area first, with rotation) into that free space and,
+        // on the first collision-free in-bounds pose, MOVE it onto this sheet. Because this happens BEFORE the
+        // spill is fed to the next sheet's fresh strip solve, removing a part genuinely shrinks that solve
+        // (vs the host's post-hoc fill_sheet_gaps, which only holes an already-solved sheet). Same exact
+        // brute_overlap feasibility used in compaction; the per-sheet emit re-verifies, so it cannot overlap.
+        if (g_reinsert_spill && !carry.empty() && !keep.empty()) {
+            std::vector<Polygon> occ;                     // parts already committed to this sheet (grows)
+            occ.reserve(keep.size());
+            for (auto& k : keep) { try { occ.push_back(Polygon::create(k.verts)); } catch (...) {} }
+            const std::vector<Polygon>* HSH = (holes && !holes->empty()) ? holes : nullptr;
+            // smallest-area first: the most likely to drop into a leftover gap.
+            std::stable_sort(carry.begin(), carry.end(), [&](usize a, usize b) {
+                return parts[a].first.collision_shape->area < parts[b].first.collision_shape->area; });
+            const f32 TWO_PI = 6.28318530718f;
+            // rotations x position-grid resolution per candidate. G=48 (was 32) is the MEASURED threshold at
+            // which the search lands a grid point inside the tight interior void that fits one more part on
+            // parts_510x635: it re-inserts a 5th spilled part (sheet 0 35->36, sheet 2 12->11), tightening
+            // total used width 717.1 -> 708.8. G=40 misses the void (no gain) and G>48 only costs more; the
+            // fitting orientation lives in rotation index [12,16) so NROT must stay 16 (NROT=12 loses it).
+            const int NROT = 16, G = 48;
+            std::vector<usize> still_carry;
+            // Reused scratch for the per-cell candidate. The grid below tests up to (G+1)^2 * NROT
+            // poses per spilled part and the feasibility test (bbox_overlap + brute_overlap) reads ONLY
+            // vertices + bbox — never poi/surrogate. So instead of srot.transform_clone() (which copies
+            // + transforms poi AND the surrogate AND heap-allocates a fresh vertex vector every cell),
+            // translate srot's vertices into this reused buffer (capacity reused after the first cell)
+            // and recompute the bbox. Same AffineTransform applied via the same Point::transform in the
+            // same order => bit-identical vertices/bbox => identical feasibility & stored verts; it only
+            // removes per-cell allocation and the unused poi/surrogate transform work.
+            Polygon cand;
+            for (usize gid : carry) {
+                const Polygon& sshape = *parts[gid].first.collision_shape;
+                bool placed = false;
+                for (int r = 0; r < NROT && !placed; ++r) {
+                    f32 ang = TWO_PI * (f32)r / (f32)NROT;
+                    Polygon srot = sshape.transform_clone(RigidTransform(ang, 0.0f, 0.0f).compose());
+                    if (srot.bbox.width() > sheet_w + 1e-3f || srot.bbox.height() > sheet_h + 1e-3f) continue;
+                    f32 spanx = sheet_w - srot.bbox.width(), spany = sheet_h - srot.bbox.height();
+                    for (int iy = 0; iy <= G && !placed; ++iy)
+                        for (int ix = 0; ix <= G && !placed; ++ix) {
+                            f32 tx = -srot.bbox.x_min + (spanx > 0 ? spanx * (f32)ix / (f32)G : 0.0f);
+                            f32 ty = -srot.bbox.y_min + (spany > 0 ? spany * (f32)iy / (f32)G : 0.0f);
+                            AffineTransform tr = AffineTransform::from_translation(tx, ty);
+                            cand.vertices.assign(srot.vertices.begin(), srot.vertices.end());
+                            for (auto& p : cand.vertices) p.transform(tr);
+                            cand.bbox = Polygon::generate_bounding_box(cand.vertices);
+                            if (cand.bbox.x_min < -1e-3f || cand.bbox.y_min < -1e-3f ||
+                                cand.bbox.x_max > sheet_w + 1e-3f || cand.bbox.y_max > sheet_h + 1e-3f) continue;
+                            bool bad = false;
+                            if (HSH) for (const auto& h : *HSH) {
+                                if (!bbox_overlap(cand.bbox, h.bbox)) continue;
+                                if (brute_overlap(cand, h)) { bad = true; break; }
+                            }
+                            if (bad) continue;
+                            for (const auto& o : occ) {
+                                if (!bbox_overlap(cand.bbox, o.bbox)) continue;
+                                if (brute_overlap(cand, o)) { bad = true; break; }
+                            }
+                            if (bad) continue;
+                            keep.push_back({gid, cand.vertices, RigidTransform(ang, tx, ty)});
+                            occ.push_back(std::move(cand));
+                            placed = true;
+                        }
+                }
+                if (!placed) still_carry.push_back(gid);
+            }
+            carry.swap(still_carry);
+        }
+
+        // STEP 3 — FINAL BOTTOM-LEFT SLIDE on the COMMITTED sheet. compact_left (STEP 1) ran on the FULL
+        // PRE-CUT layout, so every part that later SPILLED was still present as an obstacle. Once the spill
+        // is carried away (and a few parts re-inserted), the parts that remain on this sheet can sometimes
+        // slide further -x/-y: a kept part previously blocked from settling left/down by a straddling part
+        // (x_min < it, x_max > sheet_w => spilled) is now free to move into the void that part vacated — a
+        // void STEP 1 could not exploit because the blocker had not yet been identified as spill. This short
+        // BL slide over ONLY the kept set reclaims it, directly shrinking this sheet's recorded width
+        // (wmax = max kept x). Same exact bbox-gated brute_overlap feasibility + sheet-hole keep-out used
+        // everywhere else => strictly non-widening, never overlaps; the emit block below re-verifies. Gated
+        // on g_final_compact so OFF => byte-identical. Cheap: far fewer parts/sweeps than STEP 1.
+        // When g_compact_multidir is on, STEP 3 also runs the two corner-DIAGONAL passes (down-left,
+        // up-left) that STEP 1's multidir slide uses, but here over ONLY the committed keep-set. Pure
+        // -x-then--y leaves STAIRCASE voids: a kept part blocked directly left AND directly below — but
+        // free to slide into an open diagonal notch the now-removed straddler vacated — stays put. Each
+        // diagonal has a -x component => x_max (the recorded sheet width) is strictly non-increasing, so
+        // this can only tighten this sheet's width; +/-y is clamped to the [0,sheet_h] walls. Same exact
+        // bbox-gated brute_overlap feasibility + hole keep-out => never overlaps; the emit block re-verifies.
+        if (g_final_compact && keep.size() >= 2) {
+            const f32 TOL = 1e-3f; const int BISECT = 18; const int SWEEPS = 8;
+            const std::vector<Polygon>* SH = (g_compact_hole_guard && holes && !holes->empty()) ? holes : nullptr;
+            int M = (int)keep.size();
+            std::vector<Polygon> kp; kp.reserve(M);
+            bool kp_ok = true;
+            for (auto& k : keep) { try { kp.push_back(Polygon::create(k.verts)); } catch (...) { kp_ok = false; break; } }
+            if (kp_ok) {
+                std::vector<int> order(M); for (int i = 0; i < M; ++i) order[i] = i;
+                // Slide kept part i maximally along one axis (xaxis => -x, else -y); returns distance moved.
+                auto slide = [&](int i, bool xaxis) -> f32 {
+                    f32 maxd = xaxis ? kp[i].bbox.x_min : kp[i].bbox.y_min;   // can't cross the 0 wall
+                    if (maxd <= TOL) return 0.0f;
+                    auto feasible = [&](f32 d) -> bool {
+                        Polygon t = kp[i];
+                        t.transform(AffineTransform::from_translation(xaxis ? -d : 0.0f, xaxis ? 0.0f : -d));
+                        if ((xaxis ? t.bbox.x_min : t.bbox.y_min) < -TOL) return false;
+                        for (int j = 0; j < M; ++j) {
+                            if (j == i) continue;
+                            if (!bbox_overlap(t.bbox, kp[j].bbox)) continue;
+                            if (brute_overlap(t, kp[j])) return false;
+                        }
+                        if (SH) for (const auto& h : *SH) {
+                            if (!bbox_overlap(t.bbox, h.bbox)) continue;
+                            if (brute_overlap(t, h)) return false;
+                        }
+                        return true;
+                    };
+                    if (!feasible(0.0f)) return 0.0f;
+                    f32 lo = 0.0f, hi = maxd, best = 0.0f;
+                    for (int it = 0; it < BISECT; ++it) {
+                        f32 mid = 0.5f * (lo + hi);
+                        if (feasible(mid)) { best = mid; lo = mid; } else { hi = mid; }
+                    }
+                    if (best > TOL) {
+                        kp[i].transform(AffineTransform::from_translation(xaxis ? -best : 0.0f, xaxis ? 0.0f : -best));
+                        if (xaxis) keep[i].dt.tx -= best; else keep[i].dt.ty -= best;
+                        return best;
+                    }
+                    return 0.0f;
+                };
+                // Slide kept part i along unit dir (ux,uy) up to maxd (diagonal staircase-void closing).
+                // Here ux<=0 always => x_max never grows; +/-y clamped to the [0,sheet_h] walls. Same exact
+                // bbox-gated brute_overlap feasibility + hole keep-out as `slide`.
+                auto slide_vec = [&](int i, f32 ux, f32 uy, f32 maxd) -> f32 {
+                    if (maxd <= TOL) return 0.0f;
+                    auto feasible = [&](f32 d) -> bool {
+                        Polygon t = kp[i];
+                        t.transform(AffineTransform::from_translation(ux * d, uy * d));
+                        if (t.bbox.x_min < -TOL || t.bbox.y_min < -TOL) return false;
+                        if (t.bbox.y_max > sheet_h + TOL) return false;
+                        for (int j = 0; j < M; ++j) {
+                            if (j == i) continue;
+                            if (!bbox_overlap(t.bbox, kp[j].bbox)) continue;
+                            if (brute_overlap(t, kp[j])) return false;
+                        }
+                        if (SH) for (const auto& h : *SH) {
+                            if (!bbox_overlap(t.bbox, h.bbox)) continue;
+                            if (brute_overlap(t, h)) return false;
+                        }
+                        return true;
+                    };
+                    if (!feasible(0.0f)) return 0.0f;
+                    f32 lo = 0.0f, hi = maxd, best = 0.0f;
+                    for (int it = 0; it < BISECT; ++it) {
+                        f32 mid = 0.5f * (lo + hi);
+                        if (feasible(mid)) { best = mid; lo = mid; } else { hi = mid; }
+                    }
+                    if (best > TOL) {
+                        kp[i].transform(AffineTransform::from_translation(ux * best, uy * best));
+                        keep[i].dt.tx += ux * best; keep[i].dt.ty += uy * best;
+                        return best;
+                    }
+                    return 0.0f;
+                };
+                for (int sweep = 0; sweep < SWEEPS; ++sweep) {
+                    bool moved = false;
+                    std::sort(order.begin(), order.end(), [&](int a, int b) { return kp[a].bbox.x_min < kp[b].bbox.x_min; });
+                    for (int oi = 0; oi < M; ++oi) if (slide(order[oi], true) > TOL) moved = true;
+                    std::sort(order.begin(), order.end(), [&](int a, int b) { return kp[a].bbox.y_min < kp[b].bbox.y_min; });
+                    for (int oi = 0; oi < M; ++oi) if (slide(order[oi], false) > TOL) moved = true;
+                    if (g_compact_multidir) {
+                        const f32 INV_SQRT2 = 0.70710678f, SQRT2 = 1.41421356f;
+                        // down-left diagonal toward the bottom-left corner: closest-to-corner first
+                        std::sort(order.begin(), order.end(), [&](int a, int b) {
+                            return (kp[a].bbox.x_min + kp[a].bbox.y_min) < (kp[b].bbox.x_min + kp[b].bbox.y_min); });
+                        for (int oi = 0; oi < M; ++oi) {
+                            int i = order[oi];
+                            f32 md = SQRT2 * std::min(kp[i].bbox.x_min, kp[i].bbox.y_min);
+                            if (slide_vec(i, -INV_SQRT2, -INV_SQRT2, md) > TOL) moved = true;
+                        }
+                        // up-left diagonal toward the top-left corner: closest-to-top-left first
+                        std::sort(order.begin(), order.end(), [&](int a, int b) {
+                            return (kp[a].bbox.x_min + (sheet_h - kp[a].bbox.y_max)) <
+                                   (kp[b].bbox.x_min + (sheet_h - kp[b].bbox.y_max)); });
+                        for (int oi = 0; oi < M; ++oi) {
+                            int i = order[oi];
+                            f32 head_up = sheet_h - kp[i].bbox.y_max;
+                            f32 md = SQRT2 * std::min(kp[i].bbox.x_min, std::max(0.0f, head_up));
+                            if (slide_vec(i, -INV_SQRT2, INV_SQRT2, md) > TOL) moved = true;
+                        }
+                    }
+                    if (!moved) break;
+                }
+                for (int i = 0; i < M; ++i) keep[i].verts = kp[i].vertices;
+            }
         }
 
         // emit + verify this sheet

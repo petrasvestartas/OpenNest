@@ -20,6 +20,22 @@ inline std::array<bool, 4> collides_with_quadrants(const T& e, const Rect&, cons
     return {collides(e, qs[0]), collides(e, qs[1]), collides(e, qs[2]), collides(e, qs[3])};
 }
 
+// Circle vs the four quadrants — specialized to share the clamp work the generic template repeats.
+// The four child quadrants tile the parent at the split lines, so adjacent quadrants share an x- or
+// y-range: Q0/Q3 (right column) and Q1/Q2 (left column) share the x-clamp; Q0/Q1 (top row) and
+// Q2/Q3 (bottom row) share the y-clamp. Computing each clamp once (2 dx + 2 dy instead of the
+// generic's 8) is bit-identical to four independent collides(Circle,Rect) calls — same min_f/max_f
+// expressions, same squared terms, same x+y addition order — it only removes redundant arithmetic.
+inline std::array<bool, 4> collides_with_quadrants(const Circle& c, const Rect&, const std::array<Rect, 4>& qs) {
+    const f32 cx = c.center.x, cy = c.center.y, r2 = c.radius * c.radius;
+    f32 dxr = max_f(qs[0].x_min, min_f(cx, qs[0].x_max)) - cx; // right column (Q0, Q3)
+    f32 dxl = max_f(qs[1].x_min, min_f(cx, qs[1].x_max)) - cx; // left column  (Q1, Q2)
+    f32 dyt = max_f(qs[0].y_min, min_f(cy, qs[0].y_max)) - cy; // top row      (Q0, Q1)
+    f32 dyb = max_f(qs[2].y_min, min_f(cy, qs[2].y_max)) - cy; // bottom row   (Q2, Q3)
+    f32 xr2 = dxr * dxr, xl2 = dxl * dxl, yt2 = dyt * dyt, yb2 = dyb * dyb;
+    return {xr2 + yt2 <= r2, xl2 + yt2 <= r2, xl2 + yb2 <= r2, xr2 + yb2 <= r2};
+}
+
 // Edge vs four quadrants — faithful port of qt_traits.rs Edge::collides_with_quadrants. Resolves
 // most quadrants via cheap bbox/endpoint checks, then shares bisector intersection tests across
 // adjacent quadrants. Conservative by construction (may over-report a quadrant, never under-report),

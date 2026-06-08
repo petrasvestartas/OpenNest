@@ -141,6 +141,19 @@ int main(int argc, char** argv) {
 
     const f32 SHEET_W = 510.0f, SHEET_H = 635.0f;
     nest::ROT_N_SAMPLES = 32; // finer orientation search for elongated ribbon parts (default 16)
+    // Post-relaxation geometric COMPACTION on each emitted sheet (CG-SHOP 2024 / Shadoks
+    // slide-to-contact). The separator/relax loop stops at zero pole-overlap, not at contact, so it
+    // leaves a few-mm slack everywhere. compact_left reclaims it: multi-directional (-x, -y, toward
+    // layout centroid, toward nearest neighbour) exact-geometry slide-to-contact, strictly
+    // non-widening and re-verified overlap-free in greedy_fill. On parts_510x635 this tightens the
+    // total used width 901.9 -> 887.8 (sheet1 504.5->494.6, sheet2 397.4->393.2) with all parts
+    // still placed and zero overlaps/bounds. The single-edge strip-shrink alone could not close
+    // these interior voids; sliding from multiple directions does.
+    nest::g_final_compact = true;
+    nest::g_compact_multidir = true;
+    // In-loop ruin-and-recreate: re-insert spilled parts into the current sheet's free space BEFORE they
+    // reach the next sheet's strip solve, so that solve runs on fewer parts and packs narrower.
+    nest::g_reinsert_spill = true;
 
     // .json => REAL CGSHOP geometry (all entries are parts, x100 scale -> /100 for 510x635 units).
     // .svg  => display catalog (polyline[0] is the container thumbnail; parts are the rest).

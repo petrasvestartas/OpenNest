@@ -93,13 +93,13 @@ struct RelaxWorker {
     SepStats relax_parts() {
         std::vector<PartKey> candidates;
         prob.layout.placed_parts.for_each([&](PartKey pk, const PlacedPart&) {
-            if (ct.get_loss(pk) > 0.0f) candidates.push_back(pk);
+            if (ct.has_loss(pk)) candidates.push_back(pk);
         });
         rng.shuffle(candidates);
 
         SepStats stats;
         for (PartKey pk : candidates) {
-            if (ct.get_loss(pk) > 0.0f) {
+            if (ct.has_loss(pk)) {
                 usize part_id = prob.layout.placed_parts[pk].part_id;
                 const Part& part = instance.part(part_id);
                 RelaxEvaluator evaluator(prob.layout, part, pk, ct);
