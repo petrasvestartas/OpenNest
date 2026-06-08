@@ -8,6 +8,9 @@ GitHub Releases. Each entry describes what the release actually changed.
 > the previous tag), so a clear commit subject per push becomes the changelog line — refine an entry
 > here anytime if you want more detail.
 
+## [2.71.0.0] - 2026-06-08
+- rewrite CHANGELOG entries as plain-language descriptions of what each release actually changed (from the diffs), not raw commit subjects
+
 ## [2.70.0.0] - 2026-06-08
 - Expanded `CHANGELOG.md` from grouped summaries to one entry per released version (v2.41 through v2.69), generated from git history.
 
