@@ -70,3 +70,6 @@ site/
 /_svg2png/
 _probe*/
 _iconcheck/
+/err.txt
+/out.txt
+/src/nest_physics_cpp/out.svg

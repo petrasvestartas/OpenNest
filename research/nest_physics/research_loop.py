@@ -69,6 +69,9 @@ TIMING_REPEATS = 5           # median wall-time over N runs — IMPLEMENTATION s
                              # efficiency mode, so measure it stably (idle machine + deterministic workload).
 NOISE = 0.015                # 1.5% wall-time band: a real hot-kernel speedup clears it; run-to-run jitter doesn't.
 WIDTH_EPS = 0.5              # used-width change (sheet units) under this = "same packing" (FP-noise tolerant)
+SPEED_CAP = 0.15             # a TIGHTER pack is kept only if it's <= this fraction slower than the best
+                             # (tighter AND fast — reject density gains that blow the speed budget). Fewer
+                             # sheets is exempt (a whole sheet of material is worth a slowdown).
 
 # The agent command (a STRING, run via the shell so the `claude` .cmd/.ps1 shim resolves on Windows).
 # Prompt is fed on STDIN (avoids OS arg-length limits). REVIEW THIS:
@@ -227,9 +230,14 @@ def is_improvement(new, best):
         return True, f"FEWER sheets ({best['sheets']} -> {new['sheets']})"
     if new["sheets"] > best["sheets"]:
         return False, "more sheets"
-    # same sheet count -> tighter (less total used width) is better packing
+    # same sheet count -> tighter (less total used width) is better packing, BUT only keep it if it stays
+    # within the speed budget: a tighter pack more than SPEED_CAP slower than the best is rejected, so the
+    # loop pursues "tighter AND fast" rather than stacking slow compaction passes for marginal density.
     if new["used_width"] < best["used_width"] - WIDTH_EPS:
-        return True, f"tighter ({best['used_width']:.1f} -> {new['used_width']:.1f} used width)"
+        slow = new["wall_time"] / best["wall_time"] - 1.0 if best["wall_time"] > 0 else 0.0
+        if new["wall_time"] <= best["wall_time"] * (1.0 + SPEED_CAP):
+            return True, f"tighter ({best['used_width']:.1f} -> {new['used_width']:.1f} used width, {slow*100:+.0f}% time)"
+        return False, f"tighter but too slow ({slow*100:+.0f}% > {SPEED_CAP*100:.0f}% cap)"
     if new["used_width"] > best["used_width"] + WIDTH_EPS:
         return False, "looser packing"
     # same packing -> require a real speedup
@@ -417,8 +425,9 @@ def build_iteration_prompt(best, ledger: Ledger) -> str:
         f"then lower used width (this is the primary objective)",
         f"  wall_time = {best['wall_time']:.2f}s   <== and FASTER (median of {TIMING_REPEATS} runs; "
         f"> {NOISE*100:.1f}% to count as a speedup)   valid = {best['valid']}",
-        f"  A change is KEPT if it stays overlap-free AND (packs tighter: fewer sheets or lower used width) OR "
-        f"(is faster at the same packing). Never worse on packing.",
+        f"  A change is KEPT if it stays overlap-free AND: FEWER sheets (any speed), OR tighter used width that "
+        f"is at most {SPEED_CAP*100:.0f}% slower than the best (a tighter pack that blows the speed budget is "
+        f"REJECTED), OR faster at the same packing. So pursue tighter AND fast — cheap compaction, not slow passes.",
         f"  instance = {DEFAULT_INSTANCE.name}   budget = {DEFAULT_BUDGET}   workers = {DEFAULT_WORKERS}   "
         f"poles = {DEFAULT_POLES}",
         "\n----- ALREADY STUDIED -----",
