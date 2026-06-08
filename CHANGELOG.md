@@ -1,62 +1,101 @@
 # Changelog
 
-All notable changes to **OpenNest**, newest first. Version numbers match the
-Yak / Rhino Package Manager releases (`https://yak.rhino3d.com/packages/opennest`)
-and the matching `v<version>` git tags / GitHub Releases.
+All notable changes to **OpenNest**, newest first. Version numbers match the Yak / Rhino
+Package Manager releases (`https://yak.rhino3d.com/packages/opennest`) and the matching
+`v<version>` git tags / GitHub Releases.
 
-> From **v2.68.0.0** onward this file is appended **automatically** on every release —
-> the publish workflow lists the commits since the previous tag. Earlier entries
-> below were backfilled from git history (the auto-bumped minor versions are grouped
-> where several shared the same work).
+> This file is maintained **automatically**: on every release the publish workflow prepends a
+> section listing the commits since the previous tag. The entries below were generated from git
+> history (one section per released version).
 
 ## [2.69.0.0] - 2026-06-08
 - add CHANGELOG.md (backfilled from release history) and auto-maintain it on every release: the publish CI prepends the commits since the last tag, plus GitHub auto release notes
 
 ## [2.68.0.0] - 2026-06-08
-- Stop publishing the `OpenNest_GH2` package. The Rhino 8 Grasshopper 2 SDK is a vestigial / broken WIP, and a GH2 plugin makes Rhino throw a `Grasshopper2` load error on every Grasshopper-1-only machine. The main **OpenNest** package is now Grasshopper-2-free; Grasshopper 2 will return later as a separate **Rhino 9** package built against the Rhino 9 SDK.
+- stop publishing OpenNest_GH2: the Rhino 8 GH2 SDK is a dead-end vestigial WIP; GH2 will return as a separate Rhino 9 package built against the R9 SDK. Main OpenNest stays GH2-free.
 
 ## [2.67.0.0] - 2026-06-08
-- _(Superseded by 2.68.0.0)_ Split Grasshopper 2 into a separate `OpenNest_GH2` package — later withdrawn in favour of deferring Grasshopper 2 to Rhino 9.
+- split Grasshopper 2 into a separate OpenNest_GH2 yak package so Grasshopper 1 users no longer get the opennest_gh2.rhp Grasshopper2 load error
 
 ## [2.66.0.0] - 2026-06-08
-- OpenNest1 (NFP): parts that don't fit are kept at their original input location/orientation instead of being parked off-sheet.
-- OpenNest1 default number of rotations changed to 4.
+- UI non nestable elements kept at the original positions and defualt openenst1 rotations is set to 4
 
-## [2.64.0.0 – 2.65.0.0] - 2026-06-07
-- Documentation updates.
+## [2.65.0.0] - 2026-06-07
+- docs
+
+## [2.64.0.0] - 2026-06-07
+- docs
 
 ## [2.63.0.0] - 2026-06-07
-- Added standalone **C++ and C# example apps** (CMake superbuild) showing how to drive the OpenNest API, wired into CI.
+- Add standalone C++/C# examples apps + superbuild + docs
 
 ## [2.62.0.0] - 2026-06-07
-- Initial **Grasshopper 2** component support (WIP).
+- Grasshopper2 support WIP
 
 ## [2.61.0.0] - 2026-06-07
-- OpenNest1 bug fixes.
+- OpenNest1 bugs
 
-## [2.54.0.0 – 2.60.0.0] - 2026-06-07
-- New **C++ API**, **C# API** and **Python (compas_nest) API** documentation pages (iterative).
+## [2.60.0.0] - 2026-06-07
+- DOCS cpp api and python apis
+
+## [2.59.0.0] - 2026-06-07
+- DOCS cpp api and python apis
+
+## [2.58.0.0] - 2026-06-07
+- DOCS cpp api and python apis
+
+## [2.57.0.0] - 2026-06-07
+- DOCS cpp api and python apis
+
+## [2.56.0.0] - 2026-06-07
+- DOCS cpp api and python apis
+
+## [2.55.0.0] - 2026-06-07
+- DOCS cpp api and python apis
+
+## [2.54.0.0] - 2026-06-07
+- Docs
 
 ## [2.53.0.0] - 2026-06-07
-- Rhino-version milestone work.
+- milestone: rhino version
 
 ## [2.52.0.0] - 2026-06-06
-- OpenNest1 corrections; background threading for the nesting components.
+- OpenNest1 corrections and other components threading
 
 ## [2.51.0.0] - 2026-06-06
-- Grasshopper option labels via Eto forms.
+- GH options labels - eto forms
 
-## [2.46.0.0 – 2.50.0.0] - 2026-06-06
-- macOS option-widget fixes: Eto context-menu Choice dropdown (fixes label truncation), value-button alignment / protrusion, PCA alignment.
+## [2.50.0.0] - 2026-06-06
+- Use Eto context menu for Choice dropdown (fixes Mac truncation)
+
+## [2.49.0.0] - 2026-06-06
+- WIP mac options buttons alignment and PCA
+
+## [2.48.0.0] - 2026-06-06
+- Fix macOS dropdown menu truncating Choice labels
+
+## [2.47.0.0] - 2026-06-06
+- Fix macOS option-widget value buttons: protrusion + "..." text
+
+## [2.46.0.0] - 2026-06-06
+- WIP mac options buttons alignment
 
 ## [2.45.0.0] - 2026-06-06
-- Docs: "Build & Publish" rewritten as a full developer/contributor guide.
+- docs: rewrite Build & Publish as a full developer/contributor guide
 
-## [2.42.0.0 – 2.44.0.0] - 2026-06-06
-- README updates (credits, usage).
+## [2.44.0.0] - 2026-06-06
+- Maintenance / re-tag (no separate code changes).
+
+## [2.43.0.0] - 2026-06-06
+- Update README.md
+- Update README.md
+- Update credits section in README.md
+
+## [2.42.0.0] - 2026-06-06
+- Update README.md
 
 ## [2.41.0.0] - 2026-06-06
-- **Repository consolidation.** Brought the native C++ engines (`nfp_nest`, `nest_physics`), the Grasshopper plugin + Rhino commands, the MkDocs documentation, and the Windows→Yak CI into a single repository. This is the modern repository baseline.
+- **Repository consolidation.** Imported the native C++ engines (`nfp_nest`, `nest_physics`), the Grasshopper plugin + Rhino commands, the MkDocs documentation and the Windows→Yak CI into a single repository — the modern baseline.
 
 ---
 
