@@ -100,6 +100,22 @@ is no universal winner on this axis — the theoretical "unit cleanup" has no pr
 content for rank selection. Reverted. (Multi-sheet pressure: the +sheetarea term already
 dominates = sheet count first; also fine.)
 
+### Config sweeps REFUTED (defaults already optimal at fixed budget, concave)
+edgeSamples: 0 → −0.15pp, 4 → −0.21pp vs default 2. populationSize: 20 → −0.61pp,
+50 → −0.84pp, 120 (the PRODUCTION default!) → −0.59pp vs 30. RECOMMENDATION: the GH
+plugin should send populationSize ~30, not 120 — at a fixed time budget the large
+population wastes budget on per-generation breadth instead of generations.
+
+## HEADLINE (fixed 10s budget, engine defaults each side, 5 seeds, mode 1 gravity)
+post-bugfix engine with old defaults  →  final engine (S1-S5 + Q1/Q4b/Q5 defaults):
+- rects:   util_strip .8832 → .9010  (+1.78pp)
+- concave: util_strip .6433 → .6792  (+3.59pp)
+- rings:   .5305 → .5305 (strip width is host-arrangement-bound; the in-hole packing
+  improvement is real — see holetest2 probe — but invisible to this metric)
+Plus the two correctness fixes: BEFORE this branch, concave layouts could contain parts
+placed exactly on top of each other (overlap ~107k mm^2 on the concave dataset) and the
+inner/outer cache collision silently corrupted feasible regions. SVGs: out/final_svg/.
+
 ### Q2 scope finding: hole-fill WORKS post-fix, but FRAGMENTS the hole
 Probe (out/holetest.txt, holetest2.txt): a filler IS placed inside a host's hole (the
 thenIterate hole-IFP children survive the union as feasible islands — the Type-collision
