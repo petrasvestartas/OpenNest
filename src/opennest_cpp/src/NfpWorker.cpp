@@ -54,6 +54,82 @@ namespace {
         std::vector<std::shared_ptr<NFP>> sheetNfp;
     };
 
+    // ---- fast squeeze-mode hull scoring (S3) -------------------------------------
+    // Replicates getHull (D3::polygonHull monotone chain) + polygonArea exactly, but
+    // merges two PRE-SORTED point sets per candidate instead of re-sorting every call.
+
+    struct HullPt { double x, y; };
+
+    inline bool hullPtLess(const HullPt& a, const HullPt& b) {
+        if (a.x != b.x) return a.x < b.x;
+        return a.y < b.y;
+    }
+
+    /// Monotone-chain upper hull indices over sorted pts (flipY=true => lower hull).
+    /// Identical cross-product expression and pop condition as D3::computeUpperHullIndexes.
+    void upperHullIndexes(const std::vector<HullPt>& pts, bool flipY, std::vector<int>& out) {
+        int n = static_cast<int>(pts.size());
+        out.clear();
+        out.resize(2);
+        out[0] = 0;
+        out[1] = 1;
+        int size = 2;
+        auto Y = [&](int i) { return flipY ? -pts[i].y : pts[i].y; };
+        for (int i = 2; i < n; ++i) {
+            while (size > 1) {
+                int a = out[size - 2], b = out[size - 1];
+                double cr = (pts[b].x - pts[a].x) * (Y(i) - Y(a)) -
+                            (Y(b) - Y(a)) * (pts[i].x - pts[a].x);
+                if (cr <= 0) --size;
+                else break;
+            }
+            if (size >= static_cast<int>(out.size())) out.resize(size + 1);
+            out[size++] = i;
+        }
+        out.resize(size);
+    }
+
+    /// |convex hull area| of sortedA ∪ (sortedB + (dx,dy)). Equivalent to
+    /// fabs(polygonArea(*getHull(all points))) — same hull vertex sequence (D3 emits
+    /// upper hull right-to-left then lower hull left-to-right) and same shoelace order.
+    double hullAreaMergedSorted(const std::vector<HullPt>& A, const std::vector<HullPt>& B,
+                                double dx, double dy, std::vector<HullPt>& merged,
+                                std::vector<int>& upper, std::vector<int>& lower) {
+        merged.clear();
+        merged.reserve(A.size() + B.size());
+        size_t ia = 0, ib = 0;
+        while (ia < A.size() && ib < B.size()) {
+            HullPt bb{B[ib].x + dx, B[ib].y + dy};
+            if (hullPtLess(bb, A[ia])) { merged.push_back(bb); ++ib; }
+            else { merged.push_back(A[ia]); ++ia; }
+        }
+        for (; ia < A.size(); ++ia) merged.push_back(A[ia]);
+        for (; ib < B.size(); ++ib) merged.push_back({B[ib].x + dx, B[ib].y + dy});
+        if (merged.size() < 3) return 0;
+
+        upperHullIndexes(merged, false, upper);
+        upperHullIndexes(merged, true, lower);
+        bool skipLeft = lower[0] == upper[0];
+        bool skipRight = lower.back() == upper.back();
+
+        // Walk the hull sequence (no materialization) accumulating the same cyclic
+        // shoelace sum as GeometryUtil::polygonArea (j = previous point).
+        int lstart = skipLeft ? 1 : 0;
+        int lend = static_cast<int>(lower.size()) - (skipRight ? 1 : 0);
+        int total = static_cast<int>(upper.size()) + (lend - lstart);
+        auto hullAt = [&](int k) -> const HullPt& {
+            int u = static_cast<int>(upper.size());
+            return k < u ? merged[upper[u - 1 - k]] : merged[lower[lstart + (k - u)]];
+        };
+        double area = 0;
+        for (int i = 0, j = total - 1; i < total; j = i++) {
+            const HullPt& pj = hullAt(j);
+            const HullPt& pi = hullAt(i);
+            area += (pj.x + pi.x) * (pj.y - pi.y);
+        }
+        return std::fabs(0.5 * area);
+    }
+
     /// Find a strictly interior point of a loop (area-weighted centroid, falling back
     /// to points between edge midpoints and the centroid). Returns false if none found.
     bool interiorPointOf(const Clipper2Lib::Path64& loop, Clipper2Lib::Point64& out) {
@@ -1007,12 +1083,17 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
 
             PolygonBounds allbounds;
             bool useHull = false;
+            std::vector<HullPt> sortedAllPts;   // squeeze: layout hull, pre-sorted once per part
             if (config.placementType == PlacementTypeEnum::gravity || config.placementType == PlacementTypeEnum::box) {
                 allbounds = GeometryUtil::getPolygonBounds(allpoints);
             } else {
                 auto hullResult = getHull(allpoints);
                 allpoints = *hullResult;
                 useHull = true;
+                sortedAllPts.reserve(allpoints.length());
+                for (n = 0; n < allpoints.length(); n++)
+                    sortedAllPts.push_back({allpoints[n].x, allpoints[n].y});
+                std::sort(sortedAllPts.begin(), sortedAllPts.end(), hullPtLess);
             }
 
             double gravityCx = allbounds.x + allbounds.width / 2.0;
@@ -1133,6 +1214,17 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
                 const double abMaxX = allbounds.x + allbounds.width;
                 const double abMaxY = allbounds.y + allbounds.height;
 
+                // Squeeze: part points sorted once per rotation candidate; per-position
+                // hull = merge of the two pre-sorted sets (thread-local scratch).
+                std::vector<HullPt> sortedPartPts, hullScratch;
+                std::vector<int> upperScratch, lowerScratch;
+                if (!bboxScoring) {
+                    sortedPartPts.reserve(candPart->length());
+                    for (int mm = 0; mm < candPart->length(); mm++)
+                        sortedPartPts.push_back({(*candPart)[mm].x, (*candPart)[mm].y});
+                    std::sort(sortedPartPts.begin(), sortedPartPts.end(), hullPtLess);
+                }
+
                 for (int jj = 0; jj < static_cast<int>(localFinalNfpList.size()); jj++) {
                     auto& nf = localFinalNfpList[jj];
                     for (int kk = 0; kk < nf.length(); kk++) {
@@ -1164,12 +1256,8 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
                                 area += config.gravityWeight * dist;
                             }
                         } else {
-                            auto localpoints = clone(allpoints);
-                            for (int mm = 0; mm < candPart->length(); mm++) {
-                                localpoints->AddPoint(Point((*candPart)[mm].x + sx, (*candPart)[mm].y + sy));
-                            }
-                            auto hullLocal = getHull(*localpoints);
-                            area = std::fabs(GeometryUtil::polygonArea(*hullLocal));
+                            area = hullAreaMergedSorted(sortedAllPts, sortedPartPts, sx, sy,
+                                                        hullScratch, upperScratch, lowerScratch);
                         }
 
                         if (!localMinArea.has_value() ||
@@ -1494,6 +1582,20 @@ void NfpWorker::compactPlacements(
             const double abMaxX = allbounds.x + allbounds.width;
             const double abMaxY = allbounds.y + allbounds.height;
 
+            // Squeeze: pre-sort the other-parts points and this part's points once per ci.
+            std::vector<HullPt> sortedAllPts, sortedPartPts, hullScratch;
+            std::vector<int> upperScratch, lowerScratch;
+            if (!bboxScoring) {
+                sortedAllPts.reserve(allpoints.length());
+                for (int m = 0; m < allpoints.length(); m++)
+                    sortedAllPts.push_back({allpoints[m].x, allpoints[m].y});
+                std::sort(sortedAllPts.begin(), sortedAllPts.end(), hullPtLess);
+                sortedPartPts.reserve(part->length());
+                for (int m = 0; m < part->length(); m++)
+                    sortedPartPts.push_back({(*part)[m].x, (*part)[m].y});
+                std::sort(sortedPartPts.begin(), sortedPartPts.end(), hullPtLess);
+            }
+
             // Score one candidate shift (scalar min/max for box/gravity — identical math
             // to the old 8-point polygon + getPolygonBounds, no allocation).
             auto scoreShift = [&](double sx, double sy) -> double {
@@ -1516,12 +1618,8 @@ void NfpWorker::compactPlacements(
                     }
                 } else {
                     // Squeeze mode: hull-area scoring (rewards interlocking)
-                    auto localpoints = clone(allpoints);
-                    for (int m = 0; m < part->length(); m++) {
-                        localpoints->AddPoint(Point((*part)[m].x + sx, (*part)[m].y + sy));
-                    }
-                    auto hull = getHull(*localpoints);
-                    area = std::fabs(GeometryUtil::polygonArea(*hull));
+                    area = hullAreaMergedSorted(sortedAllPts, sortedPartPts, sx, sy,
+                                                hullScratch, upperScratch, lowerScratch);
                 }
                 return area;
             };
