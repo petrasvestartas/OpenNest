@@ -5,6 +5,7 @@
 #include <chrono>
 #include <thread>
 #include <atomic>
+#include <unordered_set>
 
 namespace nest {
 
@@ -1006,6 +1007,14 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
                         if (innerNfp[0]->length() == 0) {
                             throw std::runtime_error("sheetNfp[0] has 0 points");
                         }
+                        // Memoize the clipper conversion of the sheet IFP per (source,
+                        // rotation) — it is recomputed identically for every duplicate
+                        // part / repeated rotation otherwise. Populated HERE (serial
+                        // Phase A) so the candidate threads only read the map.
+                        uint64_t ck = makeClipKey(trialPart->source.value_or(-1), trialPart->Rotation);
+                        if (!sheetNfpClipperCache.count(ck)) {
+                            sheetNfpClipperCache[ck] = innerNfpToClipperCoordinates(innerNfp, config);
+                        }
                         rotationCandidates.push_back({trialPart, innerNfp});
                         if (!config.tryAllRotations) break;
                     }
@@ -1127,8 +1136,10 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
                 auto& sheetNfp = cand.sheetNfp;
                 auto& result = candResults[ci];
 
-                // Convert sheet NFP to clipper coordinates
-                auto candClipperSheetNfp = innerNfpToClipperCoordinates(sheetNfp, config);
+                // Sheet IFP in clipper coordinates — memoized in Phase A (read-only here)
+                const auto& candClipperSheetNfp =
+                    sheetNfpClipperCache.at(makeClipKey(candPart->source.value_or(-1), candPart->Rotation));
+                (void)sheetNfp;
 
                 // Build outer NFP union — INCREMENTALLY (deepnest's clipCache scheme):
                 // a cached entry for this (source, rotation) key holds the union over
@@ -1711,8 +1722,9 @@ void NfpWorker::BackgroundStart(DataInfo d) {
         d.sheets[i]->children = d.sheetchildren[i];
     }
 
-    // preprocess
+    // preprocess — O(1) dedup via key set (inpairs was a linear scan inside the pair loop)
     std::vector<NfpPair> pairs;
+    std::unordered_set<uint64_t> pairKeys;
 
     for (size_t i = 0; i < parts.size(); i++) {
         auto& B = parts[i];
@@ -1732,7 +1744,8 @@ void NfpWorker::BackgroundStart(DataInfo d) {
             doc.ARotation = A->Rotation;
             doc.BRotation = B->Rotation;
 
-            if (!inpairs(key, pairs) && !window.db->has(doc)) {
+            uint64_t pk = makeProcessKey(key.Asource, key.Bsource, key.ARotation, key.BRotation);
+            if (pairKeys.insert(pk).second && !window.db->has(doc)) {
                 pairs.push_back(key);
             }
         }
@@ -1769,7 +1782,9 @@ SheetPlacement NfpWorker::evaluateCandidate(DataInfo d) {
     // NOTE: d.sheets already have Id/source/children assigned by the caller (read-only here).
 
     // Build the set of part-pair NFPs this candidate needs that aren't already cached.
+    // O(1) dedup via key set (inpairs was a linear scan inside the pair loop).
     std::vector<NfpPair> pairs;
+    std::unordered_set<uint64_t> pairKeys;
     for (size_t i = 0; i < parts.size(); i++) {
         auto& B = parts[i];
         for (size_t j = 0; j < i; j++) {
@@ -1788,7 +1803,8 @@ SheetPlacement NfpWorker::evaluateCandidate(DataInfo d) {
             doc.ARotation = A->Rotation;
             doc.BRotation = B->Rotation;
 
-            if (!inpairs(key, pairs) && !window.db->has(doc)) {
+            uint64_t pk = makeProcessKey(key.Asource, key.Bsource, key.ARotation, key.BRotation);
+            if (pairKeys.insert(pk).second && !window.db->has(doc)) {
                 pairs.push_back(key);
             }
         }
