@@ -53,6 +53,60 @@ namespace {
         std::shared_ptr<NFP> rotatedPart;
         std::vector<std::shared_ptr<NFP>> sheetNfp;
     };
+
+    /// Find a strictly interior point of a loop (area-weighted centroid, falling back
+    /// to points between edge midpoints and the centroid). Returns false if none found.
+    bool interiorPointOf(const Clipper2Lib::Path64& loop, Clipper2Lib::Point64& out) {
+        if (loop.size() < 3) return false;
+        double cx = 0, cy = 0, a2 = 0;
+        for (size_t i = 0, j = loop.size() - 1; i < loop.size(); j = i++) {
+            double cr = static_cast<double>(loop[j].x) * loop[i].y -
+                        static_cast<double>(loop[i].x) * loop[j].y;
+            a2 += cr;
+            cx += (static_cast<double>(loop[j].x) + loop[i].x) * cr;
+            cy += (static_cast<double>(loop[j].y) + loop[i].y) * cr;
+        }
+        if (a2 != 0) {
+            Clipper2Lib::Point64 c(static_cast<int64_t>(cx / (3.0 * a2)),
+                                   static_cast<int64_t>(cy / (3.0 * a2)));
+            if (Clipper2Lib::PointInPolygon(c, loop) == Clipper2Lib::PointInPolygonResult::IsInside) {
+                out = c;
+                return true;
+            }
+            // fallback: probe between each edge midpoint and the centroid
+            for (size_t i = 0, j = loop.size() - 1; i < loop.size(); j = i++) {
+                Clipper2Lib::Point64 m((loop[i].x + loop[j].x) / 2, (loop[i].y + loop[j].y) / 2);
+                Clipper2Lib::Point64 probe((m.x + c.x) / 2, (m.y + c.y) / 2);
+                if (Clipper2Lib::PointInPolygon(probe, loop) ==
+                    Clipper2Lib::PointInPolygonResult::IsInside) {
+                    out = probe;
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /// Clipper2's MinkowskiSum is a boundary sweep (union of edge quads): its result is an
+    /// annulus whose interior CW loop can be an ARTIFACT (B in deep overlap inside A —
+    /// forbidden, not a hole). A CW loop is a genuine NFP hole (pocket where B fits) only
+    /// if B placed inside it does NOT overlap A. Ac = scaled rotated A; negBc = scaled
+    /// NEGATED rotated B (exactly as fed to MinkowskiSum); refPt = interior point of the
+    /// loop in the same (pre-B[0]-shift) frame.
+    bool isGenuineNfpHole(const Clipper2Lib::Path64& Ac, const Clipper2Lib::Path64& negBc,
+                          const Clipper2Lib::Point64& refPt) {
+        Clipper2Lib::Path64 bAt;
+        bAt.reserve(negBc.size());
+        // original B vertex = -negB; B placed with its reference (origin) at refPt
+        for (auto& p : negBc) bAt.emplace_back(refPt.x - p.x, refPt.y - p.y);
+        Clipper2Lib::Paths64 inter = Clipper2Lib::Intersect(
+            Clipper2Lib::Paths64{Ac}, Clipper2Lib::Paths64{bAt}, Clipper2Lib::FillRule::NonZero);
+        double interArea = 0;
+        for (auto& p : inter) interArea += std::fabs(Clipper2Lib::Area(p));
+        double aArea = std::fabs(Clipper2Lib::Area(Ac));
+        double bArea = std::fabs(Clipper2Lib::Area(bAt));
+        return interArea <= 1e-4 * std::min(aArea, bArea);
+    }
 } // anonymous namespace
 
 // --- Static member initialization ---
@@ -86,6 +140,7 @@ NFP NfpWorker::shiftPolygon(const NFP& p, const PlacementItem& shift) {
 std::shared_ptr<NFP> NfpWorker::clone(const NFP& nfp) {
     auto newnfp = std::make_shared<NFP>();
     newnfp->source = nfp.source;
+    newnfp->forbiddenLobe = nfp.forbiddenLobe;
     newnfp->Points.reserve(nfp.length());
     for (int i = 0; i < nfp.length(); i++) {
         newnfp->AddPoint(Point(nfp[i].x, nfp[i].y));
@@ -95,6 +150,7 @@ std::shared_ptr<NFP> NfpWorker::clone(const NFP& nfp) {
         for (size_t i = 0; i < nfp.children.size(); i++) {
             auto& child = nfp.children[i];
             auto newchild = std::make_shared<NFP>();
+            newchild->forbiddenLobe = child->forbiddenLobe;
             newchild->Points.reserve(child->length());
             for (int j = 0; j < child->length(); j++) {
                 newchild->AddPoint(Point((*child)[j].x, (*child)[j].y));
@@ -197,10 +253,13 @@ NFP NfpWorker::toNestCoordinates(const Clipper2Lib::Path64& polygon, double scal
 std::vector<Clipper2Lib::Path64> NfpWorker::nfpToClipperCoordinates(NFP& nfp, double clipperScale) {
     std::vector<Clipper2Lib::Path64> clipperNfp;
 
-    // children first
+    // children first. Holes get hole-winding (positive SVGNest area); forbidden lobes
+    // (extra disjoint regions of a multi-region NFP) get OUTER winding (negative), so
+    // they survive the downstream NonZero union as forbidden area instead of cancelling.
     if (!nfp.children.empty()) {
         for (size_t j = 0; j < nfp.children.size(); j++) {
-            if (GeometryUtil::polygonArea(*nfp.children[j]) < 0) {
+            double carea = GeometryUtil::polygonArea(*nfp.children[j]);
+            if (nfp.children[j]->forbiddenLobe ? (carea > 0) : (carea < 0)) {
                 nfp.children[j]->reverse();
             }
             auto childNfp = ClipperUtil::ScaleUpPaths(*nfp.children[j], clipperScale);
@@ -221,12 +280,16 @@ std::vector<Clipper2Lib::Path64> NfpWorker::nfpToClipperCoordinates(NFP& nfp, do
 std::vector<Clipper2Lib::Path64> NfpWorker::nfpToClipperWithShift(const NFP& nfp, double clipperScale, double dx, double dy) {
     std::vector<Clipper2Lib::Path64> clipperNfp;
 
-    // children first (holes)
+    // children first: holes need positive winding, forbidden lobes (extra regions of a
+    // multi-region NFP) need OUTER (negative) winding so the NonZero union keeps them
+    // as forbidden area instead of cancelling them like holes.
     if (!nfp.children.empty()) {
         for (size_t j = 0; j < nfp.children.size(); j++) {
             auto& child = *nfp.children[j];
-            if (GeometryUtil::polygonArea(child) < 0) {
-                // Need positive winding — reverse during conversion
+            double carea = GeometryUtil::polygonArea(child);
+            bool needReverse = child.forbiddenLobe ? (carea > 0) : (carea < 0);
+            if (needReverse) {
+                // Reverse during conversion
                 Clipper2Lib::Path64 childPath;
                 childPath.reserve(child.Points.size());
                 for (int k = static_cast<int>(child.Points.size()) - 1; k >= 0; k--) {
@@ -317,16 +380,39 @@ std::vector<std::shared_ptr<NFP>> NfpWorker::Process2(NFP& A, NFP& B, int type) 
 
     callCounter++;
 
-    // Convert result to NFP (concatenate all outer paths, matching original behavior)
+    // Convert result to NFP. The convolution can return SEVERAL outer loops (multi-region
+    // concave NFP). The old code concatenated them into one self-intersecting ring; instead
+    // keep the largest as the primary outer and the rest as forbiddenLobe children.
     auto ret = std::make_shared<NFP>();
-    for (const auto& outerPath : convResult.outerPaths) {
-        for (size_t i = 0; i + 1 < outerPath.size(); i += 2) {
-            ret->AddPoint(Point(outerPath[i], outerPath[i + 1]));
+    {
+        std::vector<std::shared_ptr<NFP>> outers;
+        outers.reserve(convResult.outerPaths.size());
+        for (const auto& outerPath : convResult.outerPaths) {
+            auto o = std::make_shared<NFP>();
+            o->Points.reserve(outerPath.size() / 2);
+            for (size_t i = 0; i + 1 < outerPath.size(); i += 2) {
+                o->AddPoint(Point(outerPath[i], outerPath[i + 1]));
+            }
+            if (o->length() >= 3) outers.push_back(o);
+        }
+        size_t primary = 0;
+        double bestArea = -1;
+        for (size_t i = 0; i < outers.size(); i++) {
+            double a = std::fabs(GeometryUtil::polygonArea(*outers[i]));
+            if (a > bestArea) { bestArea = a; primary = i; }
+        }
+        if (!outers.empty()) {
+            ret->Points = outers[primary]->Points;
+            for (size_t i = 0; i < outers.size(); i++) {
+                if (i == primary) continue;
+                outers[i]->forbiddenLobe = true;
+                ret->children.push_back(outers[i]);
+            }
         }
     }
 
     // Parse holes into NFP children
-    ret->children.reserve(convResult.holes.size());
+    ret->children.reserve(ret->children.size() + convResult.holes.size());
     for (const auto& holePath : convResult.holes) {
         auto child = std::make_shared<NFP>();
         child->Points.reserve(holePath.size() / 2);
@@ -468,25 +554,50 @@ std::shared_ptr<NFP> NfpWorker::getOuterNfp(NFP& A, NFP& B, int type, bool insid
         // CONCAVE parts (Clipper sweeps `pattern` along `path`), which caused overlapping placements.
         auto solution = Clipper2Lib::MinkowskiSum(Ac, Bc, true);
 
+        // Keep ALL loops (multi-region concave NFP): primary = largest CCW loop, other
+        // CCW loops = forbidden lobes, CW loops = holes/pockets. See process() — same fix.
         std::shared_ptr<NFP> clipperNfpResult;
         std::optional<double> largestAreaVal;
+        int primaryIdx = -1;
         for (size_t i = 0; i < solution.size(); i++) {
             NFP n = toNestCoordinates(solution[i], 10000000);
             double sarea = GeometryUtil::polygonArea(n);
             if (!largestAreaVal.has_value() || *largestAreaVal > sarea) {
                 clipperNfpResult = std::make_shared<NFP>(n);
                 largestAreaVal = sarea;
+                primaryIdx = static_cast<int>(i);
             }
         }
         if (!clipperNfpResult) return nullptr;
+        for (size_t i = 0; i < solution.size(); i++) {
+            if (static_cast<int>(i) == primaryIdx) continue;
+            auto child = std::make_shared<NFP>(toNestCoordinates(solution[i], 10000000));
+            if (child->length() < 3) continue;
+            if (GeometryUtil::polygonArea(*child) < 0) {
+                child->forbiddenLobe = true;   // extra forbidden region — always keep
+            } else {
+                // CW loop: keep only genuine pockets, drop deep-overlap artifacts
+                // (see process() — identical reasoning).
+                Clipper2Lib::Point64 ip;
+                if (!interiorPointOf(solution[i], ip) || !isGenuineNfpHole(Ac, Bc, ip)) continue;
+            }
+            clipperNfpResult->children.push_back(child);
+        }
 
         for (int i = 0; i < clipperNfpResult->length(); i++) {
             (*clipperNfpResult)[i].x += B[0].x;
             (*clipperNfpResult)[i].y += B[0].y;
         }
+        for (auto& child : clipperNfpResult->children) {
+            for (int j = 0; j < child->length(); j++) {
+                (*child)[j].x += B[0].x;
+                (*child)[j].y += B[0].y;
+            }
+        }
 
         auto wrapper = std::make_shared<NFP>();
         wrapper->Points = clipperNfpResult->Points;
+        wrapper->children = clipperNfpResult->children;
         nfp = {wrapper};
     }
 
@@ -519,6 +630,11 @@ std::vector<std::shared_ptr<NFP>> NfpWorker::getInnerNfp(NFP& A, NFP& B, int typ
         cacheKey.B = B.source.value();
         cacheKey.ARotation = 0;
         cacheKey.BRotation = B.Rotation;
+        // Type=1 marks INNER-fit entries. Sheet and part `source` numbering both start
+        // at 0, so without the Type tag the IFP key (sheet0, partJ, 0, rot) COLLIDES
+        // with the outer pair-NFP key (part0@0°, partJ@rot) — whichever inserted first
+        // poisoned the other (wrong feasible regions / lost placements).
+        cacheKey.Type = 1;
 
         auto res = window.db->find(cacheKey, true);
         if (!res.empty()) {
@@ -569,6 +685,7 @@ std::vector<std::shared_ptr<NFP>> NfpWorker::getInnerNfp(NFP& A, NFP& B, int typ
         // Convert IFP children to int64 paths for kScale-precision operations
         Clipper2Lib::Paths64 ifpPaths;
         for (auto& child : nfpResult->children) {
+            if (child->forbiddenLobe) continue;   // extra outer regions are not IFP loops
             Clipper2Lib::Path64 p;
             p.reserve(child->length());
             for (int j = 0; j < child->length(); j++) {
@@ -687,6 +804,7 @@ std::vector<std::shared_ptr<NFP>> NfpWorker::getInnerNfp(NFP& A, NFP& B, int typ
             doc.B = B.source.value();
             doc.ARotation = 0;
             doc.BRotation = B.Rotation;
+            doc.Type = 1;   // inner-fit entry (see find above — avoids outer-key collision)
             doc.nfp = f;
             window.db->insert(doc, true);
         }
@@ -707,16 +825,25 @@ std::vector<std::shared_ptr<NFP>> NfpWorker::getInnerNfp(NFP& A, NFP& B, int typ
             B.source.value_or(-1),B.Rotation,B[0].x,B[0].y,bbx0,bby0,bbx1,bby1,abx0,aby0,abx1,aby1,mnx,mny,mxx,mxy);
     }
 #endif
+    // Drop forbiddenLobe children — extra outer regions of the frame NFP are not IFP loops.
+    std::vector<std::shared_ptr<NFP>> ifpLoops;
+    ifpLoops.reserve(nfpResult->children.size());
+    for (auto& child : nfpResult->children) {
+        if (!child->forbiddenLobe) ifpLoops.push_back(child);
+    }
+    if (ifpLoops.empty()) return {};
+
     if (A.source.has_value() && B.source.has_value()) {
         DbCacheKey doc;
         doc.A = A.source.value();
         doc.B = B.source.value();
         doc.ARotation = 0;
         doc.BRotation = B.Rotation;
-        doc.nfp = nfpResult->children;
+        doc.Type = 1;   // inner-fit entry (see find above — avoids outer-key collision)
+        doc.nfp = ifpLoops;
         window.db->insert(doc, true);
     }
-    return nfpResult->children;
+    return ifpLoops;
 }
 
 // =============================================================================
@@ -850,6 +977,12 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
 
                 if (!hasPosition) {
                     throw std::runtime_error("position null");
+                }
+                if (std::getenv("NFP_VERIFY_PLACE") != nullptr) {
+                    std::cerr << "[NFP_VERIFY_PLACE] first id=" << part->Id
+                              << " src=" << part->source.value_or(-1)
+                              << " rot=" << part->Rotation
+                              << " pos=(" << position.x << "," << position.y << ")\n";
                 }
                 parts[i] = part;
                 placements.push_back(position);
@@ -1092,6 +1225,48 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
             // end rotation candidates evaluation
 
             if (hasPosition) {
+                // Debug guard (env NFP_VERIFY_PLACE=1): the winning position's reference point
+                // must lie ON the combined-NFP boundary (contact) or outside — strictly inside
+                // means the part overlaps an already-placed part. Dumps the offending geometry.
+                if (std::getenv("NFP_VERIFY_PLACE") != nullptr) {
+                    Clipper2Lib::Point64 refPt(
+                        static_cast<int64_t>(std::llround(((*winnerPart)[0].x + position.x) * config.clipperScale)),
+                        static_cast<int64_t>(std::llround(((*winnerPart)[0].y + position.y) * config.clipperScale)));
+                    int winding = 0;
+                    bool onBoundary = false;
+                    for (auto& pth : winnerCombinedNfp) {
+                        auto rIn = Clipper2Lib::PointInPolygon(refPt, pth);
+                        if (rIn == Clipper2Lib::PointInPolygonResult::IsOn) { onBoundary = true; break; }
+                        if (rIn == Clipper2Lib::PointInPolygonResult::IsInside)
+                            winding += Clipper2Lib::Area(pth) > 0 ? 1 : -1;
+                    }
+                    std::cerr << "[NFP_VERIFY_PLACE] place id=" << winnerPart->Id
+                              << " src=" << winnerPart->source.value_or(-1)
+                              << " rot=" << winnerPart->Rotation
+                              << " pos=(" << position.x << "," << position.y << ")"
+                              << " placed_before=" << placed.size()
+                              << " unionPaths=" << winnerCombinedNfp.size()
+                              << " refPt=" << (onBoundary ? "ON" : (winding != 0 ? "INSIDE" : "OUT"))
+                              << "\n";
+                    if (!onBoundary && winding != 0) {
+                        std::cerr << "[NFP_VERIFY_PLACE] BUG: part src=" << winnerPart->source.value_or(-1)
+                                  << " rot=" << winnerPart->Rotation
+                                  << " placed STRICTLY INSIDE combined NFP at (" << position.x
+                                  << ", " << position.y << "), placed_count=" << placed.size()
+                                  << ", union paths=" << winnerCombinedNfp.size() << "\n";
+                        for (auto& pth : winnerCombinedNfp) {
+                            std::cerr << "  union path area=" << (Clipper2Lib::Area(pth) /
+                                         (config.clipperScale * config.clipperScale)) << ":";
+                            for (auto& pt : pth)
+                                std::cerr << " " << (pt.x / config.clipperScale) << ","
+                                          << (pt.y / config.clipperScale);
+                            std::cerr << "\n";
+                        }
+                        std::cerr << "  ref point: " << ((*winnerPart)[0].x + position.x) << ","
+                                  << ((*winnerPart)[0].y + position.y) << "\n";
+                    }
+                }
+
                 // Update clipCache with winning rotation's union data
                 if (EnableCaches) {
                     uint64_t winKey = makeClipKey(winnerPart->source.value_or(-1), winnerPart->Rotation);
@@ -1571,7 +1746,12 @@ void NfpWorker::thenIterate(NfpPair& processed, const std::vector<std::shared_pt
         }
 
         if (processed.nfp) {
-            processed.nfp->children.clear();
+            // Replace pocket/hole children with the precise hole inner-NFPs, but KEEP
+            // forbidden lobes — they are real exclusion regions of a multi-region NFP.
+            processed.nfp->children.erase(
+                std::remove_if(processed.nfp->children.begin(), processed.nfp->children.end(),
+                               [](const std::shared_ptr<NFP>& c) { return !c->forbiddenLobe; }),
+                processed.nfp->children.end());
             for (auto& c : cnfp) {
                 processed.nfp->children.push_back(c);
             }
@@ -1684,24 +1864,71 @@ NfpPair NfpWorker::process(NfpPair pair) {
     auto solution = Clipper2Lib::MinkowskiSum(Ac, Bc, true);
     std::shared_ptr<NFP> clipperNfp;
     std::optional<double> largestArea;
+    int primaryIndex = -1;
 
+    // Primary outer = the largest CCW loop (most-negative SVGNest-signed area). A concave
+    // NFP is often MULTI-REGION: keep EVERY other loop too — CCW loops are additional
+    // forbidden lobes (forbiddenLobe=true), CW loops are holes/pockets where B fits.
+    // The old "largest loop only" selection dropped real exclusion zones, letting parts
+    // be placed inside a discarded lobe (exactly on top of an identical part).
     for (size_t i = 0; i < solution.size(); i++) {
         NFP n = toNestCoordinates(solution[i], 10000000);
         double sarea = -GeometryUtil::polygonArea(n);
         if (!largestArea.has_value() || *largestArea < sarea) {
             clipperNfp = std::make_shared<NFP>(n);
             largestArea = sarea;
+            primaryIndex = static_cast<int>(i);
         }
+    }
+    if (!clipperNfp) {
+        pair.A = nullptr;
+        pair.B = nullptr;
+        pair.nfp = nullptr;
+        return pair;
+    }
+    for (size_t i = 0; i < solution.size(); i++) {
+        if (static_cast<int>(i) == primaryIndex) continue;
+        auto child = std::make_shared<NFP>(toNestCoordinates(solution[i], 10000000));
+        if (child->length() < 3) continue;
+        if (GeometryUtil::polygonArea(*child) < 0) {
+            // CCW loop = additional forbidden region (multi-lobe NFP) — always keep.
+            child->forbiddenLobe = true;
+        } else {
+            // CW loop = either a genuine NFP hole (pocket where B fits without overlap)
+            // or the deep-overlap interior ARTIFACT of the quad-union sweep. Validate by
+            // actually testing overlap; drop artifacts (their area stays covered by the
+            // outer loop's fill, so dropping is exactly the old correct convex behavior).
+            Clipper2Lib::Point64 ip;
+            if (!interiorPointOf(solution[i], ip) || !isGenuineNfpHole(Ac, Bc, ip)) continue;
+        }
+        clipperNfp->children.push_back(child);
     }
 
     for (int i = 0; i < clipperNfp->length(); i++) {
         (*clipperNfp)[i].x += B[0].x;
         (*clipperNfp)[i].y += B[0].y;
     }
+    for (auto& child : clipperNfp->children) {
+        for (int i = 0; i < child->length(); i++) {
+            (*child)[i].x += B[0].x;
+            (*child)[i].y += B[0].y;
+        }
+    }
 
     pair.A = nullptr;
     pair.B = nullptr;
     pair.nfp = clipperNfp;
+
+    if (std::getenv("NFP_DUMP_PAIR") != nullptr && clipperNfp) {
+        std::cerr << "[NFP_DUMP_PAIR] (" << pair.Asource << "," << pair.Bsource
+                  << "," << pair.ARotation << "," << pair.BRotation << ") "
+                  << clipperNfp->length() << " pts, area="
+                  << GeometryUtil::polygonArea(*clipperNfp) << ", loops_in_solution="
+                  << solution.size() << ":";
+        for (int i = 0; i < clipperNfp->length(); i++)
+            std::cerr << " " << (*clipperNfp)[i].x << "," << (*clipperNfp)[i].y;
+        std::cerr << "\n";
+    }
 
     return pair;
 }

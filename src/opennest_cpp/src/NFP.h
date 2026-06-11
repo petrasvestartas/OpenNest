@@ -33,6 +33,15 @@ public:
     std::vector<bool> exactFlags;  // per-vertex "exact" flag (lazy: empty = all exact)
     std::vector<std::shared_ptr<NFP>> children;
 
+    // Role of a CHILD loop inside an outer-NFP result. Concave NFPs are often
+    // MULTI-REGION: Clipper's Minkowski union can return several disjoint (or
+    // pinch-touching) loops. The extra forbidden regions are stored as children
+    // with forbiddenLobe=true; children with forbiddenLobe=false are holes
+    // (pockets where B legitimately fits). Discarding the extra loops (the old
+    // "largest area only" behavior) let parts be placed inside a dropped lobe —
+    // including exactly on top of an identical part.
+    bool forbiddenLobe = false;
+
     NFP() = default;
 
     // --- Properties matching C# ---
