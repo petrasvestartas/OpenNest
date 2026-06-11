@@ -116,6 +116,39 @@ Plus the two correctness fixes: BEFORE this branch, concave layouts could contai
 placed exactly on top of each other (overlap ~107k mm^2 on the concave dataset) and the
 inner/outer cache collision silently corrupted feasible regions. SVGs: out/final_svg/.
 
+## Phase 3 — literature-driven levers (GitHub survey: libnest2d, jagua-rs/sparrow, TOPOS,
+## Burke touching-perimeter; full survey in the session notes)
+
+### P3-contact KEPT: touching-perimeter near-tie re-ranking (+ tol widened to 1%)
+Among candidates within 1% of the best bbox/gravity score, pick the max contact length
+(part boundary collinear-overlap vs placed parts + sheet; AABB prefilter; 64-eval cap).
+Cumulative: rects .9010 -> .9099 (+0.89pp), concave +0.3pp pooled; wall unchanged.
+Implements the #1-ROI technique from the literature survey (Burke et al.; reported
++4-8pp there — our gravity term already captured part of that headroom).
+
+### P3 es4-under-contact REFUTED
+edgeSamples 4 with contact scoring: rects neutral, concave batches split (-0.47/+0.26,
+pooled -0.1pp). Vertex+2-sample candidates remain sufficient.
+
+### MEASUREMENT WALL: concave 5-seed batch variance is ~±0.4pp
+Levers below ~0.5pp on concave now need 10+ seeds or a harder dataset (ESICUP SHIRTS/
+SWIM via the file: loader) to resolve.
+
+### Remaining (un-implemented) levers from the survey, by expected ROI
+1. **Warm-start 2-opt / beam search on insertion order** (+3-6pp lit.): needs placeParts
+   to accept a prefix layout (cache partial layouts, re-place only the suffix after a
+   swap). ~400-700 LOC restructuring. Biggest remaining NFP-compatible lever.
+2. **Pocket/waste minimization scoring** (+2-4pp lit.): score -= w * trapped-void area
+   (convex-hull-of-union minus union, incremental hull). ~250 LOC.
+3. **Pairwise sliding compaction along NFP edges** (+1-3pp lit.): true slide (not just
+   re-place at vertices, which our compaction already does).
+4. **Two-phase exploration->compression with strip shrink + separation** (sparrow,
+   +8-15pp lit.): the next PARADIGM, not an increment — overlap-penalty search with
+   width shrinking. NOTE: this is architecturally the nest_physics engine on the other
+   research branch; the NFP engine's natural endpoint may be feeding its layouts to a
+   physics-style compressor as a finishing pass.
+Calibration from ESICUP literature: BL+GA ~80-83%, NFP+TOPOS ~87-89%, sparrow ~88-90%.
+
 ### Q2 scope finding: hole-fill WORKS post-fix, but FRAGMENTS the hole
 Probe (out/holetest.txt, holetest2.txt): a filler IS placed inside a host's hole (the
 thenIterate hole-IFP children survive the union as feasible islands — the Type-collision
