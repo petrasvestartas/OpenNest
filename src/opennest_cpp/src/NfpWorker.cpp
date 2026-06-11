@@ -131,6 +131,65 @@ namespace {
         return std::fabs(0.5 * area);
     }
 
+    // ---- touching-perimeter (contact-length) scoring ------------------------------
+    // Length of the candidate part's boundary that lies ON other placed parts' (or the
+    // sheet's) boundary. Used to re-rank near-tie candidates: the bbox/gravity score is
+    // indifferent among flush positions (and among ALL positions inside a hole island);
+    // contact length prefers snug, interlocking placements (Burke et al. touching
+    // perimeter — literature reports +4-8% utilization over bbox-only scoring).
+
+    /// Overlap length between segment (p1,p2) and segment (q1,q2) when collinear
+    /// within `tol` (perpendicular distance of both endpoints).
+    double segmentContact(const Point& p1, const Point& p2,
+                          const Point& q1, const Point& q2, double tol) {
+        const double dx = q2.x - q1.x, dy = q2.y - q1.y;
+        const double len2 = dx * dx + dy * dy;
+        if (len2 < tol * tol) return 0;
+        const double invLen = 1.0 / std::sqrt(len2);
+        const double d1 = std::fabs(((p1.x - q1.x) * dy - (p1.y - q1.y) * dx) * invLen);
+        if (d1 > tol) return 0;
+        const double d2 = std::fabs(((p2.x - q1.x) * dy - (p2.y - q1.y) * dx) * invLen);
+        if (d2 > tol) return 0;
+        double t1 = ((p1.x - q1.x) * dx + (p1.y - q1.y) * dy) / len2;
+        double t2 = ((p2.x - q1.x) * dx + (p2.y - q1.y) * dy) / len2;
+        if (t1 > t2) std::swap(t1, t2);
+        const double o = std::min(t2, 1.0) - std::max(t1, 0.0);
+        return o > 0 ? o * std::sqrt(len2) : 0;
+    }
+
+    /// Contact length of `part` shifted by (sx,sy) against all placed parts + the sheet.
+    double contactLength(const NFP& part, double sx, double sy,
+                         const std::vector<std::shared_ptr<NFP>>& placed,
+                         const std::vector<PlacementItem>& placements,
+                         const NFP& sheet, double tol) {
+        double contact = 0;
+        const int pn = part.length();
+        for (int i = 0, ip = pn - 1; i < pn; ip = i++) {
+            Point a1(part[ip].x + sx, part[ip].y + sy);
+            Point a2(part[i].x + sx, part[i].y + sy);
+            const double aMinX = std::min(a1.x, a2.x) - tol, aMaxX = std::max(a1.x, a2.x) + tol;
+            const double aMinY = std::min(a1.y, a2.y) - tol, aMaxY = std::max(a1.y, a2.y) + tol;
+
+            for (size_t m = 0; m < placed.size(); m++) {
+                const NFP& ob = *placed[m];
+                const double ox = placements[m].x, oy = placements[m].y;
+                const int on = ob.length();
+                for (int j = 0, jp = on - 1; j < on; jp = j++) {
+                    Point b1(ob[jp].x + ox, ob[jp].y + oy);
+                    Point b2(ob[j].x + ox, ob[j].y + oy);
+                    if (std::max(b1.x, b2.x) < aMinX || std::min(b1.x, b2.x) > aMaxX ||
+                        std::max(b1.y, b2.y) < aMinY || std::min(b1.y, b2.y) > aMaxY) continue;
+                    contact += segmentContact(a1, a2, b1, b2, tol);
+                }
+            }
+            const int sn = sheet.length();
+            for (int j = 0, jp = sn - 1; j < sn; jp = j++) {
+                contact += segmentContact(a1, a2, sheet[jp], sheet[j], tol);
+            }
+        }
+        return contact;
+    }
+
     /// Find a strictly interior point of a loop (area-weighted centroid, falling back
     /// to points between edge midpoints and the centroid). Returns false if none found.
     bool interiorPointOf(const Clipper2Lib::Path64& loop, Clipper2Lib::Point64& out) {
@@ -1241,6 +1300,13 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
                     std::sort(sortedPartPts.begin(), sortedPartPts.end(), hullPtLess);
                 }
 
+                // Contact re-ranking (non-faithful, bbox modes): collect every candidate,
+                // then among near-ties of the primary score pick the max contact length.
+                struct CandPos { double sx, sy, area, width; };
+                const bool useContact = bboxScoring && !config.faithful;
+                std::vector<CandPos> contactCands;
+                if (useContact) contactCands.reserve(256);
+
                 for (int jj = 0; jj < static_cast<int>(localFinalNfpList.size()); jj++) {
                     auto& nf = localFinalNfpList[jj];
                     for (int kk = 0; kk < nf.length(); kk++) {
@@ -1276,6 +1342,11 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
                                                         hullScratch, upperScratch, lowerScratch);
                         }
 
+                        if (useContact) {
+                            contactCands.push_back({sx, sy, area, rectWidth});
+                            continue;
+                        }
+
                         if (!localMinArea.has_value() ||
                             area < *localMinArea ||
                             (GeometryUtil::_almostEqual(*localMinArea, area) && (!localMinX.has_value() || sx < *localMinX)) ||
@@ -1294,6 +1365,36 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
                             }
                         }
                     }
+                }
+
+                if (useContact && !contactCands.empty()) {
+                    // Primary score: min area. Near-ties (within 0.2%) re-ranked by
+                    // touching perimeter; remaining ties by min x, then min y.
+                    double minArea = contactCands[0].area;
+                    for (auto& c : contactCands) minArea = std::min(minArea, c.area);
+                    const double tieTol = 0.002 * std::max(1.0, std::fabs(minArea));
+
+                    const CandPos* best = nullptr;
+                    double bestContact = -1;
+                    int evals = 0;
+                    for (auto& c : contactCands) {
+                        if (c.area > minArea + tieTol) continue;
+                        double ct = (evals++ < 64)
+                                        ? contactLength(*candPart, c.sx, c.sy, placed,
+                                                        placements, *sheet, 1e-3)
+                                        : 0;   // cap: degenerate flush runs stay bounded
+                        if (!best || ct > bestContact + 1e-9 ||
+                            (std::fabs(ct - bestContact) <= 1e-9 &&
+                             (c.sx < best->sx || (GeometryUtil::_almostEqual(c.sx, best->sx) && c.sy < best->sy)))) {
+                            best = &c;
+                            bestContact = ct;
+                        }
+                    }
+                    result.bestArea = best->area;
+                    result.bestWidth = best->width;
+                    result.bestX = best->sx;
+                    result.bestY = best->sy;
+                    result.valid = true;
                 }
 
                 // Fill the winning PlacementItem + union copy ONCE after the scan (identical
