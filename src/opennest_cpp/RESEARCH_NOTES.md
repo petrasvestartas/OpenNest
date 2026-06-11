@@ -85,6 +85,21 @@ gravityWeight distance now measured to the SHEET ORIGIN instead of the layout ce
 200^2 hole (previously fragmented). Note rings util_strip is pinned at .5305 by the host
 arrangement (fillers in holes don't change strip width) — it can't see this lever.
 
+### Q5 KEPT: compactionPasses 2 -> 4 (default)
+10 seeds at fixed budget: 4 >= 2 everywhere (concave +0.6pp, rects +0.2pp); 2 was the
+WORST of {0,2,4} (comp0 also beats comp2 on concave — compaction at fixed wall budget
+trades GA generations for polish; 4 is the safe pick, never worse than 2).
+
+### Q6 REFUTED (both variants): fitness re-normalization
+Q6a (pure width fraction): rects +0.72pp, rings +0.23pp, BUT concave −0.4pp in two
+independent seed batches. Q6c (normalized (2wFrac+hFrac)/3): rects −0.70pp, concave net
+negative. INSIGHT: the GA is RANK-based, so the old "mixed-unit" fitness already ranks
+single-sheet layouts by its dominant term 2w+h (gravity minarea); the variants merely
+RE-WEIGHTED the objective (pure-w helps rects / hurts concave; ~w+h the reverse). There
+is no universal winner on this axis — the theoretical "unit cleanup" has no practical
+content for rank selection. Reverted. (Multi-sheet pressure: the +sheetarea term already
+dominates = sheet count first; also fine.)
+
 ### Q2 scope finding: hole-fill WORKS post-fix, but FRAGMENTS the hole
 Probe (out/holetest.txt, holetest2.txt): a filler IS placed inside a host's hole (the
 thenIterate hole-IFP children survive the union as feasible islands — the Type-collision
