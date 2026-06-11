@@ -62,7 +62,7 @@ NestConfig toConfig(const NfpParams* p) {
         // Placement-cost knobs: -1 keeps the NestConfig default; >=0 overrides (0 = off, faster).
         if (p->edgeSamples >= 0)      c.edgeSamples = p->edgeSamples;
         if (p->compactionPasses >= 0) c.compactionPasses = p->compactionPasses;
-        c.tryAllRotations = p->tryAllRotations != 0;
+        if (p->tryAllRotations >= 0)  c.tryAllRotations = p->tryAllRotations != 0;
     }
     return c;
 }

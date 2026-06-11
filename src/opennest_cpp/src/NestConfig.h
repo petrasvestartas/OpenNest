@@ -40,9 +40,13 @@ struct NestConfig {
 
     // Placement improvements
     int edgeSamples = 2;         // 0=off, N=samples per edge of feasible region
-    int compactionPasses = 2;    // 0=off, N=compaction iterations after placement
-    double gravityWeight = 0.1;  // 0=off, weight for centroid-distance scoring
-    bool tryAllRotations = false;   // try all valid rotations per part, pick best
+    // Q5 MEASURED (10 seeds, fixed 10s budget): 4 passes >= 2 everywhere (concave +0.6pp,
+    // rects +0.2pp); 2 was the worst of {0,2,4}.
+    int compactionPasses = 4;    // 0=off, N=compaction iterations after placement
+    double gravityWeight = 0.1;  // 0=off, weight for origin-distance scoring (Q4b)
+    // Q1 MEASURED (fixed 10s budget): best-rotation beats first-valid-rotation
+    // (concave +1.78pp, rects +0.35pp) — affordable after the Phase-1 speedups.
+    bool tryAllRotations = true;    // try all valid rotations per part, pick best
 
     // Evaluate a whole GA generation's candidates concurrently on a shared (thread-safe) NFP cache,
     // instead of one candidate per NestIterate. Candidate 0 warms the cache (its NFP precompute is

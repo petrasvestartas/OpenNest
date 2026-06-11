@@ -41,7 +41,7 @@ struct Args {
     std::string dataset = "concave";
     int seed = 7, seeds = 1;
     int mode = 1, placement = 1, gens = 20, pop = 30, rotations = 4;
-    int tryAllRotations = 0, edgeSamples = -1, compaction = -1;
+    int tryAllRotations = -1, edgeSamples = -1, compaction = -1; // -1 = engine default
     int useParallel = 1, maxSheets = 0, nSheets = 4;
     double spacing = 0.0, timeBudget = 0.0;
     double sheetW = 0, sheetH = 0; // 0 = dataset default
