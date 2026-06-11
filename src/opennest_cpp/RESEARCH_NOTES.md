@@ -78,6 +78,13 @@ rects .8871→.8871 (=), concave .6701→.6677 (−0.24pp), rings = . No gain an
 concave regression — at a 10s budget the GA already explores the order axis; deterministic
 seeds just displace early mutation diversity. Reverted.
 
+### Q4b KEPT: origin-anchored gravity pull (non-faithful)
+gravityWeight distance now measured to the SHEET ORIGIN instead of the layout centroid
+(placeParts + compaction). vs q1-allrot: rects .8871→.8991 (+1.20pp), concave
+.6701→.6733 (+0.32pp), rings = . Probe: 4 fillers now pack 2x2 corner-aligned inside a
+200^2 hole (previously fragmented). Note rings util_strip is pinned at .5305 by the host
+arrangement (fillers in holes don't change strip width) — it can't see this lever.
+
 ### Q2 scope finding: hole-fill WORKS post-fix, but FRAGMENTS the hole
 Probe (out/holetest.txt, holetest2.txt): a filler IS placed inside a host's hole (the
 thenIterate hole-IFP children survive the union as feasible islands — the Type-collision

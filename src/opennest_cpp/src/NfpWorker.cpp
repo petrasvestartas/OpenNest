@@ -1105,8 +1105,13 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
                 std::sort(sortedAllPts.begin(), sortedAllPts.end(), hullPtLess);
             }
 
-            double gravityCx = allbounds.x + allbounds.width / 2.0;
-            double gravityCy = allbounds.y + allbounds.height / 2.0;
+            // Q4b: anchor the gravity pull at the SHEET ORIGIN, not the layout centroid
+            // (non-faithful). Among candidates with equal bbox growth — e.g. every
+            // position inside a hole island — the centroid pull scattered parts
+            // mid-region and fragmented holes; an origin pull packs bottom-left both
+            // globally and inside islands.
+            double gravityCx = config.faithful ? (allbounds.x + allbounds.width / 2.0) : 0.0;
+            double gravityCy = config.faithful ? (allbounds.y + allbounds.height / 2.0) : 0.0;
 
             minwidth = std::nullopt;
             minarea = std::nullopt;
@@ -1579,8 +1584,9 @@ void NfpWorker::compactPlacements(
             }
             PolygonBounds partbounds = GeometryUtil::getPolygonBounds(partpoints);
 
-            double gravityCx = allbounds.x + allbounds.width / 2.0;
-            double gravityCy = allbounds.y + allbounds.height / 2.0;
+            // Q4b: origin-anchored gravity (see placeParts) — same pull during compaction.
+            double gravityCx = config.faithful ? (allbounds.x + allbounds.width / 2.0) : 0.0;
+            double gravityCy = config.faithful ? (allbounds.y + allbounds.height / 2.0) : 0.0;
 
             std::optional<double> bestArea;
             std::optional<double> bestX, bestY;
