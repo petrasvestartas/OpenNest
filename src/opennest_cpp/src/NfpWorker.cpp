@@ -1372,7 +1372,7 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
                     // touching perimeter; remaining ties by min x, then min y.
                     double minArea = contactCands[0].area;
                     for (auto& c : contactCands) minArea = std::min(minArea, c.area);
-                    const double tieTol = 0.002 * std::max(1.0, std::fabs(minArea));
+                    const double tieTol = 0.01 * std::max(1.0, std::fabs(minArea));
 
                     const CandPos* best = nullptr;
                     double bestContact = -1;
