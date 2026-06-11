@@ -1105,44 +1105,40 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
                 std::optional<double> localMinX;
                 std::optional<double> localMinY;
 
+                const bool bboxScoring = (config.placementType == PlacementTypeEnum::gravity ||
+                                          config.placementType == PlacementTypeEnum::box);
+                // Hoisted scalar bounds of the placed-parts layout (box/gravity scoring is
+                // pure min/max arithmetic — no per-candidate polygon allocation).
+                const double abMinX = allbounds.x, abMinY = allbounds.y;
+                const double abMaxX = allbounds.x + allbounds.width;
+                const double abMaxY = allbounds.y + allbounds.height;
+
                 for (int jj = 0; jj < static_cast<int>(localFinalNfpList.size()); jj++) {
                     auto& nf = localFinalNfpList[jj];
                     for (int kk = 0; kk < nf.length(); kk++) {
-                        PlacementItem shiftvector;
-                        shiftvector.id = candPart->Id;
-                        shiftvector.x = nf[kk].x - (*candPart)[0].x;
-                        shiftvector.y = nf[kk].y - (*candPart)[0].y;
-                        shiftvector.source = candPart->source.value();
-                        shiftvector.rotation = candPart->Rotation;
+                        const double sx = nf[kk].x - (*candPart)[0].x;
+                        const double sy = nf[kk].y - (*candPart)[0].y;
 
                         double area = 0;
-                        PolygonBounds rectbounds;
-                        bool hasRectbounds = false;
+                        double rectWidth = 0;
 
-                        if (config.placementType == PlacementTypeEnum::gravity || config.placementType == PlacementTypeEnum::box) {
-                            NFP poly;
-                            poly.AddPoint(Point(allbounds.x, allbounds.y));
-                            poly.AddPoint(Point(allbounds.x + allbounds.width, allbounds.y));
-                            poly.AddPoint(Point(allbounds.x + allbounds.width, allbounds.y + allbounds.height));
-                            poly.AddPoint(Point(allbounds.x, allbounds.y + allbounds.height));
-
-                            poly.AddPoint(Point(partbounds.x + shiftvector.x, partbounds.y + shiftvector.y));
-                            poly.AddPoint(Point(partbounds.x + partbounds.width + shiftvector.x, partbounds.y + shiftvector.y));
-                            poly.AddPoint(Point(partbounds.x + partbounds.width + shiftvector.x, partbounds.y + partbounds.height + shiftvector.y));
-                            poly.AddPoint(Point(partbounds.x + shiftvector.x, partbounds.y + partbounds.height + shiftvector.y));
-
-                            rectbounds = GeometryUtil::getPolygonBounds(poly);
-                            hasRectbounds = true;
+                        if (bboxScoring) {
+                            const double cminx = std::min(abMinX, partbounds.x + sx);
+                            const double cminy = std::min(abMinY, partbounds.y + sy);
+                            const double cmaxx = std::max(abMaxX, partbounds.x + partbounds.width + sx);
+                            const double cmaxy = std::max(abMaxY, partbounds.y + partbounds.height + sy);
+                            rectWidth = cmaxx - cminx;
+                            const double rectHeight = cmaxy - cminy;
 
                             if (config.placementType == PlacementTypeEnum::gravity) {
-                                area = 2.0 * rectbounds.width + 1.0 * rectbounds.height;
+                                area = 2.0 * rectWidth + 1.0 * rectHeight;
                             } else {
-                                area = rectbounds.width * rectbounds.height;
+                                area = rectWidth * rectHeight;
                             }
 
                             if (config.gravityWeight > 0) {
-                                double partCx = partbounds.x + partbounds.width / 2.0 + shiftvector.x;
-                                double partCy = partbounds.y + partbounds.height / 2.0 + shiftvector.y;
+                                double partCx = partbounds.x + partbounds.width / 2.0 + sx;
+                                double partCy = partbounds.y + partbounds.height / 2.0 + sy;
                                 double dist = std::sqrt((partCx - gravityCx) * (partCx - gravityCx) +
                                                         (partCy - gravityCy) * (partCy - gravityCy));
                                 area += config.gravityWeight * dist;
@@ -1150,35 +1146,44 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
                         } else {
                             auto localpoints = clone(allpoints);
                             for (int mm = 0; mm < candPart->length(); mm++) {
-                                localpoints->AddPoint(Point((*candPart)[mm].x + shiftvector.x, (*candPart)[mm].y + shiftvector.y));
+                                localpoints->AddPoint(Point((*candPart)[mm].x + sx, (*candPart)[mm].y + sy));
                             }
                             auto hullLocal = getHull(*localpoints);
                             area = std::fabs(GeometryUtil::polygonArea(*hullLocal));
-                            shiftvector.hull = hullLocal;
-                            shiftvector.hullsheet = getHull(*sheet);
                         }
 
                         if (!localMinArea.has_value() ||
                             area < *localMinArea ||
-                            (GeometryUtil::_almostEqual(*localMinArea, area) && (!localMinX.has_value() || shiftvector.x < *localMinX)) ||
-                            (GeometryUtil::_almostEqual(*localMinArea, area) && localMinX.has_value() && GeometryUtil::_almostEqual(shiftvector.x, *localMinX) && shiftvector.y < localMinY)) {
+                            (GeometryUtil::_almostEqual(*localMinArea, area) && (!localMinX.has_value() || sx < *localMinX)) ||
+                            (GeometryUtil::_almostEqual(*localMinArea, area) && localMinX.has_value() && GeometryUtil::_almostEqual(sx, *localMinX) && sy < localMinY)) {
                             localMinArea = area;
                             result.bestArea = area;
-                            result.bestWidth = hasRectbounds ? rectbounds.width : 0;
-                            result.bestX = shiftvector.x;
-                            result.bestY = shiftvector.y;
-                            result.position = shiftvector;
-                            result.part = candPart;
-                            result.combinedNfp = unionResult;
+                            result.bestWidth = bboxScoring ? rectWidth : 0;
+                            result.bestX = sx;
+                            result.bestY = sy;
                             result.valid = true;
-                            if (!localMinX.has_value() || shiftvector.x < *localMinX) {
-                                localMinX = shiftvector.x;
+                            if (!localMinX.has_value() || sx < *localMinX) {
+                                localMinX = sx;
                             }
-                            if (!localMinY.has_value() || shiftvector.y < *localMinY) {
-                                localMinY = shiftvector.y;
+                            if (!localMinY.has_value() || sy < *localMinY) {
+                                localMinY = sy;
                             }
                         }
                     }
+                }
+
+                // Fill the winning PlacementItem + union copy ONCE after the scan (identical
+                // outcome — previously rebuilt per improving candidate).
+                if (result.valid) {
+                    PlacementItem shiftvector;
+                    shiftvector.id = candPart->Id;
+                    shiftvector.x = result.bestX;
+                    shiftvector.y = result.bestY;
+                    shiftvector.source = candPart->source.value();
+                    shiftvector.rotation = candPart->Rotation;
+                    result.position = shiftvector;
+                    result.part = candPart;
+                    result.combinedNfp = std::move(unionResult);
                 }
             };
 
@@ -1451,111 +1456,78 @@ void NfpWorker::compactPlacements(
 
             std::optional<double> bestArea;
             std::optional<double> bestX, bestY;
-            PlacementItem bestPos;
+            double bestSx = 0, bestSy = 0;
             bool foundBetter = false;
+
+            const bool bboxScoring = (config.placementType == PlacementTypeEnum::gravity ||
+                                      config.placementType == PlacementTypeEnum::box);
+            const double abMinX = allbounds.x, abMinY = allbounds.y;
+            const double abMaxX = allbounds.x + allbounds.width;
+            const double abMaxY = allbounds.y + allbounds.height;
+
+            // Score one candidate shift (scalar min/max for box/gravity — identical math
+            // to the old 8-point polygon + getPolygonBounds, no allocation).
+            auto scoreShift = [&](double sx, double sy) -> double {
+                double area;
+                if (bboxScoring) {
+                    const double cminx = std::min(abMinX, partbounds.x + sx);
+                    const double cminy = std::min(abMinY, partbounds.y + sy);
+                    const double cmaxx = std::max(abMaxX, partbounds.x + partbounds.width + sx);
+                    const double cmaxy = std::max(abMaxY, partbounds.y + partbounds.height + sy);
+                    const double rw = cmaxx - cminx, rh = cmaxy - cminy;
+                    area = (config.placementType == PlacementTypeEnum::gravity)
+                               ? 2.0 * rw + 1.0 * rh
+                               : rw * rh;
+                    if (config.gravityWeight > 0) {
+                        double partCx = partbounds.x + partbounds.width / 2.0 + sx;
+                        double partCy = partbounds.y + partbounds.height / 2.0 + sy;
+                        double dist = std::sqrt((partCx - gravityCx) * (partCx - gravityCx) +
+                                                (partCy - gravityCy) * (partCy - gravityCy));
+                        area += config.gravityWeight * dist;
+                    }
+                } else {
+                    // Squeeze mode: hull-area scoring (rewards interlocking)
+                    auto localpoints = clone(allpoints);
+                    for (int m = 0; m < part->length(); m++) {
+                        localpoints->AddPoint(Point((*part)[m].x + sx, (*part)[m].y + sy));
+                    }
+                    auto hull = getHull(*localpoints);
+                    area = std::fabs(GeometryUtil::polygonArea(*hull));
+                }
+                return area;
+            };
 
             for (int fi = 0; fi < static_cast<int>(feasibleList.size()); fi++) {
                 auto& nf = feasibleList[fi];
                 for (int k = 0; k < nf.length(); k++) {
-                    PlacementItem sv;
-                    sv.id = part->Id;
-                    sv.x = nf[k].x - (*part)[0].x;
-                    sv.y = nf[k].y - (*part)[0].y;
-                    sv.source = part->source.value();
-                    sv.rotation = part->Rotation;
-
-                    // Score candidate position
-                    double area;
-                    if (config.placementType == PlacementTypeEnum::gravity || config.placementType == PlacementTypeEnum::box) {
-                        // Bounding-box scoring
-                        NFP poly;
-                        poly.AddPoint(Point(allbounds.x, allbounds.y));
-                        poly.AddPoint(Point(allbounds.x + allbounds.width, allbounds.y));
-                        poly.AddPoint(Point(allbounds.x + allbounds.width, allbounds.y + allbounds.height));
-                        poly.AddPoint(Point(allbounds.x, allbounds.y + allbounds.height));
-
-                        poly.AddPoint(Point(partbounds.x + sv.x, partbounds.y + sv.y));
-                        poly.AddPoint(Point(partbounds.x + partbounds.width + sv.x, partbounds.y + sv.y));
-                        poly.AddPoint(Point(partbounds.x + partbounds.width + sv.x, partbounds.y + partbounds.height + sv.y));
-                        poly.AddPoint(Point(partbounds.x + sv.x, partbounds.y + partbounds.height + sv.y));
-
-                        auto rectbounds = GeometryUtil::getPolygonBounds(poly);
-                        if (config.placementType == PlacementTypeEnum::gravity) {
-                            area = 2.0 * rectbounds.width + 1.0 * rectbounds.height;
-                        } else {
-                            area = rectbounds.width * rectbounds.height;
-                        }
-
-                        if (config.gravityWeight > 0) {
-                            double partCx = partbounds.x + partbounds.width / 2.0 + sv.x;
-                            double partCy = partbounds.y + partbounds.height / 2.0 + sv.y;
-                            double dist = std::sqrt((partCx - gravityCx) * (partCx - gravityCx) +
-                                                    (partCy - gravityCy) * (partCy - gravityCy));
-                            area += config.gravityWeight * dist;
-                        }
-                    } else {
-                        // Squeeze mode: hull-area scoring (rewards interlocking)
-                        auto localpoints = clone(allpoints);
-                        for (int m = 0; m < part->length(); m++) {
-                            localpoints->AddPoint(Point((*part)[m].x + sv.x, (*part)[m].y + sv.y));
-                        }
-                        auto hull = getHull(*localpoints);
-                        area = std::fabs(GeometryUtil::polygonArea(*hull));
-                    }
+                    const double sx = nf[k].x - (*part)[0].x;
+                    const double sy = nf[k].y - (*part)[0].y;
+                    double area = scoreShift(sx, sy);
 
                     if (!bestArea.has_value() ||
                         area < *bestArea ||
-                        (GeometryUtil::_almostEqual(*bestArea, area) && (!bestX.has_value() || sv.x < *bestX)) ||
-                        (GeometryUtil::_almostEqual(*bestArea, area) && bestX.has_value() && GeometryUtil::_almostEqual(sv.x, *bestX) && sv.y < bestY)) {
+                        (GeometryUtil::_almostEqual(*bestArea, area) && (!bestX.has_value() || sx < *bestX)) ||
+                        (GeometryUtil::_almostEqual(*bestArea, area) && bestX.has_value() && GeometryUtil::_almostEqual(sx, *bestX) && sy < bestY)) {
                         bestArea = area;
-                        bestPos = sv;
+                        bestSx = sx;
+                        bestSy = sy;
                         foundBetter = true;
-                        if (!bestX.has_value() || sv.x < *bestX) bestX = sv.x;
-                        if (!bestY.has_value() || sv.y < *bestY) bestY = sv.y;
+                        if (!bestX.has_value() || sx < *bestX) bestX = sx;
+                        if (!bestY.has_value() || sy < *bestY) bestY = sy;
                     }
                 }
             }
 
             // 5. Update if better position found
             if (foundBetter) {
-                // Compute current score for comparison
-                double curArea;
-                if (config.placementType == PlacementTypeEnum::gravity || config.placementType == PlacementTypeEnum::box) {
-                    NFP curPoly;
-                    curPoly.AddPoint(Point(allbounds.x, allbounds.y));
-                    curPoly.AddPoint(Point(allbounds.x + allbounds.width, allbounds.y));
-                    curPoly.AddPoint(Point(allbounds.x + allbounds.width, allbounds.y + allbounds.height));
-                    curPoly.AddPoint(Point(allbounds.x, allbounds.y + allbounds.height));
-
-                    curPoly.AddPoint(Point(partbounds.x + placements[ci].x, partbounds.y + placements[ci].y));
-                    curPoly.AddPoint(Point(partbounds.x + partbounds.width + placements[ci].x, partbounds.y + placements[ci].y));
-                    curPoly.AddPoint(Point(partbounds.x + partbounds.width + placements[ci].x, partbounds.y + partbounds.height + placements[ci].y));
-                    curPoly.AddPoint(Point(partbounds.x + placements[ci].x, partbounds.y + partbounds.height + placements[ci].y));
-
-                    auto curRectBounds = GeometryUtil::getPolygonBounds(curPoly);
-                    if (config.placementType == PlacementTypeEnum::gravity) {
-                        curArea = 2.0 * curRectBounds.width + 1.0 * curRectBounds.height;
-                    } else {
-                        curArea = curRectBounds.width * curRectBounds.height;
-                    }
-                    if (config.gravityWeight > 0) {
-                        double partCx = partbounds.x + partbounds.width / 2.0 + placements[ci].x;
-                        double partCy = partbounds.y + partbounds.height / 2.0 + placements[ci].y;
-                        double dist = std::sqrt((partCx - gravityCx) * (partCx - gravityCx) +
-                                                (partCy - gravityCy) * (partCy - gravityCy));
-                        curArea += config.gravityWeight * dist;
-                    }
-                } else {
-                    // Squeeze mode: hull-area scoring
-                    auto localpoints = clone(allpoints);
-                    for (int m = 0; m < part->length(); m++) {
-                        localpoints->AddPoint(Point((*part)[m].x + placements[ci].x, (*part)[m].y + placements[ci].y));
-                    }
-                    auto hull = getHull(*localpoints);
-                    curArea = std::fabs(GeometryUtil::polygonArea(*hull));
-                }
-
+                double curArea = scoreShift(placements[ci].x, placements[ci].y);
                 if (*bestArea < curArea - 1e-6) {
+                    PlacementItem bestPos;
+                    bestPos.id = part->Id;
+                    bestPos.x = bestSx;
+                    bestPos.y = bestSy;
+                    bestPos.source = part->source.value();
+                    bestPos.rotation = part->Rotation;
                     placements[ci] = bestPos;
                     anyImproved = true;
                 }
