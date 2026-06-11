@@ -939,7 +939,10 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
                     r->Rotation = trialPart->Rotation + rotStep;
                     r->source = trialPart->source;
                     r->Id = trialPart->Id;
-                    if (r->Rotation > 360.0f) {
+                    // >= so 360 normalizes to 0 — a float key of 360 is a DIFFERENT bit
+                    // pattern than 0 and silently misses every rotation-keyed cache
+                    // (DbCacheKey, clipCache).
+                    if (r->Rotation >= 360.0f) {
                         r->Rotation = std::fmod(r->Rotation, 360.0f);
                     }
                     trialPart = r;
@@ -1046,11 +1049,28 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
                 // Convert sheet NFP to clipper coordinates
                 auto candClipperSheetNfp = innerNfpToClipperCoordinates(sheetNfp, config);
 
-                // Build outer NFP union
+                // Build outer NFP union — INCREMENTALLY (deepnest's clipCache scheme):
+                // a cached entry for this (source, rotation) key holds the union over
+                // placed[0..index]; seed the op with it and union only the parts placed
+                // since. Re-unioning placed[index] is idempotent (deepnest exact
+                // semantics). Cached unions are Execute outputs (already orientation-
+                // normalized) — added as Subjects directly, NEVER re-passed through
+                // nfpToClipperWithShift. clipCache is read here concurrently by the
+                // rotation-candidate threads and written ONLY on the main thread after
+                // join(), so the map is never mutated during the parallel section.
                 Clipper2Lib::Clipper64 clipperOp;
                 bool localError = false;
+                int startIndex = 0;
 
-                for (int jj = 0; jj < static_cast<int>(placed.size()); jj++) {
+                if (EnableCaches) {
+                    auto itc = clipCache.find(makeClipKey(candPart->source.value_or(-1), candPart->Rotation));
+                    if (itc != clipCache.end() && itc->second.index < static_cast<int>(placed.size())) {
+                        clipperOp.AddSubject(itc->second.nfpp);
+                        startIndex = itc->second.index;
+                    }
+                }
+
+                for (int jj = startIndex; jj < static_cast<int>(placed.size()); jj++) {
                     auto nfpRaw = getOuterNfp(*placed[jj], *candPart, 0);
                     if (!nfpRaw) {
                         localError = true;
@@ -1205,6 +1225,7 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
             }
 
             // Pick global best from candidate results
+            int winnerCi = -1;
             for (int ci = 0; ci < numCands; ci++) {
                 auto& r = candResults[ci];
                 if (!r.valid) continue;
@@ -1218,7 +1239,7 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
                     position = r.position;
                     hasPosition = true;
                     winnerPart = r.part;
-                    winnerCombinedNfp = r.combinedNfp;
+                    winnerCi = ci;
                     if (!minx.has_value() || r.bestX < *minx) {
                         minx = r.bestX;
                     }
@@ -1234,6 +1255,7 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
                 // must lie ON the combined-NFP boundary (contact) or outside — strictly inside
                 // means the part overlaps an already-placed part. Dumps the offending geometry.
                 if (std::getenv("NFP_VERIFY_PLACE") != nullptr) {
+                    winnerCombinedNfp = candResults[winnerCi].combinedNfp;
                     Clipper2Lib::Point64 refPt(
                         static_cast<int64_t>(std::llround(((*winnerPart)[0].x + position.x) * config.clipperScale)),
                         static_cast<int64_t>(std::llround(((*winnerPart)[0].y + position.y) * config.clipperScale)));
@@ -1272,13 +1294,20 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
                     }
                 }
 
-                // Update clipCache with winning rotation's union data
+                // Cache EVERY valid candidate's union (not just the winner): each union
+                // covers placed[0..size-1] for its (source, rotation) key, so duplicate-
+                // quantity parts and losing rotations of later parts seed from it and
+                // union only the parts placed since (deepnest's incremental clipCache).
+                // Written on the main thread strictly after the candidate threads joined.
                 if (EnableCaches) {
-                    uint64_t winKey = makeClipKey(winnerPart->source.value_or(-1), winnerPart->Rotation);
-                    ClipCacheItem cacheItem;
-                    cacheItem.index = static_cast<int>(placed.size()) - 1;
-                    cacheItem.nfpp = winnerCombinedNfp;
-                    clipCache[winKey] = cacheItem;
+                    for (auto& r : candResults) {
+                        if (!r.valid) continue;
+                        ClipCacheItem cacheItem;
+                        cacheItem.index = static_cast<int>(placed.size()) - 1;
+                        cacheItem.nfpp = std::move(r.combinedNfp);
+                        clipCache[makeClipKey(r.part->source.value_or(-1), r.part->Rotation)] =
+                            std::move(cacheItem);
+                    }
                 }
 
                 part = winnerPart;
