@@ -1,0 +1,17 @@
+# 1 ring host (300x300, hole 200x200) + 4 fillers 80x80 - all 4 fit in the hole
+sheet 2000 1000
+part 1
+0 0
+300 0
+300 300
+0 300
+
+50 50
+250 50
+250 250
+50 250
+part 4
+0 0
+80 0
+80 80
+0 80

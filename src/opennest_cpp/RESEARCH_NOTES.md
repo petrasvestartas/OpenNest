@@ -44,5 +44,47 @@ Bench probes: `--probeNfp rotA rotB` (NFP loop dump + on-top containment check),
 `--dumpPlacements`.
 
 ## Baseline (post-fix)
-See `out/baseline.csv`. Headline (gens 5, pop 10): rects ~0.85-0.88 util_strip, concave ~0.61-0.63,
-rings ~0.53 (hole-fill unused — parts never nest inside part holes; Q2 target).
+See `out/baseline.csv` (gens 20, pop 30, seeds 7-47). Gravity is the best placement
+(rects .880, concave .636, rings .530); squeeze is 10-20x slower at equal-or-worse util.
+Hole-fill unused — parts never nest inside part holes (Q2 target).
+
+## Phase 1 — speed levers (all KEPT, all placement-bit-identical)
+
+| Lever | What | Wall effect (concave m0 gens10 pop20 unless noted) |
+|---|---|---|
+| S2 | scalar bbox scoring, lazy PlacementItem, dead hull stores deleted | gravity neutral; squeeze -20% |
+| S1 | incremental clipCache union read path (deepnest parity) + >=360 rotation-key normalization | rects -15%, concave -13%, rings -4% |
+| S3 | squeeze hull: pre-sorted merge + monotone chain (same D3 chain/shoelace) | squeeze -51% (cum. -68% vs pre-S2) |
+| S5 | sheetNfpClipperCache wired (IFP clipper conversion memoized); inpairs -> unordered_set | concave -17% cumulative vs pre-S1 |
+| S4 | thread pool | DEFERRED — mode-1 gen-parallel (production default) forces inner UseParallel=false; no spawn on the hot path |
+
+MEASURED (NFP_PROFILE, concave m0): placeParts = 80% of wall, only 68 NFP computes —
+remaining cost is the per-candidate Clipper Difference/Union Execute, i.e. the algorithm
+itself. Further whole-solve speed needs structural change (not micro-opt); Phase 2
+converts the won speed into quality at fixed --timeBudget instead.
+
+## Phase 2 — quality levers (fixed --timeBudget 10s, mode 1, gravity, 5 seeds)
+
+### Q1 KEPT (recommendation): tryAllRotations=true
+At fixed 10s budget (vs q1-control, same exe): rects .8836→.8871 (+0.35pp),
+concave .6523→.6701 (+1.78pp), rings .5306→.5305 (neutral). Phase-1 speedups made
+evaluating every rotation affordable; best-rotation beats first-valid-rotation.
+ACTION for production: flip the OpenNest plugin's default (the C-API just passes the
+flag through; faithful mode keeps it forced off). Bench experiments now run --tryAllRotations.
+
+### Q3 REFUTED: diverse seeded initial GA population
+width-desc/height-desc/irregularity-desc + 2 shuffles replacing 5 mutants-of-adam:
+rects .8871→.8871 (=), concave .6701→.6677 (−0.24pp), rings = . No gain anywhere, small
+concave regression — at a 10s budget the GA already explores the order axis; deterministic
+seeds just displace early mutation diversity. Reverted.
+
+### Q2 scope finding: hole-fill WORKS post-fix, but FRAGMENTS the hole
+Probe (out/holetest.txt, holetest2.txt): a filler IS placed inside a host's hole (the
+thenIterate hole-IFP children survive the union as feasible islands — the Type-collision
+fix unblocked this). BUT in-hole positions are scored by the GLOBAL bbox (indifferent
+among interior positions) + gravityWeight toward the LAYOUT centroid + tie-breaks on the
+rotation-dependent SHIFT value, so fillers scatter mid-hole and fragment it: 4x80^2
+fillers fit a 200^2 hole geometrically, only 2 land inside. The Q2 lever is therefore
+IN-ISLAND packing bias (absolute bottom-left position tie-break / origin-anchored
+gravity), not missing hole regions. addHoleFillRegions (part-in-part for parts placed
+ON the sheet) remains a separate, smaller lever.
