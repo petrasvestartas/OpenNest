@@ -130,6 +130,12 @@ Implements the #1-ROI technique from the literature survey (Burke et al.; report
 edgeSamples 4 with contact scoring: rects neutral, concave batches split (-0.47/+0.26,
 pooled -0.1pp). Vertex+2-sample candidates remain sufficient.
 
+### P3 hull-growth term REFUTED (w=1)
+score += w * hullArea(layout+part)/layoutDiag in bbox modes (squeeze-pressure at gravity
+speed, reusing the S3 merged-sorted hull): rects exactly neutral (.9099), concave batches
+split +0.44/-0.32 (pooled +0.06). Third lever in a row inside the concave noise band.
+Reverted (was env-gated NFP_HULL_W).
+
 ### MEASUREMENT WALL: concave 5-seed batch variance is ~±0.4pp
 Levers below ~0.5pp on concave now need 10+ seeds or a harder dataset (ESICUP SHIRTS/
 SWIM via the file: loader) to resolve.
