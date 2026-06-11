@@ -1,0 +1,11 @@
+# single T-shape, qty 4 — minimal repro for the duplicate-position overlap
+sheet 2000 1000
+part 4
+70 0
+130 0
+130 140
+200 140
+200 200
+0 200
+0 140
+70 140
