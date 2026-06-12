@@ -12,22 +12,14 @@ enum class PlacementTypeEnum {
 struct NestConfig {
     PlacementTypeEnum placementType = PlacementTypeEnum::box;
     double curveTolerance = 0.72;
-    double scale = 25;
     double clipperScale = 10000000;
-    bool exploreConcave = false;
     int mutationRate = 10;
     int populationSize = 120;
     int rotations = 4;
     double spacing = 10;
     double sheetSpacing = 0;
-    bool mergeLines = false;
     bool simplify = false;
-
-    // Port features (don't exist in the original DeepNest project)
-    bool clipByHull = false;
-    bool clipByRects = true;
     int seed = -1;
-    float rotation_limit = 360.0f;
 
     // Faithful mode (C-API mode 0): mirror the canonical C# GeneticAlgorithm.cs + Background.placeParts
     // fitness EXACTLY (same RNG call order, single elitism, canonical fitness) for parity verification.

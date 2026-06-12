@@ -44,11 +44,9 @@ NestConfig toConfig(const NfpParams* p) {
     c.clipperScale   = p->clipperScale > 0 ? p->clipperScale : 1e7;
     c.spacing        = p->spacing;
     c.sheetSpacing   = p->sheetSpacing;
-    c.rotation_limit = static_cast<float>(p->rotationLimit);
-    c.exploreConcave = p->exploreConcave != 0;
-    c.clipByHull     = p->clipByHull != 0;
-    c.clipByRects    = p->clipByRects != 0;
     c.simplify       = p->simplify != 0;
+    // (rotationLimit / exploreConcave / clipByHull / clipByRects remain in the C ABI for
+    // compatibility but map to nothing: their engine paths were dead code and removed.)
     c.faithful       = (p->mode == 0);   // mode 0 = faithful parity with the C# engine
     c.exactNfp       = (p->exactNfp != 0);
     c.parallelPopulation = (p->mode == 1) && (p->useParallel != 0);
@@ -328,6 +326,108 @@ NFP_API int nfp_nest(
 
     return readOutputs(ctx, instancePart, out_tx, out_ty, out_angle,
                        out_sheet_id, out_part_index, out_n_sheets, out_fitness);
+}
+
+NFP_API int nfp_pack(
+    int           part_count,
+    const int*    part_vertex_counts,
+    const double* part_xy,
+    const int*    part_quantities,
+    int           columns,
+    double        gap_x,
+    double        gap_y,
+    double        max_width,
+    double*       out_tx,
+    double*       out_ty,
+    double*       out_angle,
+    int*          out_sheet_id)
+{
+    if (part_count <= 0 || !part_vertex_counts || !part_xy ||
+        !out_tx || !out_ty || !out_angle || !out_sheet_id) return -1;
+    if (columns < 1) columns = 1;
+    const bool distanceMode = max_width > 0;
+
+    double x = 0, y = 0, rowH = 0;
+    int col = 0, k = 0;
+    size_t cur = 0;
+    for (int i = 0; i < part_count; i++) {
+        const int nv = part_vertex_counts[i];
+        double minx = 0, miny = 0, maxx = 0, maxy = 0;
+        for (int v = 0; v < nv; v++) {
+            const double px = part_xy[cur + 2 * v], py = part_xy[cur + 2 * v + 1];
+            if (v == 0) { minx = maxx = px; miny = maxy = py; }
+            else {
+                minx = std::min(minx, px); maxx = std::max(maxx, px);
+                miny = std::min(miny, py); maxy = std::max(maxy, py);
+            }
+        }
+        cur += static_cast<size_t>(nv) * 2;
+        const double w = maxx - minx, h = maxy - miny;
+
+        const int q = (part_quantities && part_quantities[i] > 0) ? part_quantities[i] : 1;
+        for (int c = 0; c < q; c++) {
+            // distance mode: wrap BEFORE placing if this part would overflow the row
+            if (distanceMode && col > 0 && (x + w) > max_width) {
+                col = 0; x = 0; y += rowH + gap_y; rowH = 0;
+            }
+            out_tx[k] = x - minx;   // land the part's min corner at (x, y)
+            out_ty[k] = y - miny;
+            out_angle[k] = 0.0;
+            out_sheet_id[k] = 0;
+            k++;
+            x += w + gap_x;
+            rowH = std::max(rowH, h);
+            col++;
+            // array mode: wrap AFTER a fixed number of columns
+            if (!distanceMode && col >= columns) {
+                col = 0; x = 0; y += rowH + gap_y; rowH = 0;
+            }
+        }
+    }
+    return k;
+}
+
+NFP_API int nfp_offset_polygon(
+    int           vertex_count,
+    const double* xy,
+    double        delta,
+    double        miter_limit,
+    int           max_out_vertices,
+    double*       out_xy)
+{
+    if (vertex_count < 3 || !xy || !out_xy || max_out_vertices < 0) return -1;
+    const double SCALE = 1e7;
+    Clipper2Lib::Path64 ring;
+    ring.reserve(vertex_count);
+    for (int i = 0; i < vertex_count; i++) {
+        // skip a duplicated closing vertex
+        if (i == vertex_count - 1 && vertex_count > 1 &&
+            xy[2 * i] == xy[0] && xy[2 * i + 1] == xy[1]) break;
+        ring.emplace_back(static_cast<int64_t>(std::llround(xy[2 * i] * SCALE)),
+                          static_cast<int64_t>(std::llround(xy[2 * i + 1] * SCALE)));
+    }
+    if (ring.size() < 3) return -1;
+
+    Clipper2Lib::Paths64 result = Clipper2Lib::InflatePaths(
+        Clipper2Lib::Paths64{ring}, delta * SCALE,
+        Clipper2Lib::JoinType::Miter, Clipper2Lib::EndType::Polygon,
+        miter_limit > 0 ? miter_limit : 2.0);
+    if (result.empty()) return 0;   // offset vanished (e.g. over-shrunk)
+
+    // Largest-area loop is the main result.
+    size_t best = 0;
+    double bestArea = -1;
+    for (size_t i = 0; i < result.size(); i++) {
+        const double a = std::fabs(Clipper2Lib::Area(result[i]));
+        if (a > bestArea) { bestArea = a; best = i; }
+    }
+    const int n = static_cast<int>(result[best].size());
+    if (n > max_out_vertices) return -n;   // caller's buffer too small: required size, negated
+    for (int i = 0; i < n; i++) {
+        out_xy[2 * i] = result[best][i].x / SCALE;
+        out_xy[2 * i + 1] = result[best][i].y / SCALE;
+    }
+    return n;
 }
 
 NFP_API void nfp_cancel(void)        { g_cancel = true; }

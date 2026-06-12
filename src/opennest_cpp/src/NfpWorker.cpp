@@ -291,29 +291,9 @@ namespace {
 bool NfpWorker::EnableCaches = true;
 bool NfpWorker::UseParallel = false;
 
-void NfpWorker::DisplayProgress(float p) {
-    if (displayProgress) {
-        displayProgress(p);
-    }
-}
-
 // =============================================================================
 // Simple utility methods
 // =============================================================================
-
-NFP NfpWorker::shiftPolygon(const NFP& p, const PlacementItem& shift) {
-    NFP shifted;
-    shifted.Points.reserve(p.length());
-    for (int i = 0; i < p.length(); i++) {
-        shifted.AddPoint(Point(p[i].x + shift.x, p[i].y + shift.y));
-    }
-    if (!p.children.empty()) {
-        for (size_t i = 0; i < p.children.size(); i++) {
-            shifted.children.push_back(std::make_shared<NFP>(shiftPolygon(*p.children[i], shift)));
-        }
-    }
-    return shifted;
-}
 
 std::shared_ptr<NFP> NfpWorker::clone(const NFP& nfp) {
     auto newnfp = std::make_shared<NFP>();
@@ -608,92 +588,6 @@ std::vector<std::shared_ptr<NFP>> NfpWorker::Process2(NFP& A, NFP& B, int type) 
     return res;
 }
 
-// =============================================================================
-// NFP computation — NewMinkowskiSum (via Clipper2)
-// =============================================================================
-
-std::vector<std::shared_ptr<NFP>> NfpWorker::NewMinkowskiSum(NFP& pattern, NFP& path, int type, bool useChilds, bool takeOnlyBiggestArea) {
-    uint64_t key = makeProcessKey(pattern.source.value_or(-1), path.source.value_or(-1), pattern.Rotation, path.Rotation);
-
-    bool cacheAllow = type != 1;
-    {
-        std::lock_guard<std::mutex> lock(*cacheMutex_);
-        if (cacheAllow && cacheProcess.count(key)) {
-            return cacheProcess[key];
-        }
-    }
-
-    auto ac = ClipperUtil::ScaleUpPaths(pattern, 10000000);
-    Clipper2Lib::Paths64 solution;
-
-    if (useChilds) {
-        auto bc = nfpToClipperCoordinates(path, 10000000);
-        for (auto& pathPts : bc) {
-            for (auto& pt : pathPts) {
-                pt.x *= -1;
-                pt.y *= -1;
-            }
-        }
-        // MinkowskiSum with multiple paths
-        for (auto& bpath : bc) {
-            auto partial = Clipper2Lib::MinkowskiSum(ac, bpath, true);
-            solution.insert(solution.end(), partial.begin(), partial.end());
-        }
-    } else {
-        auto bc = ClipperUtil::ScaleUpPaths(path, 10000000);
-        for (auto& pt : bc) {
-            pt.x *= -1;
-            pt.y *= -1;
-        }
-        solution = Clipper2Lib::MinkowskiSum(ac, bc, true);
-    }
-
-    std::shared_ptr<NFP> clipperNfp;
-    std::optional<double> largestArea;
-    int largestIndex = -1;
-
-    for (size_t i = 0; i < solution.size(); i++) {
-        NFP n = toNestCoordinates(solution[i], 10000000);
-        double sarea = std::fabs(GeometryUtil::polygonArea(n));
-        if (!largestArea.has_value() || *largestArea < sarea) {
-            clipperNfp = std::make_shared<NFP>(n);
-            largestArea = sarea;
-            largestIndex = static_cast<int>(i);
-        }
-    }
-
-    if (!takeOnlyBiggestArea) {
-        for (size_t j = 0; j < solution.size(); j++) {
-            if (static_cast<int>(j) == largestIndex) continue;
-            auto n = std::make_shared<NFP>(toNestCoordinates(solution[j], 10000000));
-            clipperNfp->children.push_back(n);
-        }
-    }
-
-    for (int i = 0; i < clipperNfp->Length(); i++) {
-        clipperNfp->Points[i].x *= -1;
-        clipperNfp->Points[i].y *= -1;
-        clipperNfp->Points[i].x += pattern[0].x;
-        clipperNfp->Points[i].y += pattern[0].y;
-    }
-    if (!clipperNfp->children.empty()) {
-        for (auto& child : clipperNfp->children) {
-            for (int j = 0; j < child->Length(); j++) {
-                child->Points[j].x *= -1;
-                child->Points[j].y *= -1;
-                child->Points[j].x += pattern[0].x;
-                child->Points[j].y += pattern[0].y;
-            }
-        }
-    }
-
-    std::vector<std::shared_ptr<NFP>> res = {clipperNfp};
-    if (cacheAllow) {
-        std::lock_guard<std::mutex> lock(*cacheMutex_);
-        cacheProcess[key] = res;
-    }
-    return res;
-}
 
 // =============================================================================
 // getOuterNfp
@@ -1035,7 +929,6 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
 
     int i, j, k, m, n;
     double totalsheetarea = 0;
-    double totalMerged = 0;
 
     // rotate parts by given rotation
     std::vector<std::shared_ptr<NFP>> rotated;
@@ -1093,9 +986,6 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
         std::unordered_map<uint64_t, std::vector<Clipper2Lib::Path64>> sheetNfpClipperCache;
 
         for (i = 0; i < static_cast<int>(parts.size()); i++) {
-            float prog = 0.66f + 0.34f * (totalPlaced / static_cast<float>(totalParts));
-            DisplayProgress(prog);
-
             auto part = parts[i];
 
             // === Phase A: Collect all valid rotation candidates ===
@@ -1578,9 +1468,6 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
                 placed.push_back(part);
                 totalPlaced++;
                 placements.push_back(position);
-                if (position.mergedLength.has_value()) {
-                    totalMerged += position.mergedLength.value();
-                }
             }
         }
 
@@ -1647,8 +1534,6 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
     SheetPlacement result;
     result.placements = {allplacements};
     result.fitness = fitness;
-    result.area = sheetarea;
-    result.mergedLength = totalMerged;
 
     return result;
 }
@@ -2126,15 +2011,12 @@ void NfpWorker::thenIterate(NfpPair& processed, const std::vector<std::shared_pt
 
 void NfpWorker::thenDeepNest(std::vector<NfpPair>& processed, const std::vector<std::shared_ptr<NFP>>& parts) {
     if (UseParallel && processed.size() > 1) {
-        std::atomic<int> cnt{0};
         int n = static_cast<int>(processed.size());
         int numThreads = std::min(static_cast<int>(std::thread::hardware_concurrency()), n);
         if (numThreads < 1) numThreads = 1;
 
         auto worker = [&](int threadId) {
             for (int i = threadId; i < n; i += numThreads) {
-                int done = cnt.fetch_add(1) + 1;
-                DisplayProgress(0.33f + 0.33f * (done / static_cast<float>(n)));
                 thenIterate(processed[i], parts);
             }
         };
@@ -2146,32 +2028,17 @@ void NfpWorker::thenDeepNest(std::vector<NfpPair>& processed, const std::vector<
         worker(0);
         for (auto& t : threads) t.join();
     } else {
-        int cnt = 0;
         for (size_t i = 0; i < processed.size(); i++) {
-            float progress = 0.33f + 0.33f * (cnt / static_cast<float>(processed.size()));
-            cnt++;
-            DisplayProgress(progress);
             thenIterate(processed[i], parts);
         }
     }
     sync();
 }
 
-bool NfpWorker::inpairs(const NfpPair& key, const std::vector<NfpPair>& p) {
-    for (size_t i = 0; i < p.size(); i++) {
-        if (p[i].Asource == key.Asource && p[i].Bsource == key.Bsource &&
-            p[i].ARotation == key.ARotation && p[i].BRotation == key.BRotation) {
-            return true;
-        }
-    }
-    return false;
-}
-
 std::vector<NfpPair> NfpWorker::pmapDeepNest(std::vector<NfpPair>& pairs) {
     std::vector<NfpPair> ret(pairs.size());
 
     if (UseParallel && pairs.size() > 1) {
-        std::atomic<int> cnt{0};
         int n = static_cast<int>(pairs.size());
         int numThreads = std::min(static_cast<int>(std::thread::hardware_concurrency()), n);
         if (numThreads < 1) numThreads = 1;
@@ -2179,8 +2046,6 @@ std::vector<NfpPair> NfpWorker::pmapDeepNest(std::vector<NfpPair>& pairs) {
         auto worker = [&](int threadId) {
             for (int i = threadId; i < n; i += numThreads) {
                 ret[i] = process(pairs[i]);
-                int done = cnt.fetch_add(1) + 1;
-                DisplayProgress(0.33f * (done / static_cast<float>(n)));
             }
         };
 
@@ -2191,12 +2056,8 @@ std::vector<NfpPair> NfpWorker::pmapDeepNest(std::vector<NfpPair>& pairs) {
         worker(0); // main thread does work too
         for (auto& t : threads) t.join();
     } else {
-        int cnt = 0;
         for (size_t i = 0; i < pairs.size(); i++) {
             ret[i] = process(pairs[i]);
-            float progress = 0.33f * (cnt / static_cast<float>(pairs.size()));
-            cnt++;
-            DisplayProgress(progress);
         }
     }
     return ret;

@@ -250,27 +250,6 @@ void NestingContext::AssignPlacement(const SheetPlacement& plcpr) {
     }
 }
 
-void NestingContext::AddSheet(int w, int h, int src) {
-    auto tt = std::make_shared<RectangleSheet>();
-    tt->Name = "sheet" + std::to_string(Sheets.size() + 1);
-    tt->source = src;
-    tt->Height = h;
-    tt->Width = w;
-    tt->Rebuild();
-    Sheets.push_back(tt);
-    ReorderSheets();
-}
-
-void NestingContext::AddRectanglePart(int src, int ww, int hh) {
-    auto pl = std::make_shared<NFP>();
-    pl->source = src;
-    pl->AddPoint(Point(0, 0));
-    pl->AddPoint(Point(ww, 0));
-    pl->AddPoint(Point(ww, hh));
-    pl->AddPoint(Point(0, hh));
-    Polygons.push_back(pl);
-}
-
 void NestingContext::ReorderSheets() {
     double x = 0;
     double y = 0;
@@ -287,32 +266,6 @@ void NestingContext::ReorderSheets() {
         double w = maxx - minx;
         x += w + gap;
     }
-}
-
-int NestingContext::GetNextSource() {
-    if (!Polygons.empty()) {
-        int maxSrc = 0;
-        for (auto& p : Polygons) {
-            if (p->source.has_value() && p->source.value() > maxSrc) {
-                maxSrc = p->source.value();
-            }
-        }
-        return maxSrc + 1;
-    }
-    return 0;
-}
-
-int NestingContext::GetNextSheetSource() {
-    if (!Sheets.empty()) {
-        int maxSrc = 0;
-        for (auto& s : Sheets) {
-            if (s->source.has_value() && s->source.value() > maxSrc) {
-                maxSrc = s->source.value();
-            }
-        }
-        return maxSrc + 1;
-    }
-    return 0;
 }
 
 NestingContext NestingContext::RunParallelSeeds(

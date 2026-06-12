@@ -77,6 +77,43 @@ NFP_API int nfp_nest(
     int*          out_n_sheets,             // single
     double*       out_fitness);             // single
 
+// Row-major grid layout (NO nesting; the compas_nest `pack()` semantics). Parts are
+// expanded by quantity and placed left-to-right; each cell advances by the part's own
+// bbox width + gap_x, a row's height is its tallest part + gap_y. Two wrapping modes:
+//   array    (max_width <= 0): start a new row every `columns` items.
+//   distance (max_width  > 0): wrap when the next part would exceed max_width
+//                              (`columns` is ignored; an oversized part gets its own row).
+// Outputs use the same contract as nfp_nest (rotate-about-origin + translate; here the
+// angle is always 0 and sheet id always 0). Output arrays are caller-allocated, length
+// sum(part_quantities), expansion order. Returns the number of placed instances (>=0)
+// or a negative error code.
+NFP_API int nfp_pack(
+    int           part_count,
+    const int*    part_vertex_counts,        // [part_count]
+    const double* part_xy,                   // [sum(part_vertex_counts)*2]
+    const int*    part_quantities,           // [part_count] (NULL => 1 each)
+    int           columns,                   // array mode: cells per row (clamped to >=1)
+    double        gap_x,
+    double        gap_y,
+    double        max_width,                 // >0 => distance mode
+    double*       out_tx,                    // [instance_count]
+    double*       out_ty,                    // [instance_count]
+    double*       out_angle,                 // [instance_count] (always 0)
+    int*          out_sheet_id);             // [instance_count] (always 0)
+
+// Offset (inflate) ONE closed polygon by `delta` model units with Clipper2: positive
+// grows, negative shrinks. Miter joins (miter_limit <= 0 => 2.0). The largest-area
+// result loop is returned. Returns the vertex count written into out_xy (interleaved
+// x,y), 0 if the offset vanished (e.g. over-shrunk), or the NEGATED required vertex
+// count if max_out_vertices is too small (call again with a bigger buffer).
+NFP_API int nfp_offset_polygon(
+    int           vertex_count,
+    const double* xy,                        // [vertex_count*2], closed ring (no dup end needed)
+    double        delta,
+    double        miter_limit,
+    int           max_out_vertices,
+    double*       out_xy);                   // [max_out_vertices*2]
+
 // Cooperative cancel + live-preview support for running nfp_nest on a background
 // thread (same role as np_cancel/np_progress/np_poll_layout).
 NFP_API void      nfp_cancel(void);
