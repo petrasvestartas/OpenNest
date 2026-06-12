@@ -47,6 +47,11 @@ struct NestConfig {
     // Q1 MEASURED (fixed 10s budget): best-rotation beats first-valid-rotation
     // (concave +1.78pp, rects +0.35pp) — affordable after the Phase-1 speedups.
     bool tryAllRotations = true;    // try all valid rotations per part, pick best
+    // P3 MEASURED: continuous slide-to-contact refinement inside compaction (ray-cast
+    // toward origin within the feasible region). concave +0.2pp pooled, zero
+    // regressions in 20 cells, wall unchanged; vertex-replace alone can only reach
+    // feasible-region vertices, the per-ray optimum is usually mid-edge.
+    bool slideCompaction = true;
 
     // Evaluate a whole GA generation's candidates concurrently on a shared (thread-safe) NFP cache,
     // instead of one candidate per NestIterate. Candidate 0 warms the cache (its NFP precompute is

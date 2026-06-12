@@ -131,6 +131,48 @@ namespace {
         return std::fabs(0.5 * area);
     }
 
+    // ---- sliding-compaction ray helpers --------------------------------------------
+    // The vertex-replace compaction can only land on feasible-region VERTICES; the
+    // score optimum along a slide direction is usually mid-edge. These helpers ray-cast
+    // inside the feasible region (first boundary hit) so a part can slide continuously
+    // toward the origin (Gomes & Oliveira-style compaction, +1-3pp in the literature).
+
+    /// First crossing t > eps of ray R + t*d with any edge of any region loop
+    /// (standard crossing test, half-open vertex rule; collinear edges pass through).
+    double rayFirstHit(const std::vector<NFP>& region, double Rx, double Ry,
+                       double dx, double dy) {
+        double tMin = std::numeric_limits<double>::infinity();
+        for (const auto& loop : region) {
+            const int n = loop.length();
+            for (int i = 0, j = n - 1; i < n; j = i++) {
+                const double ax = loop[j].x - Rx, ay = loop[j].y - Ry;
+                const double bx = loop[i].x - Rx, by = loop[i].y - Ry;
+                const double sa = dx * ay - dy * ax;   // cross(d, a-R)
+                const double sb = dx * by - dy * bx;   // cross(d, b-R)
+                if (!((sa < 0 && sb >= 0) || (sb < 0 && sa >= 0))) continue;
+                const double ex = bx - ax, ey = by - ay;
+                const double denom = dx * ey - dy * ex;  // cross(d, b-a)
+                if (denom == 0) continue;                 // collinear: slide along it
+                const double t = (ax * ey - ay * ex) / denom; // cross(a-R, b-a)/denom
+                if (t > 1e-7 && t < tMin) tMin = t;
+            }
+        }
+        return std::isfinite(tMin) ? tMin : 0.0;
+    }
+
+    /// Even-odd containment over all region loops. On-boundary (pointInPolygon
+    /// nullopt) counts as FEASIBLE — contact landings are valid placements.
+    bool regionContains(const std::vector<NFP>& region, double px, double py) {
+        Point p(px, py);
+        bool inside = false;
+        for (const auto& loop : region) {
+            auto r = GeometryUtil::pointInPolygon(p, loop);
+            if (!r.has_value()) return true;   // on a boundary => feasible
+            if (*r) inside = !inside;          // even-odd across loops
+        }
+        return inside;
+    }
+
     // ---- touching-perimeter (contact-length) scoring ------------------------------
     // Length of the candidate part's boundary that lies ON other placed parts' (or the
     // sheet's) boundary. Used to re-rank near-tie candidates: the bbox/gravity score is
@@ -1775,6 +1817,81 @@ void NfpWorker::compactPlacements(
                     bestPos.rotation = part->Rotation;
                     placements[ci] = bestPos;
                     anyImproved = true;
+                }
+            }
+
+            // 6. Sliding refinement (env NFP_SLIDE=1, non-faithful): from the current
+            // position, slide continuously toward the origin along {left, down,
+            // diagonal} to the first feasible-boundary hit, accepting the best-scoring
+            // point along the ray. Vertex-replace can only reach feasible-region
+            // VERTICES; the score optimum along a ray is usually mid-edge.
+            // feasibleList depends only on the OTHER parts, so it stays valid while
+            // this part slides.
+            if (config.slideCompaction && !config.faithful) {
+                static const double dirs[3][2] = {
+                    {-1.0, 0.0}, {0.0, -1.0}, {-0.70710678118654752, -0.70710678118654752}};
+                bool slid = true;
+                for (int round = 0; slid && round < 4; round++) {
+                    slid = false;
+                    for (const auto& d : dirs) {
+                        const double Rx = (*part)[0].x + placements[ci].x;
+                        const double Ry = (*part)[0].y + placements[ci].y;
+                        double tExit = rayFirstHit(feasibleList, Rx, Ry, d[0], d[1]);
+                        if (tExit <= 1e-6) continue;
+                        // the ray may start ON the boundary heading outside — verify
+                        if (!regionContains(feasibleList,
+                                            Rx + 0.5 * tExit * d[0], Ry + 0.5 * tExit * d[1]))
+                            continue;
+
+                        const double curScore = scoreShift(placements[ci].x, placements[ci].y);
+                        // presample (handles non-convex box-mode score), then refine
+                        double tBest = 0, sBest = curScore;
+                        const int NS = 16;
+                        for (int s = 1; s <= NS; s++) {
+                            const double t = tExit * s / NS;
+                            const double sc = scoreShift(placements[ci].x + t * d[0],
+                                                         placements[ci].y + t * d[1]);
+                            if (sc < sBest) { sBest = sc; tBest = t; }
+                        }
+                        // local ternary refinement around the best sample (gravity
+                        // score is convex along the ray; box benefits too locally)
+                        double lo = std::max(0.0, tBest - tExit / NS);
+                        double hi = std::min(tExit, tBest + tExit / NS);
+                        for (int it = 0; it < 24; it++) {
+                            const double m1 = lo + (hi - lo) / 3.0;
+                            const double m2 = hi - (hi - lo) / 3.0;
+                            const double f1 = scoreShift(placements[ci].x + m1 * d[0],
+                                                         placements[ci].y + m1 * d[1]);
+                            const double f2 = scoreShift(placements[ci].x + m2 * d[0],
+                                                         placements[ci].y + m2 * d[1]);
+                            if (f1 <= f2) hi = m2; else lo = m1;
+                        }
+                        {
+                            const double tm = 0.5 * (lo + hi);
+                            const double sm = scoreShift(placements[ci].x + tm * d[0],
+                                                         placements[ci].y + tm * d[1]);
+                            if (sm < sBest) { sBest = sm; tBest = tm; }
+                        }
+
+                        if (tBest <= 1e-7 || sBest >= curScore - 1e-6) continue;
+                        // landing feasibility insurance: halve on failure (rounding)
+                        double tLand = tBest;
+                        int halvings = 0;
+                        while (halvings < 6 &&
+                               !regionContains(feasibleList, Rx + tLand * d[0], Ry + tLand * d[1])) {
+                            tLand *= 0.5;
+                            halvings++;
+                        }
+                        if (halvings >= 6) continue;
+                        if (scoreShift(placements[ci].x + tLand * d[0],
+                                       placements[ci].y + tLand * d[1]) >= curScore - 1e-6)
+                            continue;
+
+                        placements[ci].x += tLand * d[0];
+                        placements[ci].y += tLand * d[1];
+                        anyImproved = true;
+                        slid = true;
+                    }
                 }
             }
         }
