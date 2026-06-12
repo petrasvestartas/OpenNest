@@ -98,7 +98,6 @@ namespace opennest_gh2.components
             };
 
             var nest = new nest_lib.rhino_example(ref sheets, ref geo, parameters, totalGen);
-            nest.Engine = "cpp";
             nest.ExactNfp = 1;
             nest.TryAllRotations = OptToken("all_rotations", 1);
             nest.UseHoles = OptToken("element_holes", 1);

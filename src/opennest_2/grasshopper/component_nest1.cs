@@ -408,7 +408,6 @@ namespace opennest_2
                     if (paramsTry.Count > 4) paramsTry[4] = _snapBaseSeed + t;
 
                     var nestTry = new nest_lib.rhino_example(ref sheetsRef, ref geoTry, paramsTry, _snapIterations);
-                    nestTry.Engine = "cpp";
                     nestTry.TryAllRotations = 0;   // first valid orientation per placement = far faster; GA still varies rotations
 
                     _liveNest = nestTry;   // expose the in-flight try to the live preview
