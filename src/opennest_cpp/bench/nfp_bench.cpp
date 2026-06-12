@@ -144,12 +144,13 @@ struct RunResult {
 
 RunResult runOnce(const Args& a, int seed, const bench::BenchData& d) {
     // ---- flatten to C arrays ----
-    std::vector<int> pvc, pqty, phc, phvc;
+    std::vector<int> pvc, pqty, prot, phc, phvc;
     std::vector<double> pxy, phxy;
     for (auto& p : d.parts) {
         pvc.push_back(static_cast<int>(p.xy.size() / 2));
         pxy.insert(pxy.end(), p.xy.begin(), p.xy.end());
         pqty.push_back(p.qty);
+        prot.push_back(p.rotations);
         phc.push_back(static_cast<int>(p.holes.size()));
         for (auto& h : p.holes) {
             phvc.push_back(static_cast<int>(h.size() / 2));
@@ -200,6 +201,7 @@ RunResult runOnce(const Args& a, int seed, const bench::BenchData& d) {
     auto t0 = std::chrono::steady_clock::now();
     int placed = nfp_nest(
         static_cast<int>(d.parts.size()), pvc.data(), pxy.data(), pqty.data(),
+        prot.data(),
         phc.data(), phvc.data(), phxy.data(),
         a.nSheets, svc.data(), sxy.data(), shc.data(), nullptr, nullptr,
         &params, tx.data(), ty.data(), angle.data(), sheetId.data(),

@@ -51,6 +51,7 @@ namespace NfpNest
             int[]        part_vertex_counts,
             double[]     part_xy,
             int[]        part_quantities,
+            int[]        part_rotations,   // [part_count] per-part rotation-count override (0 = global; 1 = fixed; null ok)
             int[]        part_hole_counts,
             int[]        part_hole_vertex_counts,
             double[]     part_hole_xy,

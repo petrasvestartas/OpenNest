@@ -72,6 +72,7 @@ NestConfig toConfig(const NfpParams* p) {
 std::vector<int> buildInputs(
     NestingContext& ctx,
     int part_count, const int* pvc, const double* pxy, const int* pqty,
+    const int* prot,
     const int* phc, const int* phvc, const double* phxy,
     int sheet_count, const int* svc, const double* sxy,
     const int* shc, const int* shvc, const double* shxy)
@@ -108,6 +109,7 @@ std::vector<int> buildInputs(
         for (int c = 0; c < q; c++) {
             auto poly = std::make_shared<NFP>();
             poly->source = i;
+            poly->rotationCount = (prot && prot[i] > 0) ? prot[i] : 0;   // per-part rotation override
             poly->Points = outer;
             for (auto& hp : holes) {
                 auto child = std::make_shared<NFP>();
@@ -208,6 +210,7 @@ NFP_API int nfp_nest(
     const int*    part_vertex_counts,
     const double* part_xy,
     const int*    part_quantities,
+    const int*    part_rotations,
     const int*    part_hole_counts,
     const int*    part_hole_vertex_counts,
     const double* part_hole_xy,
@@ -244,6 +247,7 @@ NFP_API int nfp_nest(
     ctx.config = cfg;
     auto instancePart = buildInputs(
         ctx, part_count, part_vertex_counts, part_xy, part_quantities,
+        part_rotations,
         part_hole_counts, part_hole_vertex_counts, part_hole_xy,
         sheet_count, sheet_vertex_counts, sheet_xy,
         sheet_hole_counts, sheet_hole_vertex_counts, sheet_hole_xy);

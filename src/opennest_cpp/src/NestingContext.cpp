@@ -34,6 +34,7 @@ void NestingContext::init() {
         clone->source = item->source;
         clone->Points = item->Points;
         clone->exactFlags = item->exactFlags;
+        clone->rotationCount = item->rotationCount;
         if (!item->children.empty()) {
             for (auto& citem : item->children) {
                 auto childClone = std::make_shared<NFP>();
@@ -54,6 +55,7 @@ void NestingContext::init() {
         clone->source = item->source;
         clone->Points = item->Points;
         clone->exactFlags = item->exactFlags;
+        clone->rotationCount = item->rotationCount;
         if (!item->children.empty()) {
             for (auto& citem : item->children) {
                 auto childClone = std::make_shared<NFP>();
@@ -338,6 +340,7 @@ NestingContext NestingContext::RunParallelSeeds(
             clone->source = p->source;
             clone->Points = p->Points;
             clone->exactFlags = p->exactFlags;
+            clone->rotationCount = p->rotationCount;
             for (auto& child : p->children) {
                 auto cc = std::make_shared<NFP>();
                 cc->Id = child->Id;

@@ -38,6 +38,7 @@ namespace NestPhysics
             int part_count,
             int[] part_vertex_counts,
             double[] part_xy,
+            int[] part_rotations,   // [part_count] per-part rotation override (0 = free continuous; N>0 = N discrete; 1 = fixed)
             int sheet_count,
             int[] sheet_outer_vertex_counts,
             double[] sheet_outer_xy,

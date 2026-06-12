@@ -1040,10 +1040,22 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
     // rotate parts by given rotation
     std::vector<std::shared_ptr<NFP>> rotated;
     for (i = 0; i < static_cast<int>(parts.size()); i++) {
-        auto r = std::make_shared<NFP>(rotatePolygon(*parts[i], parts[i]->Rotation));
-        r->Rotation = parts[i]->Rotation;
+        // Per-part rotation override ENFORCEMENT: GA order-mutation swaps placements but
+        // not the positional rotation genes, so a constrained part can inherit an angle
+        // from another part's set. Snap the gene to this part's own N-orientation grid
+        // before rotating — the constraint then holds for every evaluated candidate.
+        float geneRot = parts[i]->Rotation;
+        if (parts[i]->rotationCount > 0) {
+            const float step = 360.0f / parts[i]->rotationCount;
+            geneRot = std::floor(geneRot / step + 0.5f) * step;
+            geneRot = std::fmod(geneRot, 360.0f);
+            if (geneRot < 0) geneRot += 360.0f;
+        }
+        auto r = std::make_shared<NFP>(rotatePolygon(*parts[i], geneRot));
+        r->Rotation = geneRot;
         r->source = parts[i]->source;
         r->Id = parts[i]->Id;
+        r->rotationCount = parts[i]->rotationCount;
         rotated.push_back(r);
     }
     parts = rotated;
@@ -1098,7 +1110,10 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
                 // spread over 360 (every 45). When tryAllRotations is OFF this is a no-op: effRotations
                 // == config.rotations, the step is unchanged, and the loop still breaks at the first
                 // valid rotation -> the fast path is byte-identical.
-                int effRotations = config.rotations;
+                // Per-part rotation override: a part with rotationCount > 0 is restricted
+                // to ITS OWN N discrete orientations (e.g. grain-constrained rectangles
+                // at 4 while freeform parts roam the global setting). 0 = global default.
+                int effRotations = part->rotationCount > 0 ? part->rotationCount : config.rotations;
                 if (config.tryAllRotations && effRotations > 8) effRotations = 8;
                 const float rotStep = 360.0f / effRotations;
                 for (j = 0; j < effRotations; j++) {
@@ -1125,6 +1140,7 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
                     r->Rotation = trialPart->Rotation + rotStep;
                     r->source = trialPart->source;
                     r->Id = trialPart->Id;
+                    r->rotationCount = trialPart->rotationCount;
                     // >= so 360 normalizes to 0 — a float key of 360 is a DIFFERENT bit
                     // pattern than 0 and silently misses every rotation-keyed cache
                     // (DbCacheKey, clipCache).

@@ -20,6 +20,7 @@ struct BenchPart {
     std::vector<double> xy;                 // outer loop, x0 y0 x1 y1 ...
     std::vector<std::vector<double>> holes; // hole loops, same layout
     int qty = 1;
+    int rotations = 0;   // per-part rotation-count override (0 = solver default)
 };
 
 struct BenchData {
@@ -237,6 +238,7 @@ inline BenchData loadFile(const std::string& path) {
             d.parts.emplace_back();
             cur = &d.parts.back();
             if (!(ss >> cur->qty)) cur->qty = 1;
+            if (!(ss >> cur->rotations)) cur->rotations = 0;  // optional 3rd token
             loop = nullptr;
             continue;
         }

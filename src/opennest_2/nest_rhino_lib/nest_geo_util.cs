@@ -11,7 +11,7 @@ namespace nest_rhino_lib
 {
     public static class nest_geo_util
     {
-        public static nest_geo geo_to_nest_geo(List<Curve[]> curves, List<int> copies = null, List<double> simplify_parameters = null, List<GeometryBase[]> attributes_geometries=null, bool hard_coded_input=true)
+        public static nest_geo geo_to_nest_geo(List<Curve[]> curves, List<int> copies = null, List<double> simplify_parameters = null, List<GeometryBase[]> attributes_geometries=null, bool hard_coded_input=true, List<int> rotations = null)
         {
             // Initialize the nest_geometry.
             nest_geo nestGeo = new nest_geo();
@@ -26,6 +26,12 @@ namespace nest_rhino_lib
                 number_of_copies = copies.Count == curves.Count ? copies : Enumerable.Repeat(1, curves.Count).ToList();
             else
                 number_of_copies = Enumerable.Repeat(1, curves.Count).ToList();
+
+            // Per-part rotation overrides (same alignment rule as copies; 0 = inherit solver setting).
+            List<int> rotation_overrides =
+                (rotations != null && rotations.Count == curves.Count)
+                    ? rotations
+                    : Enumerable.Repeat(0, curves.Count).ToList();
 
             // Place each curve into a separate nest object.
             int counter = 0;
@@ -49,6 +55,7 @@ namespace nest_rhino_lib
                             ? attributes_geometries[i] : new GeometryBase[0]);
                     nestGeo.indices.Add(counter);
                     nestGeo.copies.Add(number_of_copies[i]);
+                    nestGeo.rotations.Add(System.Math.Max(0, rotation_overrides[i]));
 
                     ids.Add(counter);
                     counter++;

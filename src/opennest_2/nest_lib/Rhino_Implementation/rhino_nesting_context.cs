@@ -90,13 +90,21 @@ namespace nest_lib
 
             for (int i = 0; i < nest_geo.boundary_sorted.Count; i++)
                 {
+                // Per-part rotation override travels with each instance (0 = inherit; same
+                // per-geometry-item indexing as copies).
+                int rotationOverride = 0;
+                {
+                    int gi = nest_geo.geometry_sorted[i][0];
+                    if (nest_geo.rotations != null && gi >= 0 && gi < nest_geo.rotations.Count)
+                        rotationOverride = Math.Max(0, nest_geo.rotations[gi]);
+                }
                 for (int l = 0; l < nest_geo.copies[nest_geo.geometry_sorted[i][0]]; l++)
                     {
                     //Rhino.RhinoApp.WriteLine("11");
                     if (nest_geo.boundary_sorted[i][0].Item2.Count > 2)
                         {
 
-                            NFP polygon = new NFP() { source = i, Points = new SvgPoint[] { }, children = new List<NFP>() };
+                            NFP polygon = new NFP() { source = i, Points = new SvgPoint[] { }, children = new List<NFP>(), rotationCount = rotationOverride };
 
                         //NFP polygon is closed by default, no need to add end point
                         //Add boundary

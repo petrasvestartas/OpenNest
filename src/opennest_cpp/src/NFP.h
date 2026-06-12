@@ -28,6 +28,10 @@ public:
     std::optional<int> source;
     float Rotation = 0;
     int Id = 0;
+    // Per-part rotation-count override: this part may only use N discrete orientations
+    // (360/N step). 0 = inherit the global config.rotations (the default for all parts).
+    // 1 = fixed at 0° (no rotation, e.g. grain direction).
+    int rotationCount = 0;
 
     std::vector<Point> Points;
     std::vector<bool> exactFlags;  // per-vertex "exact" flag (lazy: empty = all exact)

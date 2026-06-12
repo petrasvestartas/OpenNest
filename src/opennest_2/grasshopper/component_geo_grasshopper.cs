@@ -69,12 +69,20 @@ namespace opennest_2
             pManager.AddIntegerParameter("Copies", "Copies", "Number of copies per part", GH_ParamAccess.list);
             pManager.AddNumberParameter("Offset", "Offset", "Clearance offset for NESTING only (model units; 0 = OFF, fast).\nParts: outer grows / holes shrink so placed parts keep this gap.\nThe ORIGINAL curves are still what get placed/output.", GH_ParamAccess.item, 0);
             pManager.AddGeometryParameter("Attributes", "Attributes", "Additional geometry: points, lines, surfaces, meshes... \nUse data-tree, one list of additional geometry per branch..", GH_ParamAccess.tree);
+            pManager.AddIntegerParameter("Rotations", "Rotations",
+                "OPTIONAL per-part rotation constraint (one value per part, repeats like Copies).\n" +
+                "Empty / 0 = part inherits the solver's global Rotations setting (default).\n" +
+                "N > 0 = THIS part may only use N orientations (360/N degree steps).\n" +
+                "1 = fixed, no rotation (e.g. grain direction).\n" +
+                "Lets rectangular parts stay at 4 orientations while freeform parts rotate freely in ONE nest.",
+                GH_ParamAccess.list);
 
             pManager[1].Optional = true;
             pManager[2].Optional = true;
             pManager[3].Optional = true;
             pManager[4].Optional = true;
             pManager[5].Optional = true;
+            pManager[6].Optional = true;
         }
 
         protected override void RegisterOutputParams(GH_Component.GH_OutputParamManager pManager)
@@ -168,6 +176,16 @@ namespace opennest_2
             var copies = new List<int>();
             DA.GetDataList(3, copies);
 
+            // Per-part rotation constraints — located BY NAME so component instances saved
+            // before this input existed (no "Rotations" port) keep working unchanged.
+            var rotations = new List<int>();
+            {
+                int rotIdx = -1;
+                for (int pi = 0; pi < Params.Input.Count; pi++)
+                    if (Params.Input[pi].Name == "Rotations") { rotIdx = pi; break; }
+                if (rotIdx >= 0) DA.GetDataList(rotIdx, rotations);
+            }
+
             var sort = 1.0;
 
 
@@ -184,6 +202,7 @@ namespace opennest_2
             var attrTrees = new List<GH_Structure<IGH_GeometricGoo>>();
             for (int ai = 5; ai < Params.Input.Count; ai++)
             {
+                if (Params.Input[ai].Name == "Rotations") continue;   // integer port, not an attribute tree
                 GH_Structure<IGH_GeometricGoo> t;
                 if (DA.GetDataTree(ai, out t) && t != null && t.DataCount > 0) attrTrees.Add(t);
             }
@@ -284,13 +303,20 @@ namespace opennest_2
                 copies.Add(copies[i%copies.Count]);
             }
 
+            // Extend rotations like copies: repeat the pattern across all parts; empty = all 0 (inherit).
+            if (rotations.Count == 0)
+                for (int i = 0; i < curves.Count; i++) rotations.Add(0);
+            else
+                for (int i = rotations.Count; i < curves.Count; i++) rotations.Add(rotations[i % rotations.Count]);
+            if (rotations.Count > curves.Count) rotations.RemoveRange(curves.Count, rotations.Count - curves.Count);
+
 
 
 
 
             //Solution. Flat list => hard_coded_input:false => identify_groups auto-pairs outer rings with
             //the smaller rings they contain (big rect + smaller rect inside = one part with a hole).
-            nest_geo = nest_rhino_lib.nest_geo_util.geo_to_nest_geo(curves, copies, simplify_parameters, attributes_geometries, !flatList);
+            nest_geo = nest_rhino_lib.nest_geo_util.geo_to_nest_geo(curves, copies, simplify_parameters, attributes_geometries, !flatList, rotations);
             if (offset_distance != 0) nest_geo.offset_nesting_boundary(offset_distance);   // 0 = skip entirely (fast)
 
             //Output
@@ -354,17 +380,24 @@ namespace opennest_2
 
         //////////////////////////////////////////////////////////////////////////////////////////ZoomableComponent
 
-        // The 5 fixed inputs (Outlines, Simplify, Hull, Copies, Attributes) are locked; +/- only ever
-        // adds/removes EXTRA attribute ports AFTER them, so the fixed input indices can never shift.
-        private const int FIXED_INPUTS = 6;
+        // The fixed inputs (Outlines, Simplify, Hull, Copies, Offset, Attributes [, Rotations]) are
+        // locked; +/- only ever adds/removes EXTRA attribute ports AFTER them. The boundary is found
+        // BY NAME so component instances saved BEFORE the Rotations input existed (their param list
+        // ends at Attributes) keep their extra ports working at the old indices.
+        private int FirstExtraIndex()
+        {
+            for (int i = 0; i < Params.Input.Count; i++)
+                if (Params.Input[i].Name == "Rotations") return i + 1;
+            return 6;   // legacy layout: extras start right after Attributes (index 5)
+        }
 
-        // + is only offered at the end (index >= FIXED_INPUTS), so inserting can't shift fixed inputs.
+        // + is only offered at the end (index >= first extra), so inserting can't shift fixed inputs.
         bool IGH_VariableParameterComponent.CanInsertParameter(GH_ParameterSide side, int index)
-            => side == GH_ParameterSide.Input && index >= FIXED_INPUTS;
+            => side == GH_ParameterSide.Input && index >= FirstExtraIndex();
 
         // - is only offered for the extra attribute ports, never the fixed inputs.
         bool IGH_VariableParameterComponent.CanRemoveParameter(GH_ParameterSide side, int index)
-            => side == GH_ParameterSide.Input && index >= FIXED_INPUTS;
+            => side == GH_ParameterSide.Input && index >= FirstExtraIndex();
 
         // Each added port is an extra Attributes geometry tree (named in VariableParameterMaintenance).
         IGH_Param IGH_VariableParameterComponent.CreateParameter(GH_ParameterSide side, int index)
@@ -378,15 +411,16 @@ namespace opennest_2
         }
 
         bool IGH_VariableParameterComponent.DestroyParameter(GH_ParameterSide side, int index)
-            => side == GH_ParameterSide.Input && index >= FIXED_INPUTS;
+            => side == GH_ParameterSide.Input && index >= FirstExtraIndex();
 
         // Keep the extra ports consistently named/typed: Attributes 2, Attributes 3, ... (tree, optional).
         void IGH_VariableParameterComponent.VariableParameterMaintenance()
         {
-            for (int i = FIXED_INPUTS; i < Params.Input.Count; i++)
+            int firstExtra = FirstExtraIndex();
+            for (int i = firstExtra; i < Params.Input.Count; i++)
             {
                 var p = Params.Input[i];
-                int n = i - FIXED_INPUTS + 2;   // first extra port = "Attributes 2"
+                int n = i - firstExtra + 2;   // first extra port = "Attributes 2"
                 p.Name = "Attributes " + n;
                 p.NickName = "Attr" + n;
                 p.Description = "Extra attribute geometry tree. Branch {i} (and its sub-branches) attaches to part i, merged with the other Attributes ports.";

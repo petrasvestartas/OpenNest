@@ -55,6 +55,10 @@ NFP_API int nfp_nest(
     const int*    part_vertex_counts,        // [part_count]
     const double* part_xy,                   // [sum(part_vertex_counts)*2]
     const int*    part_quantities,           // [part_count] (>=1 each)
+    const int*    part_rotations,            // [part_count] per-part rotation-count override:
+                                             //   0 = use params->rotations (default), N>0 = this part
+                                             //   may only use N discrete orientations (360/N step;
+                                             //   1 = fixed at 0°). NULL = no overrides.
     const int*    part_hole_counts,          // [part_count]
     const int*    part_hole_vertex_counts,   // [sum(part_hole_counts)]
     const double* part_hole_xy,              // [sum(part_hole_vertex_counts)*2]

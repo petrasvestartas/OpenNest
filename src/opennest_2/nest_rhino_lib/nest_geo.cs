@@ -22,6 +22,11 @@ namespace nest_rhino_lib
 
         public List<int> copies;
 
+        // Per-part rotation-count override, index-aligned with indices/copies/geometry.
+        // 0 = inherit the solver's global Rotations setting (the default); N>0 = this part
+        // may only use N discrete orientations (360/N step; 1 = fixed, no rotation).
+        public List<int> rotations;
+
         public List<GeometryBase> geometry;
 
         public List<GeometryBase[]> geometry_attributes;
@@ -50,6 +55,7 @@ namespace nest_rhino_lib
         {
             this.indices = new List<int>();
             this.copies = new List<int>();
+            this.rotations = new List<int>();
             this.geometry = new List<GeometryBase>();
             this.geometry_attributes = new List<GeometryBase[]>();
             this.attributes = new List<ObjectAttributes>();
@@ -386,6 +392,7 @@ namespace nest_rhino_lib
             {
                 indices = this.indices,
                 copies = this.copies,
+                rotations = this.rotations,
                 attributes = this.attributes,
                 geometry_sorted = this.geometry_sorted,
                 boudary_indices_non_sorted = this.boudary_indices_non_sorted
@@ -884,6 +891,11 @@ namespace nest_rhino_lib
                 combined.disply_texts.AddRange(source.disply_texts);
                 combined.boundary_curves_non_sorted.AddRange(source.boundary_curves_non_sorted);
                 combined.copies.AddRange(source.copies);
+                // rotations is index-aligned with copies; pad with 0 (inherit) if a source predates it
+                if (source.rotations != null && source.rotations.Count == source.copies.Count)
+                    combined.rotations.AddRange(source.rotations);
+                else
+                    for (int ri = 0; ri < source.copies.Count; ri++) combined.rotations.Add(0);
                 
                 // Handle indices with offset
                 foreach (int index in source.indices)

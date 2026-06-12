@@ -358,6 +358,7 @@ extern "C" NP_EXPORT int np_nest(
     int           part_count,
     const int*    part_vertex_counts,
     const double* part_xy,
+    const int*    part_rotations,
     int           sheet_count,
     const int*    sheet_outer_vertex_counts,
     const double* sheet_outer_xy,
@@ -456,7 +457,10 @@ extern "C" NP_EXPORT int np_nest(
                 }
             }
             Point cc;
-            auto p = build_part(parts.size(), std::move(pts), &cc, &mc);
+            // Per-part rotation override: N>0 restricts this part to N discrete orientations
+            // (RotationRange::discrete_of); 0/NULL keeps free continuous rotation as before.
+            int rot_n = (part_rotations && part_rotations[i] > 0) ? part_rotations[i] : 0;
+            auto p = build_part(parts.size(), std::move(pts), &cc, &mc, rot_n);
             if (p) {
                 parts.emplace_back(std::move(*p), 1); craw.push_back(cc); orig_index.push_back(i);
                 // Centered part-holes (input hole - input centroid) kept in a SIDE-TABLE parallel to

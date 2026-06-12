@@ -28,7 +28,9 @@ GeneticAlgorithm::GeneticAlgorithm(const std::vector<std::shared_ptr<NFP>>& adam
         if (StrictAngles) {
             angles[i] = defaultAngles[i];
         } else {
-            angles[i] = static_cast<float>(std::floor(r.NextDouble() * Config.rotations)) * (360.0f / Config.rotations);
+            // Per-part rotation override (rotationCount > 0): draw from the part's own set.
+            int effRot = adam[i]->rotationCount > 0 ? adam[i]->rotationCount : Config.rotations;
+            angles[i] = static_cast<float>(std::floor(r.NextDouble() * effRot)) * (360.0f / effRot);
         }
     }
 
@@ -398,7 +400,12 @@ PopulationItem GeneticAlgorithm::mutateFaithful(const PopulationItem& p) {
                 std::swap(clone.placements[i], clone.placements[j]);
         }
         if (r.NextDouble() < rate) {
-            clone.Rotation[i] = static_cast<float>(std::floor(r.NextDouble() * Config.rotations)) * (360.0f / Config.rotations);
+            // Per-part rotation override: draw from THIS part's own orientation set
+            // (rotationCount > 0), else the global setting. Same RNG call order either
+            // way, so faithful parity holds when no overrides are present.
+            int effRot = clone.placements[i]->rotationCount > 0 ? clone.placements[i]->rotationCount
+                                                                : Config.rotations;
+            clone.Rotation[i] = static_cast<float>(std::floor(r.NextDouble() * effRot)) * (360.0f / effRot);
         }
     }
     return clone;

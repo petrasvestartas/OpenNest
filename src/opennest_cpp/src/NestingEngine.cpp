@@ -563,6 +563,7 @@ NFP NestingEngine::cloneTree(const NFP& tree) {
     NFP newtree;
     newtree.Points = tree.Points;
     newtree.exactFlags = tree.exactFlags;
+    newtree.rotationCount = tree.rotationCount;   // per-part rotation override travels with the geometry
 
     if (!tree.children.empty()) {
         for (auto& c : tree.children) {

@@ -739,7 +739,7 @@ namespace opennest_2
         private Transform[] _to_xy;
         private Point3d[] _sheetOrigin;
         private List<int> _pvc, _flatGroup;
-        private int[] _pvcA, _sovcA, _shcA, _hvcA, _phcA, _phvcA, _out_sheet, _psh;
+        private int[] _pvcA, _protA, _sovcA, _shcA, _hvcA, _phcA, _phvcA, _out_sheet, _psh;
         private double[] _pxyA, _soxyA, _hxyA, _phxyA, _out_tx, _out_ty, _out_angle, _ptx, _pty, _pang;
         private NpParams _np;
 
@@ -775,6 +775,7 @@ namespace opennest_2
             List<int> pvc = new List<int>();
             List<double> pxy = new List<double>();
             List<int> flatGroup = new List<int>();
+            List<int> prot = new List<int>();   // per-flat-part rotation-count override (0 = free continuous)
             List<int> phc = new List<int>();    // part-hole count per flat part
             List<int> phvc = new List<int>();   // vertex count per part-hole (part-major)
             List<double> phxy = new List<double>();
@@ -783,6 +784,9 @@ namespace opennest_2
                 int ncopies = 1;
                 int gi = nest_geo.geometry_sorted[i][0];
                 if (gi >= 0 && gi < nest_geo.copies.Count) ncopies = Math.Max(1, nest_geo.copies[gi]);
+                int rotOverride = 0;   // 0 = free continuous rotation (the solver default)
+                if (nest_geo.rotations != null && gi >= 0 && gi < nest_geo.rotations.Count)
+                    rotOverride = Math.Max(0, nest_geo.rotations[gi]);
 
                 Polyline outer = new Polyline(nest_geo.boundary_sorted[i][0].Item2);
                 outer.Transform(to_xy[i]);
@@ -808,6 +812,7 @@ namespace opennest_2
                     pvc.Add(cnt);
                     for (int k = 0; k < cnt; k++) { pxy.Add(outer[k].X); pxy.Add(outer[k].Y); }
                     flatGroup.Add(i);
+                    prot.Add(rotOverride);
                     phc.Add(groupHoles.Count);
                     foreach (var hv in groupHoles) { phvc.Add(hv.Length / 2); phxy.AddRange(hv); }
                 }
@@ -892,6 +897,7 @@ namespace opennest_2
             _to_xy = to_xy; _sheetOrigin = sheetOrigin; _pvc = pvc; _flatGroup = flatGroup;
             _out_tx = out_tx; _out_ty = out_ty; _out_angle = out_angle; _out_sheet = out_sheet;
             _pvcA = pvc.ToArray(); _pxyA = pxy.ToArray();
+            _protA = prot.ToArray();
             _sovcA = sovc.ToArray(); _soxyA = soxy.ToArray();
             _shcA = shc.ToArray(); _hvcA = hvc.ToArray(); _hxyA = hxy.ToArray();
             _phcA = phc.ToArray();
@@ -1014,7 +1020,7 @@ namespace opennest_2
             if (!Ready) return;
             NestPhysicsWrapper.np_cancel_reset();
             rc = NestPhysicsWrapper.np_nest(
-                _F, _pvcA, _pxyA, _nsheet, _sovcA, _soxyA, _shcA, _hvcA, _hxyA,
+                _F, _pvcA, _pxyA, _protA, _nsheet, _sovcA, _soxyA, _shcA, _hvcA, _hxyA,
                 _phcA, _phvcA, _phxyA,
                 ref _np, _out_tx, _out_ty, _out_angle, _out_sheet, out _n_sheets_used);
             rounds_done = NestPhysicsWrapper.np_progress();
