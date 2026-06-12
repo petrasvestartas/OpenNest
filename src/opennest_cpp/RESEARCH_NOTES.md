@@ -136,6 +136,29 @@ speed, reusing the S3 merged-sorted hull): rects exactly neutral (.9099), concav
 split +0.44/-0.32 (pooled +0.06). Third lever in a row inside the concave noise band.
 Reverted (was env-gated NFP_HULL_W).
 
+### P3-slide KEPT (weak): continuous slide-to-contact in compaction
+Ray-cast from the current position toward origin (left/down/diagonal) to the first
+feasible-boundary hit; presample+ternary the score along the ray; accept on improvement
+(landing-feasibility insurance). concave +0.39pp b1 / +0.03 b2 (pooled +0.21pp), rects
+neutral, ZERO regressions in 20 cells, wall unchanged. Default on (config.slideCompaction).
+Designed + adversarially code-verified by the breakthrough-design workflow (two judges,
+6/6, both footguns they flagged were addressed: pointInPolygon-nullopt=feasible, presample
+for non-convex box score).
+
+### P3 strip-width shrink phase REFUTED (two configurations)
+Post-GA phase narrowing the sheet's right edge level by level (sheet-template surgery +
+source bump invalidating only IFP cache entries; GA population carried, fitness reset per
+level; best-feasible snapshot kept). v1 (50/50 split, r=3%): rects -0.11, concave -0.39/+0.08.
+v2 (75/25, r=1%, longer slices): WORSE - concave -0.92/-0.62, rects exactly flat (levels
+never land). MECHANISM CONFIRMED on 1/10 seeds (+0.66pp when a level succeeds) but the
+GA-greedy cannot re-establish 45-part feasibility at W*(1-r) within affordable slices:
+every second stolen from generation throughput costs more than levels return. Consistent
+with comp0>comp2: at 10s budgets this engine is GENERATION-THROUGHPUT-BOUND. The
+sparrow-style shrink only works with temporary-overlap exploration + separation - a
+different solve paradigm (= the nest_physics engine on the other research branch). The
+natural breakthrough beyond this point is a HYBRID: NFP engine produces the layout,
+physics-style compressor finishes it (cross-branch integration, out of scope here).
+
 ### MEASUREMENT WALL: concave 5-seed batch variance is ~±0.4pp
 Levers below ~0.5pp on concave now need 10+ seeds or a harder dataset (ESICUP SHIRTS/
 SWIM via the file: loader) to resolve.
