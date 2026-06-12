@@ -11,6 +11,8 @@ You call them through a plain **C ABI** (works from any language).
 | --- | --- | --- |
 | Clean polygon packing, no overlap | **`nfp_nest`** | `nfp_nest.dll` / `.dylib` |
 | Dense packing, parts into holes | **`np_nest`** | `nest_physics.dll` / `.dylib` |
+| Simple row/grid layout (no nesting) | **`nfp_pack`** | `nfp_nest.dll` / `.dylib` |
+| Grow / shrink one polygon (Clipper2) | **`nfp_offset_polygon`** | `nfp_nest.dll` / `.dylib` |
 
 To place instance *i*: `final = Rotate(part, angle[i], origin) + (tx[i], ty[i])`, on sheet `sheet_id[i]`
 (`-1` = didn't fit). `(tx, ty)` are sheet‑local — add the sheet's own position.
@@ -93,6 +95,9 @@ int n = nfp_nest(
     const int*    part_vertex_counts,        // [part_count]  vertices in each part's outline
     const double* part_xy,                   // all part-outline points, x,y,x,y,…
     const int*    part_quantities,           // [part_count]  how many copies of each part
+    const int*    part_rotations,            // [part_count]  per-part rotation override: 0 = use
+                                             //   params->rotations (default), N>0 = only N orientations
+                                             //   (360/N° steps; 1 = fixed at 0°). NULL = no overrides.
     const int*    part_hole_counts,          // [part_count]  holes in each part
     const int*    part_hole_vertex_counts,   // vertices in each hole
     const double* part_hole_xy,              // all part-hole points, x,y,…
@@ -149,6 +154,43 @@ search), `spacing` (gap), `useHoles`. Everything else has a sensible default.
 
 ---
 
+## `nfp_pack` — simple row/grid layout (no nesting)
+
+Lays instances out left‑to‑right in rows — the `compas_nest` `pack()` semantics. **array mode**
+(`max_width <= 0`): wrap every `columns` items. **distance mode** (`max_width > 0`): wrap when the
+next part would exceed `max_width`. Angle is always `0`, sheet id always `0`.
+
+```c
+int n = nfp_pack(
+    int           part_count,
+    const int*    part_vertex_counts,        // [part_count]
+    const double* part_xy,                   // all part points, x,y,…
+    const int*    part_quantities,           // [part_count] (NULL = 1 each)
+    int           columns,                   // array mode: cells per row
+    double        gap_x, double gap_y,       // cell gaps
+    double        max_width,                 // >0 = distance mode
+    double* out_tx, double* out_ty, double* out_angle, int* out_sheet_id);
+// return value = number of placed instances (= sum of quantities)
+```
+
+## `nfp_offset_polygon` — grow / shrink one polygon
+
+Clipper2 inflate with miter joins; positive `delta` grows, negative shrinks. Returns the vertex
+count written (largest‑area result loop), `0` if the offset vanished, or the **negated** required
+count when `max_out_vertices` is too small (call again with a bigger buffer).
+
+```c
+int n = nfp_offset_polygon(
+    int           vertex_count,
+    const double* xy,                        // closed ring, x,y,… (no duplicate end point needed)
+    double        delta,                     // model units; + grows, − shrinks
+    double        miter_limit,               // <= 0 → 2.0
+    int           max_out_vertices,
+    double*       out_xy);                   // [max_out_vertices*2]
+```
+
+---
+
 ## `np_nest` — physics packing (into holes)
 
 Same idea, plus parts can nest **into** holes. One output slot per part (original order). Returns `0` on success.
@@ -159,6 +201,9 @@ int rc = np_nest(
     int           part_count,
     const int*    part_vertex_counts,        // [part_count]  vertices in each part
     const double* part_xy,                   // all part points, x,y,…
+    const int*    part_rotations,            // [part_count]  per-part rotation override: 0 = free
+                                             //   continuous rotation (default), N>0 = only N discrete
+                                             //   orientations (1 = fixed at 0°). NULL = no overrides.
     // ---- sheets: outlines + holes ----
     int           sheet_count,
     const int*    sheet_outer_vertex_counts, // [sheet_count]
