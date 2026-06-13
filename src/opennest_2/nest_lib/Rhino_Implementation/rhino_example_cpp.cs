@@ -143,10 +143,26 @@ namespace nest_lib
             int[] svcA = svc.ToArray(), shcA = shc.ToArray(), shvcA = shvc.ToArray();
             double[] sxyA = sxy.ToArray(), shxyA = shxy.ToArray();
 
+            // Build per-source-type rotation array (indexed by srcOrder position = part_count index).
+            int[] partRotA = null;
+            if (_partRotations != null)
+            {
+                bool any = false;
+                var prArr = new int[G];
+                for (int i = 0; i < G; i++)
+                {
+                    int s = srcOrder[i];
+                    int r = (s < _partRotations.Length) ? _partRotations[s] : 0;
+                    prArr[i] = r;
+                    if (r != 0) any = true;
+                }
+                if (any) partRotA = prArr;
+            }
+
             var solveTask = Task.Run(() =>
             {
                 placed = NfpNestWrapper.nfp_nest(
-                    G, pvcA, pxyA, pqtyA, phcA, phvcA, phxyA,
+                    G, pvcA, pxyA, pqtyA, phcA, phvcA, phxyA, partRotA,
                     S, svcA, sxyA, shcA, shvcA, shxyA,
                     ref pr, tx, ty, ang, sid, pidx, out nSheets, out fitness);
             });

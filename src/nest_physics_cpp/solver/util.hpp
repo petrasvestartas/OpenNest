@@ -84,6 +84,19 @@ inline bool g_fill_gaps = true;
 // re-checked by the caller, so it can never create overlap. OFF => byte-identical to before.
 inline bool g_reinsert_spill = false;
 
+// Best-of-2 on spill sheets (default off): re-solve each spill sheet's fixed carried set at a second
+// seed and keep whichever packs tighter AFTER compaction (the slide-to-contact pass closes different
+// slack in different basins, so raw strip width mis-ranks them). Monotone-safe: sheet 0 and the part
+// set are untouched, so packing can never get worse; the cost is wall-only. OFF => byte-identical.
+inline bool g_spill_best_of2 = false;
+
+// ROTATIONAL kick in compact_left (default off): the slide passes are translation-only, so
+// orientation slack at contact is never reclaimed. When the translation sweeps reach a fixpoint,
+// try small +/-deg rotations per part (about its centroid, exact brute_overlap feasibility,
+// strictly non-widening) and keep a rotation iff it enables a strictly deeper -x slide; then the
+// sweeps continue. OFF => byte-identical.
+inline bool g_compact_rot = false;
+
 // Drop INVALID placements (default on): a part the solver couldn't actually fit can end up reported on a
 // sheet while hanging OUT OF BOUNDS or overlapping a sheet hole (it took a fresh sheet for nothing). This
 // demotes any such placement to UNPLACED so the host lays it out OUTSIDE the sheets instead of wasting a

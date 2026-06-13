@@ -54,6 +54,7 @@ namespace NfpNest
             int[]        part_hole_counts,
             int[]        part_hole_vertex_counts,
             double[]     part_hole_xy,
+            int[]        part_rotations,
             int          sheet_count,
             int[]        sheet_vertex_counts,
             double[]     sheet_xy,

@@ -146,6 +146,26 @@ struct Layout {
         for (auto& obstacle : snap.dynamic_hazards) engine.register_obstacle(obstacle);
     }
 
+    // Incremental variant for strip-width changes: when the new container fits inside the current
+    // quadtree root and neither container carries quality zones (holes), only the exterior obstacle
+    // needs replacing — the tree, its partition, and all N registered parts stay untouched (the
+    // caller has already moved any shifted parts via remove/place). Falls back to the full
+    // swap_container otherwise (width GROW past the root, e.g. the InitialPlacer 1.2x expansion,
+    // or hole-bearing sheets). Cross-width rollbacks go through Layout::from_snapshot, which
+    // re-roots the engine exactly, so the kept-root superset never outlives a rollback.
+    void swap_container_incremental(Container c) {
+        bool holes_old = false, holes_new = false;
+        for (auto& qz : container.quality_zones) if (qz) holes_old = true;
+        for (auto& qz : c.quality_zones) if (qz) holes_new = true;
+        if (!holes_old && !holes_new &&
+            engine.bbox().relation_to(c.collision_outer->bbox) == GeoRelation::Surrounding) {
+            engine.swap_exterior(c.collision_outer);
+            container = std::move(c);
+        } else {
+            swap_container(std::move(c));
+        }
+    }
+
     LayoutSnapshot save() const;
     void restore(const LayoutSnapshot& ls);
 

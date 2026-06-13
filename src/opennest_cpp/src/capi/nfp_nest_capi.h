@@ -58,6 +58,7 @@ NFP_API int nfp_nest(
     const int*    part_hole_counts,          // [part_count]
     const int*    part_hole_vertex_counts,   // [sum(part_hole_counts)]
     const double* part_hole_xy,              // [sum(part_hole_vertex_counts)*2]
+    const int*    part_rotations,            // [part_count] per-part rotation sample count (NULL or 0 => use global NfpParams::rotations)
     int           sheet_count,
     const int*    sheet_vertex_counts,       // [sheet_count]
     const double* sheet_xy,                  // [sum(sheet_vertex_counts)*2]

@@ -28,7 +28,8 @@ GeneticAlgorithm::GeneticAlgorithm(const std::vector<std::shared_ptr<NFP>>& adam
         if (StrictAngles) {
             angles[i] = defaultAngles[i];
         } else {
-            angles[i] = static_cast<float>(std::floor(r.NextDouble() * Config.rotations)) * (360.0f / Config.rotations);
+            int rn = Config.rotationsForPart(adam[i]->source.value_or(-1));
+            angles[i] = static_cast<float>(std::floor(r.NextDouble() * rn)) * (360.0f / rn);
         }
     }
 
@@ -76,7 +77,8 @@ void GeneticAlgorithm::CreateShuffledSolution(const std::vector<std::shared_ptr<
     std::vector<float> partialRandomRotations(adam.size());
     for (size_t i = 0; i < partialRandomRotations.size(); i++) {
         if (r.NextDouble() < 0.5) {
-            partialRandomRotations[i] = static_cast<float>(std::floor(r.NextDouble() * Config.rotations)) * (360.0f / Config.rotations);
+            int rn = Config.rotationsForPart(newPlacements[i]->source.value_or(-1));
+            partialRandomRotations[i] = static_cast<float>(std::floor(r.NextDouble() * rn)) * (360.0f / rn);
         } else {
             partialRandomRotations[i] = (i < defaultAngles.size()) ? defaultAngles[i] : 0;
         }
@@ -398,7 +400,8 @@ PopulationItem GeneticAlgorithm::mutateFaithful(const PopulationItem& p) {
                 std::swap(clone.placements[i], clone.placements[j]);
         }
         if (r.NextDouble() < rate) {
-            clone.Rotation[i] = static_cast<float>(std::floor(r.NextDouble() * Config.rotations)) * (360.0f / Config.rotations);
+            int rn = Config.rotationsForPart(clone.placements[i]->source.value_or(-1));
+            clone.Rotation[i] = static_cast<float>(std::floor(r.NextDouble() * rn)) * (360.0f / rn);
         }
     }
     return clone;

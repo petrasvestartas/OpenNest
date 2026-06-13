@@ -55,6 +55,10 @@ if(NEST_PHYSICS_BUILD_CLI)
     if(NOT MSVC)
         find_package(Threads REQUIRED)
         target_link_libraries(nest_physics_cli PRIVATE Threads::Threads)
+        # Research-CLI-only flags (NOT the shipped DLL — -march=native would crash older CPUs):
+        # AVX2 vectorizes the pole-pair sqrt loop (~5%, bit-identical packing); -ffp-contract=off
+        # keeps FMA off so results match the DLL; -fopenmp-simd arms the omp simd pragmas.
+        target_compile_options(nest_physics_cli PRIVATE -march=native -ffp-contract=off -fopenmp-simd)
     endif()
     if(MINGW OR (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND WIN32))
         target_link_options(nest_physics_cli PRIVATE -static -static-libgcc -static-libstdc++)

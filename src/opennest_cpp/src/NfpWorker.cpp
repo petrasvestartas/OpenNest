@@ -793,7 +793,7 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
                 // spread over 360 (every 45). When tryAllRotations is OFF this is a no-op: effRotations
                 // == config.rotations, the step is unchanged, and the loop still breaks at the first
                 // valid rotation -> the fast path is byte-identical.
-                int effRotations = config.rotations;
+                int effRotations = config.rotationsForPart(trialPart->source.value_or(-1));
                 if (config.tryAllRotations && effRotations > 8) effRotations = 8;
                 const float rotStep = 360.0f / effRotations;
                 for (j = 0; j < effRotations; j++) {

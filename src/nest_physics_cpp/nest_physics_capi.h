@@ -16,7 +16,7 @@ extern "C" {
 
 typedef struct NpParams {
     int       num_rotations;       // discrete orientations sampled per part (>=1)
-    double    spacing;             // min gap between parts / from holes (0 = touching allowed)
+    double    spacing;             // IGNORED: offset is applied upstream (host offsets parts/sheets before solving). Kept for ABI stability.
     double    simplify_tolerance;  // geometry simplification tolerance (<=0 keeps the lean default)
     int       seed;                // base RNG seed (>=0)
     double    time_budget_secs;    // wall-clock budget, used when iter_mode == 0
@@ -68,6 +68,7 @@ NP_EXPORT int np_nest(
     const int*    part_hole_counts,         // [part_count] holes per part (NULL => no part holes)
     const int*    part_hole_vertex_counts,  // [sum(part_hole_counts)] vertex count per part-hole, part-major (NULL ok)
     const double* part_hole_xy,             // interleaved x,y for all part holes, part-major (NULL ok)
+    const int*    part_rotations,           // [part_count] per-part rotation sample count (NULL or 0 => use global num_rotations)
     const NpParams* params,
     double*       out_tx,
     double*       out_ty,

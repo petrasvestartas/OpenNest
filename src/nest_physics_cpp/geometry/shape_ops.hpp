@@ -1,8 +1,10 @@
 // Faithful C++ port of nest-rs geometry/shape_modification.rs
 //   * simplify_shape        - edge-reduction within an area-change tolerance
 //   * close_narrow_concavities - close thin concavities with a straight edge
-//   * offset_shape          - NOT PORTED: requires the geo-buffer crate. nest's
-//     default config sets min_part_separation = None, so offset is never invoked.
+//   * offset_shape          - NOT PORTED (requires the geo-buffer crate). Spacing/offset is
+//     applied UPSTREAM in the host (Grasshopper offsets parts & sheets via dedicated
+//     components and feeds already-offset outlines to the solver), so the solver never sets
+//     ShapeModifyConfig::offset and this stub is never reached. See nest_geo / nest_sheets.
 #pragma once
 #include "polygon.hpp"
 

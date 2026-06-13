@@ -128,7 +128,7 @@ struct StripProblem {
 
     void change_strip_width(f32 new_width) {
         strip.set_width(new_width);
-        layout.swap_container(strip.to_container());
+        layout.swap_container_incremental(strip.to_container());
     }
 
     void fit_strip() {

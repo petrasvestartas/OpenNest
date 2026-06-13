@@ -54,6 +54,7 @@ namespace opennest_2
         private readonly System.Timers.Timer _debounce;      // one-shot; coalesces rapid input changes (slider drags)
         private volatile bool _restartRequested = false;     // a change arrived mid-solve -> restart once it unwinds
         private volatile bool _runActive = false;            // latched live session on/off
+        private bool _prevRunInput = false;                  // previous value of the Run input port (edge detect)
         private string _solvedSig = null, _pendingSig = null;
         private int _solvedIter = -1, _pendingIter = -1;
         private const int DEBOUNCE_EDIT_MS = 250, DEBOUNCE_ITER_MS = 350;
@@ -97,7 +98,7 @@ namespace opennest_2
                 args.Display.DrawCurve(geometry[i], col); // geometry_colors[i]
         }
 
-        private List<nest_rhino_lib.nest_geo> nest_geos;
+        private List<nest_rhino_lib.nest_geo> nest_geos = new List<nest_rhino_lib.nest_geo>();
 
         public override void BakeGeometry(RhinoDoc doc, List<Guid> obj_ids)
         {
@@ -207,8 +208,10 @@ namespace opennest_2
             // Nesting options are edited directly on the component body (dropdowns + type-in boxes), so there is
             // no longer an "Options" string input. See BuildOptions() / NestOptionsAttributes.
             pManager.AddIntegerParameter("Iterations", "Iterations", "Relaxation rounds; higher packs tighter but is slower. ~4000 = the tight all-on-one-sheet pack; lower for a quick rough preview.", GH_ParamAccess.item, 4000);
-            // No "Run" input: use the green Run button on the component body (it turns red "Stop" while solving).
+            // Standard Run input (replaces the old on-canvas Run button). Wire a Boolean Toggle.
+            pManager.AddBooleanParameter("Run", "Run", "Wire a Boolean Toggle. TRUE = solve now and re-solve when an input changes (background thread, live preview); FALSE = hold the last result. (Options are still edited on the component body; ESC also stops a running solve.)", GH_ParamAccess.item, false);
             pManager[2].Optional = true;
+            pManager[3].Optional = true;
         }
 
         protected override void RegisterOutputParams(GH_Component.GH_OutputParamManager pManager)
@@ -261,6 +264,20 @@ namespace opennest_2
 
         protected override void SolveInstance(IGH_DataAccess DA)
         {
+            // Run is a standard input port now (was the on-canvas Run button). Edge-drive the existing latch:
+            // a rising edge launches a live session; a falling edge stops it and holds the last result. Using the
+            // INPUT's previous value (not _runActive) means an ESC-stop mid-solve isn't immediately relaunched
+            // just because Run is still held TRUE.
+            bool runInput = false; DA.GetData(3, ref runInput);
+            if (runInput && !_prevRunInput) { _runActive = true; _runButtonRequested = true; }
+            else if (!runInput && _runActive)
+            {
+                _runActive = false; CancelSolve();
+                try { _debounce.Stop(); } catch { }
+                try { EngineGate.Physics.Dequeue(_wake); } catch { }
+            }
+            _prevRunInput = runInput;
+
             // ===== phases before the result is ready: gate on Run, launch the solve, or ignore re-solves
             if (_phase != Phase.Ready)
             {
@@ -298,6 +315,8 @@ namespace opennest_2
 
                 // read inputs on the UI thread, flatten, and launch the background solve.
                 ResetDisplayLists();
+                this.nest_geos = new List<nest_rhino_lib.nest_geo>();   // fresh (BeforeSolveInstance no longer resets on a button click)
+                this.bbox = new BoundingBox();
                 _previewBorders = new List<Polyline>();
                 _hasResult = false;
 
@@ -721,6 +740,7 @@ namespace opennest_2
         private Point3d[] _sheetOrigin;
         private List<int> _pvc, _flatGroup;
         private int[] _pvcA, _sovcA, _shcA, _hvcA, _phcA, _phvcA, _out_sheet, _psh;
+        private int[] _partRotA;   // per-flat-part rotation sample count (0 = use global num_rotations)
         private double[] _pxyA, _soxyA, _hxyA, _phxyA, _out_tx, _out_ty, _out_angle, _ptx, _pty, _pang;
         private NpParams _np;
 
@@ -878,6 +898,18 @@ namespace opennest_2
             _phcA = phc.ToArray();
             _phvcA = phvc.Count > 0 ? phvc.ToArray() : new int[1];
             _phxyA = phxy.Count > 0 ? phxy.ToArray() : new double[1];
+            // Per-flat-part rotation: nest_geo.rotations[i] (per group index) -> repeated for each copy.
+            // 0 means "use global num_rotations"; non-zero overrides for that part only.
+            var partRotList = new int[F];
+            bool hasAnyRot = false;
+            for (int fi = 0; fi < F; fi++)
+            {
+                int gi = flatGroup[fi];
+                int r = (nest_geo.rotations != null && gi < nest_geo.rotations.Count) ? nest_geo.rotations[gi] : 0;
+                partRotList[fi] = r;
+                if (r != 0) hasAnyRot = true;
+            }
+            _partRotA = hasAnyRot ? partRotList : null;   // null -> C++ falls back to global for all parts
             _partHolesTotal = 0; foreach (int hcount in phc) _partHolesTotal += hcount;
             _sheetHolesTotal = 0; foreach (int hcount in shc) _sheetHolesTotal += hcount;
             _ptx = new double[F == 0 ? 1 : F]; _pty = new double[F == 0 ? 1 : F];
@@ -996,7 +1028,7 @@ namespace opennest_2
             NestPhysicsWrapper.np_cancel_reset();
             rc = NestPhysicsWrapper.np_nest(
                 _F, _pvcA, _pxyA, _nsheet, _sovcA, _soxyA, _shcA, _hvcA, _hxyA,
-                _phcA, _phvcA, _phxyA,
+                _phcA, _phvcA, _phxyA, _partRotA,
                 ref _np, _out_tx, _out_ty, _out_angle, _out_sheet, out _n_sheets_used);
             rounds_done = NestPhysicsWrapper.np_progress();
             if (rc != 0) Rhino.RhinoApp.WriteLine("nest_physics np_nest returned " + rc.ToString());

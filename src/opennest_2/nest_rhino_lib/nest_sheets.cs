@@ -10,6 +10,18 @@ namespace nest_rhino_lib
 {
 
 
+    /// <summary>
+    /// Holds the sheets (bins) to nest into. Like nest_geo, any spacing/margin is applied HERE, upstream of
+    /// the solver — the solver does no offsetting. To keep parts set back from the sheet edge, call
+    /// <see cref="offset_sheet_boundary"/> before solving:
+    ///
+    ///     sheets.offset_sheet_boundary(spacing / 2);   // shrink outer in, grow holes out
+    ///
+    /// The sheet OUTER boundary shrinks inward by `margin` (parts keep a setback from the edge) and each sheet
+    /// HOLE grows by `margin` (keep-out regions gain clearance). Pairing this with
+    /// nest_geo.offset_nesting_boundary(spacing/2) yields a full `spacing` gap between every part and the edge.
+    /// On failure the original sheet polyline is kept.
+    /// </summary>
     public class nest_sheets
     {
         public Polyline[][] sheets = new Polyline[100][];

@@ -53,12 +53,14 @@ inline ShapeModifyConfig part_modify() {
     ShapeModifyConfig m; m.simplify_tolerance = 0.001f; m.narrow_concavity_cutoff = std::make_pair(0.01f, 0.01f); return m;
 }
 
-// Build a Part from a raw polyline (FREE continuous rotation). nullopt if degenerate.
+// Build a Part from a raw polyline. nullopt if degenerate.
+// rot_samples > 0  => discrete rotation: rot_samples evenly-spaced angles over [0, 2π).
+// rot_samples == 0 => continuous (global ROT_N_SAMPLES governs sampling at solve time).
 // If `input_centroid` is non-null it receives the centroid of the ORIGINAL (un-shifted) input;
 // translate(-input_centroid) is exactly the part->internal pre-transform (used by the C ABI to
 // report a single rigid transform mapping the host's original geometry to its placed pose).
 inline std::optional<Part> build_part(usize id, std::vector<Point> pts, Point* input_centroid = nullptr,
-                                      const ShapeModifyConfig* mc = nullptr) {
+                                      const ShapeModifyConfig* mc = nullptr, int rot_samples = 0) {
     f32 mnx = F32_MAX, mny = F32_MAX;
     for (auto& p : pts) { mnx = min_f(mnx, p.x); mny = min_f(mny, p.y); }
     for (auto& p : pts) { p.x -= mnx; p.y -= mny; }
@@ -77,7 +79,17 @@ inline std::optional<Part> build_part(usize id, std::vector<Point> pts, Point* i
         os.pre_transform = RigidTransform(0.0f, -c.x, -c.y); // center at origin (matches nest import)
         os.modify_mode = ShapeModifyMode::Inflate;
         os.modify_config = mc ? *mc : part_modify(); // exe passes nullptr -> identical default
-        return Part::make(id, std::move(os), RotationRange::continuous(), std::nullopt, surrogate_config());
+        RotationRange rr;
+        if (rot_samples > 0) {
+            std::vector<f32> angles;
+            angles.reserve((usize)rot_samples);
+            f32 step = (f32)(6.28318530717958647692 / rot_samples);
+            for (int k = 0; k < rot_samples; ++k) angles.push_back((f32)k * step);
+            rr = RotationRange::discrete_of(std::move(angles));
+        } else {
+            rr = RotationRange::continuous();
+        }
+        return Part::make(id, std::move(os), std::move(rr), std::nullopt, surrogate_config());
     } catch (const std::exception& e) {
         std::fprintf(stderr, "  skip part %zu: %s\n", id, e.what());
         return std::nullopt;
@@ -413,6 +425,74 @@ inline void compact_left(Layout& live, f32 sheet_w, f32 sheet_h, const std::vect
                 if (len < TOL) continue;
                 if (slide_dir(i, dx / len, dy / len, len, width_cap) > TOL) moved = true;
             }
+            // D4 (g_compact_rot): ROTATIONAL kick, only at a translation FIXPOINT (all passes above
+            // stalled). The relaxer fixes orientation at the sampled rotation + CD wiggle and the
+            // slides are translation-only, so orientation slack at contact is never reclaimed. Per
+            // part (leftmost first) try small +/-delta rotations about its centroid; a candidate must
+            // stay in-bounds, overlap-free (same exact brute_overlap), and STRICTLY non-widening
+            // (bbox.x_max <= pre-rotation x_max). Keep the delta whose subsequent maximal -x slide
+            // lands the strictly leftmost bbox.x_max (ties -> no rotation; the slide itself is left
+            // to the next sweep's D0). Runs rarely (fixpoints only), so the 6x bisection cost per
+            // part is bounded. OFF => byte-identical.
+            if (!moved && g_compact_rot) {
+                const f32 DEG = PI_F / 180.0f;
+                const f32 ROT_STEPS[6] = {2.0f * DEG, -2.0f * DEG, 1.0f * DEG, -1.0f * DEG, 0.5f * DEG, -0.5f * DEG};
+                std::sort(ps.begin(), ps.end(), [](const PP& a, const PP& b) { return a.poly.bbox.x_min < b.poly.bbox.x_min; });
+                for (int i = 0; i < N; ++i) {
+                    auto pose_ok = [&](const Polygon& t) -> bool {
+                        if (t.bbox.x_min < -TOL || t.bbox.y_min < -TOL) return false;
+                        if (t.bbox.y_max > sheet_h + TOL) return false;
+                        for (int j = 0; j < N; ++j) {
+                            if (j == i) continue;
+                            if (!bbox_overlap(t.bbox, ps[j].poly.bbox)) continue;
+                            if (brute_overlap(t, ps[j].poly)) return false;
+                        }
+                        if (SH) for (const auto& h : *SH) {
+                            if (!bbox_overlap(t.bbox, h.bbox)) continue;
+                            if (brute_overlap(t, h)) return false;
+                        }
+                        return true;
+                    };
+                    auto slide_depth = [&](const Polygon& t0) -> f32 {
+                        f32 maxd = t0.bbox.x_min;
+                        if (maxd <= TOL) return 0.0f;
+                        auto feas = [&](f32 d) -> bool {
+                            Polygon t = t0;
+                            t.transform(AffineTransform::from_translation(-d, 0.0f));
+                            return pose_ok(t);
+                        };
+                        f32 lo = 0.0f, hi = maxd, best = 0.0f;
+                        for (int it = 0; it < BISECT; ++it) {
+                            f32 mid = 0.5f * (lo + hi);
+                            if (feas(mid)) { best = mid; lo = mid; } else { hi = mid; }
+                        }
+                        return best;
+                    };
+                    const f32 base_xmax = ps[i].poly.bbox.x_max;
+                    f32 best_final_xmax = base_xmax - slide_depth(ps[i].poly); // delta = 0 baseline
+                    f32 best_delta = 0.0f;
+                    Point c = ps[i].poly.centroid();
+                    for (f32 delta : ROT_STEPS) {
+                        AffineTransform rot_about_c =
+                            AffineTransform::from_translation(-c.x, -c.y).rotate(delta).translate(c.x, c.y);
+                        Polygon t = ps[i].poly;
+                        t.transform(rot_about_c);
+                        if (t.bbox.x_max > base_xmax + TOL) continue; // never widen
+                        if (!pose_ok(t)) continue;
+                        f32 fx = t.bbox.x_max - slide_depth(t);
+                        if (fx < best_final_xmax - TOL) { best_final_xmax = fx; best_delta = delta; }
+                    }
+                    if (best_delta != 0.0f) {
+                        AffineTransform rot_about_c =
+                            AffineTransform::from_translation(-c.x, -c.y).rotate(best_delta).translate(c.x, c.y);
+                        ps[i].poly.transform(rot_about_c);
+                        ps[i].dt = ps[i].dt.compose()
+                                       .translate(-c.x, -c.y).rotate(best_delta).translate(c.x, c.y)
+                                       .decompose();
+                        moved = true; // continue sweeping: the next D0 performs the unlocked slide
+                    }
+                }
+            }
             if (!moved) break;
         }
     }
@@ -450,8 +530,12 @@ inline Sheets greedy_fill(const std::vector<std::pair<Part, usize>>& parts, cons
         // parts, sheet2 393.0 -> 252.1) for ~+1s, still 0 overlaps/bounds, all placed. The spill sheets are
         // smaller/cheaper, so 0.20 each is ample; pushing sheet 0 past ~0.80 hit a worse seed basin (0.85/
         // 0.90 landed 816/812), so 0.80 is the measured sweet spot.
-        double b = (sheet == 0) ? total_budget * 0.85 : total_budget * 0.15;
-        int passes = (sheet == 0) ? 3 : 2;
+        double b = (sheet == 0) ? total_budget * 0.80 : total_budget * 0.20;
+        // Spill sheets pack tighter with ONE deep strip-pass, not 2 reseeds: the carried set is small
+        // and depth-limited, so splitting its budget across restarts loses more than basin diversity
+        // gains (measured: sheet2 185.4 -> 160.0, total 692.4 -> 667.0). Diversity for the spill comes
+        // from g_spill_best_of2 below, which ranks two FULL-depth solves instead of two half-depth ones.
+        int passes = (sheet == 0) ? 3 : 1;
         auto sub = subset_items(parts, remaining);
         const std::vector<Polygon>* holes = nullptr;
         if (!per_sheet_holes.empty()) {
@@ -466,6 +550,24 @@ inline Sheets greedy_fill(const std::vector<std::pair<Part, usize>>& parts, cons
         }
         StripResult R = run_strip(sub, engine, sheet_h, sheet_w, b, base_seed + (uint64_t)sheet * 7, passes, holes, listener);
         Layout live = Layout::from_snapshot(R.sol.layout_snapshot);
+
+        // Best-of-2 on the (binding) spill sheets: re-solve the fixed carried set at a second seed and
+        // keep the tighter result. Basins must be ranked by POST-COMPACTION width, not raw strip width —
+        // the slide-to-contact pass closes different slack in different basins (measured: seed+1 compacts
+        // 160.0 -> 156.0, total 667.0 -> 663.0). Monotone-safe: sheet 0 and the part set are untouched,
+        // so packing can never get worse; the cost is wall-only and the spill solves are cheap.
+        if (g_spill_best_of2 && sheet > 0 && !cancel_now) {
+            StripResult R2 = run_strip(sub, engine, sheet_h, sheet_w, b,
+                                       base_seed + (uint64_t)sheet * 7 + 1ull, passes, holes, &dummy);
+            Layout live2 = Layout::from_snapshot(R2.sol.layout_snapshot);
+            auto compacted_width = [&](Layout L) -> f32 { // by value: compaction probes a copy
+                compact_left(L, sheet_w, sheet_h, holes);
+                f32 mx = 0.0f;
+                L.placed_parts.for_each([&](PartKey, const PlacedPart& pi) { mx = max_f(mx, pi.shape->bbox.x_max); });
+                return mx;
+            };
+            if (compacted_width(live2) < compacted_width(live)) live = std::move(live2);
+        }
 
         // CANCELLED (host pressed ESC): freeze the current strip as-is. Emit EVERY remaining part at its
         // current optimized position, wrapping the long strip into sheet-width bands (clamped to the last
@@ -518,25 +620,6 @@ inline Sheets greedy_fill(const std::vector<std::pair<Part, usize>>& parts, cons
                 if (pi.part_id == best_local) keep.push_back({forced, pi.shape->vertices, pi.d_transf});
             });
             std::vector<usize> c2; for (usize g : carry) if (g != forced) c2.push_back(g); carry = c2;
-        }
-
-        // [TEMP INSTRUMENTATION]
-        {
-            f32 sw = R.width;
-            f32 cmin = F32_MAX, cmax = -F32_MAX; int ncarry = 0;
-            f32 ymin = F32_MAX, ymax = -F32_MAX;
-            live.placed_parts.for_each([&](PartKey, const PlacedPart& pi) {
-                if (pi.shape->bbox.x_max > sheet_w + 1e-3f) {
-                    cmin = std::min(cmin, pi.shape->bbox.x_min);
-                    cmax = std::max(cmax, pi.shape->bbox.x_max);
-                    ymin = std::min(ymin, pi.shape->bbox.y_min);
-                    ymax = std::max(ymax, pi.shape->bbox.y_max);
-                    ncarry++;
-                }
-            });
-            std::fprintf(stderr, "[TEMP] sheet %d: strip_w=%.1f keep=%zu carry(pre-reinsert)=%d "
-                         "carry_xrange=[%.1f,%.1f] slice_w=%.1f carry_yrange=[%.1f,%.1f]\n",
-                         sheet, sw, keep.size(), ncarry, cmin, cmax, cmax - cmin, ymin, ymax);
         }
 
         // STEP 2 — IN-LOOP SPILL RE-INSERTION (ruin-and-recreate, g_reinsert_spill). The cut spills every

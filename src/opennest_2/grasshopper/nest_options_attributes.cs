@@ -141,14 +141,15 @@ namespace opennest_2
             int innerW = width - 2 * Pad;
 
             // extra == the exact sum of every element + gap drawn below the body (so nothing can exceed it).
-            int extra = Pad + RunH + Pad + HeaderH + (n > 0 ? Pad + n * RowH : 0) + Pad;
+            // No Run button anymore — Run is a standard input port now; only the Options header + rows are drawn.
+            int extra = Pad + HeaderH + (n > 0 ? Pad + n * RowH : 0) + Pad;
 
             RectangleF b = Bounds;
             b.Height = bodyBottom - b.Y + extra;   // set (not accumulate) from the captured integer bottom
             Bounds = b;
 
             int y = bodyBottom + Pad;
-            _runRect = new RectangleF(left + Pad, y, innerW, RunH); y += RunH + Pad;
+            _runRect = RectangleF.Empty;
             _headerRect = new RectangleF(left + Pad, y, innerW, HeaderH); y += HeaderH;
 
             _ctrlRects = new RectangleF[n];
@@ -255,13 +256,8 @@ namespace opennest_2
                 }
 
                 Color dark = Color.FromArgb(64, 64, 64);
-                Color black = Color.FromArgb(28, 28, 28);
 
-                // ---- Run button (always visible, above the Options header): BLACK = Run, RED = Stop ----
-                bool busy = _host.IsBusy;
-                Button(GH_Convert.ToRectangle(_runRect), busy ? "Stop" : "Run",
-                       busy ? Color.FromArgb(180, 50, 50) : black, busy ? IconKind.Stop : IconKind.Play);
-
+                // Run is a standard input port now (no on-canvas Run button) — only the Options panel is drawn.
                 // ---- collapsible header ----
                 Rectangle hRect = GH_Convert.ToRectangle(_headerRect);
                 Button(hRect, "Options", dark, _host.OptionsExpanded ? IconKind.ChevronDown : IconKind.ChevronRight);
@@ -351,13 +347,6 @@ namespace opennest_2
         {
             if (_host != null && e.Button == MouseButtons.Left && HasOptions)
             {
-                // Run button: start a solve (or stop a running one)
-                if (_runRect.Contains(e.CanvasLocation))
-                {
-                    _host.OnRunClicked();
-                    return GH_ObjectResponse.Handled;
-                }
-
                 // header toggles the panel
                 if (_headerRect.Contains(e.CanvasLocation))
                 {

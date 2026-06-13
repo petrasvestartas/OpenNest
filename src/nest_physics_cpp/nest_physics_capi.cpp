@@ -367,6 +367,7 @@ extern "C" NP_EXPORT int np_nest(
     const int*    part_hole_counts,
     const int*    part_hole_vertex_counts,
     const double* part_hole_xy,
+    const int*    part_rotations,
     const NpParams* params,
     double*       out_tx,
     double*       out_ty,
@@ -416,6 +417,19 @@ extern "C" NP_EXPORT int np_nest(
         // the limiter there is the arrangement/basin, not the width-step — so it is NOT a component option).
         g_expl_bisect = false;
         if (const char* e = std::getenv("NP_BISECT")) g_expl_bisect = (std::atoi(e) != 0);
+        // STEP 2 in-loop spill re-insertion (default on): grid-search spilled parts back into the
+        // current sheet's free space BEFORE the next sheet's solve runs, so that solve packs fewer
+        // parts and lands narrower. Verified collision-free moves only (measured 717.1 -> 708.8 on
+        // parts_510x635). NP_REINSERT_SPILL=0 disables for A/B.
+        g_reinsert_spill = true;
+        if (const char* e = std::getenv("NP_REINSERT_SPILL")) g_reinsert_spill = (std::atoi(e) != 0);
+        // Spill-sheet best-of-2 (default OFF in the host): re-solve each spill sheet's fixed carried
+        // set at a second seed, keep the post-compaction tighter result. Monotone-safe (never worse)
+        // but it solves EVERY sheet after the first TWICE (~+33..50% wall on multi-sheet jobs), which
+        // breaks the user's time-budget expectation — so it is OPT-IN here (the research CLI keeps it
+        // on). NP_SPILL_BEST_OF2=1 enables. Measured 667.0 -> 663.0 on parts_510x635.
+        g_spill_best_of2 = false;
+        if (const char* e = std::getenv("NP_SPILL_BEST_OF2")) g_spill_best_of2 = (std::atoi(e) != 0);
 
         bool preview = g_iter_mode && P.iter_budget > 0 && P.iter_budget < 500;
         g_n_workers = preview ? 4u : 0u;   // 0 => resolve to ~75% of cores
@@ -424,9 +438,11 @@ extern "C" NP_EXPORT int np_nest(
         g_pole_max  = preview ? 12u : (P.pole_max > 0 ? (unsigned)P.pole_max : 0u);
         if (const char* e = std::getenv("NP_POLES")) { int p = std::atoi(e); if (p > 0) g_pole_max = (unsigned)p; }
 
-        // spacing -> inflate each part by spacing/2 so two neighbours keep `spacing` apart.
+        // NOTE: part spacing/offset is applied UPSTREAM by the host (Grasshopper offsets parts &
+        // sheets with their dedicated components and passes the already-offset outline here). The
+        // solver does NOT offset: ShapeModifyConfig::offset stays unset so the unported offset_shape
+        // stub is never reached. P.spacing is accepted for ABI stability but intentionally ignored.
         ShapeModifyConfig mc = part_modify();
-        if (P.spacing > 0.0) mc.offset = (f32)(P.spacing * 0.5);
         if (P.simplify_tolerance > 0.0) mc.simplify_tolerance = (f32)P.simplify_tolerance;
 
         // Build parts. Degenerate parts are skipped and stay unplaced (sheet id -1). `craw`/`orig_index`
@@ -456,7 +472,8 @@ extern "C" NP_EXPORT int np_nest(
                 }
             }
             Point cc;
-            auto p = build_part(parts.size(), std::move(pts), &cc, &mc);
+            int rot = (part_rotations && part_rotations[i] > 0) ? part_rotations[i] : 0;
+            auto p = build_part(parts.size(), std::move(pts), &cc, &mc, rot);
             if (p) {
                 parts.emplace_back(std::move(*p), 1); craw.push_back(cc); orig_index.push_back(i);
                 // Centered part-holes (input hole - input centroid) kept in a SIDE-TABLE parallel to
@@ -567,13 +584,17 @@ extern "C" NP_EXPORT int np_nest(
             res = greedy_fill(nest_parts, engine, sheet_w, sheet_h, budget, max_bins, holes_arg, seed);
             have = true;
         } else {
-            // MULTI-START portfolio. DEFAULT = SEQUENTIAL full-worker starts: each start gets the FULL
-            // best-of-~75%-cores worker pool (strongest per start; the proven 47/1 recipe), run one at a
-            // time, keeping the densest by `score`, with EARLY-EXIT the instant a start lands one sheet
-            // (the goal -> no point continuing). On a ~1/6-per-start instance this needs ~6 starts on
-            // average to hit one sheet, but stops as soon as it does. Set NP_PARALLEL_STARTS to force the
-            // old concurrent portfolio (shorter wall, but each start is weaker -> less reliable here).
-            const bool parallel_starts = (std::getenv("NP_PARALLEL_STARTS") != nullptr);
+            // MULTI-START portfolio. DEFAULT = PARALLEL waves: the K starts run concurrently (workers
+            // split across them), so "Starts" buys basin diversity at roughly SINGLE-run wall — the
+            // measured seed-basin spread is large (663..779, ~13% on parts_510x635), and the user's
+            // time budget stays honored. Set NP_SEQUENTIAL_STARTS=1 for the old one-at-a-time mode:
+            // each start gets the FULL best-of-~75%-cores pool (strongest per start, K x wall), with
+            // early-exit the instant a start lands one sheet — the right tool when the goal is
+            // squeezing everything onto ONE sheet and wall time is no object.
+            bool sequential_starts = false;
+            if (const char* e = std::getenv("NP_SEQUENTIAL_STARTS")) sequential_starts = (std::atoi(e) != 0);
+            if (std::getenv("NP_PARALLEL_STARTS")) sequential_starts = false; // back-compat override
+            const bool parallel_starts = !sequential_starts;
             if (!parallel_starts) {
                 g_n_workers = preview ? 4u : 0u;   // full strength per start (0 => ~75% cores)
                 if (const char* e = std::getenv("NP_STARTS_WORKERS")) { int w = std::atoi(e); if (w > 0) g_n_workers = (unsigned)w; }

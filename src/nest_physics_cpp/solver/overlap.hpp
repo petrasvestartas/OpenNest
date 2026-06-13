@@ -199,6 +199,45 @@ struct OverlapTracker {
         });
     }
 
+    // Incremental rebuild after Relaxer::change_strip_width. The from-scratch constructor re-queries
+    // EVERY part against the rebuilt engine, but a width change only moves (a) the parts right of the
+    // split (rigidly co-translated by delta) and (b) the container's RIGHT wall. Everything else is
+    // bit-unchanged:
+    //   - unshifted-vs-unshifted pair losses: pairwise_overlap_loss reads only pole-coordinate
+    //     DIFFERENCES and per-shape constants -> identical inputs -> identical values; keep them.
+    //   - unshifted hole losses: neither the part nor the holes moved; keep them.
+    //   - unshifted container losses: containment_overlap_loss depends on the container bbox only
+    //     through Rect::intersection(s_bbox, c_bbox); only the right wall moves, so a part with
+    //     bbox.x_max <= new wall AND no stale exterior loss keeps an unchanged value. A part that
+    //     straddles the new wall, or had a nonzero loss while the wall moved (grow case: the loss
+    //     may now be 0), is re-queried.
+    //   - shifted parts: full recompute_loss_for_item (covers shifted-vs-shifted and
+    //     shifted-vs-unshifted in both directions via the symmetric PairMatrix, plus exterior+holes).
+    // GLS weights are reset to 1.0 exactly like the from-scratch constructor (cold reset is the
+    // measured optimum; warm-starting weights across a width change packs looser).
+    void rebuild_after_width_change(const Layout& l, const std::vector<std::pair<PartKey, PartKey>>& remaps) {
+        for (const auto& [old_pk, new_pk] : remaps) {
+            usize idx = *pk_idx_map.get(old_pk);
+            pk_idx_map.remove(old_pk);
+            pk_idx_map.insert(new_pk, idx);
+        }
+        for (auto& e : pair_collisions.data) e.weight = 1.0f;
+        for (auto& e : container_collisions) e.weight = 1.0f;
+        for (auto& e : hole_collisions) e.weight = 1.0f;
+
+        std::vector<bool> is_shifted(size, false);
+        for (const auto& [old_pk, new_pk] : remaps) is_shifted[*pk_idx_map.get(new_pk)] = true;
+        for (const auto& [old_pk, new_pk] : remaps) recompute_loss_for_item(new_pk, l);
+
+        const f32 cont_x_max = l.container.collision_outer->bbox.x_max;
+        l.placed_parts.for_each([&](PartKey pk, const PlacedPart& pi) {
+            usize idx = *pk_idx_map.get(pk);
+            if (is_shifted[idx]) return;
+            if (container_collisions[idx].loss != 0.0f || pi.shape->bbox.x_max > cont_x_max)
+                recompute_loss_for_item(pk, l);
+        });
+    }
+
     void restore_but_keep_weights(const OverlapTracker& cts, const Layout&) {
         pk_idx_map = cts.pk_idx_map;
         for (usize i = 0; i < pair_collisions.data.size(); ++i) pair_collisions.data[i].loss = cts.pair_collisions.data[i].loss;

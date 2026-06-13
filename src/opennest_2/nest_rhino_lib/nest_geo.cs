@@ -16,6 +16,24 @@ using System.Text.RegularExpressions;
 
 namespace nest_rhino_lib
 {
+    /// <summary>
+    /// Holds the parts to nest. Each group carries TWO outlines: the original geometry (geometry[] /
+    /// boundary_sorted Item4) and the NESTING polyline (boundary_sorted Item2) that the solver actually
+    /// collides on.
+    ///
+    /// SPACING / OFFSET is applied HERE, upstream of the solver — NOT by the solver. The solver does no
+    /// offsetting (NpParams.spacing is ignored; the C++ offset_shape is an unported stub). To give parts a
+    /// gap, call <see cref="offset_nesting_boundary"/> before solving:
+    ///
+    ///     geo.offset_nesting_boundary(spacing / 2);   // grow outers out, shrink holes in
+    ///
+    /// This grows ONLY the nesting polyline (Item2) — each outer loop outward, each hole inward — so placed
+    /// parts keep `spacing` of clearance, while geometry[] / Item4 stay the ORIGINAL curve. The output
+    /// (borders + attributes) is therefore the un-offset geometry: the offset is nesting-only and invisible
+    /// in the result. On any failure the original polyline is kept, so a part is never dropped.
+    ///
+    /// Sheets follow the same pattern via nest_sheets.offset_sheet_boundary(margin).
+    /// </summary>
     public class nest_geo
     {
         public List<int> indices;
@@ -40,6 +58,10 @@ namespace nest_rhino_lib
 
         public List<List<Transform>> xforms;
 
+        // Per-group rotation sample count for the physics solver (0 = use global num_rotations).
+        // Length must match boundary_sorted.Count; shorter or empty falls back to global.
+        public List<int> rotations;
+
         private HashSet<int> visited = new HashSet<int>();
 
         private List<int> ids = new List<int>();
@@ -59,6 +81,7 @@ namespace nest_rhino_lib
             this.boundary_sorted = new List<List<Tuple<int, Polyline, BoundingBox, Curve>>>();
             this.disply_texts = new List<TextEntity>();
             this.xforms = new List<List<Transform>>();
+            this.rotations = new List<int>();
         }
 
         public List<Guid> bake()
@@ -388,7 +411,8 @@ namespace nest_rhino_lib
                 copies = this.copies,
                 attributes = this.attributes,
                 geometry_sorted = this.geometry_sorted,
-                boudary_indices_non_sorted = this.boudary_indices_non_sorted
+                boudary_indices_non_sorted = this.boudary_indices_non_sorted,
+                rotations = this.rotations,
             };
             nestGeo.attributes = new List<ObjectAttributes>();
             for (int i = 0; i < this.attributes.Count; i++)
@@ -927,6 +951,12 @@ namespace nest_rhino_lib
                 if (source.xforms != null)
                 {
                     combined.xforms.AddRange(source.xforms);
+                }
+
+                // Handle per-group rotations
+                if (source.rotations != null)
+                {
+                    combined.rotations.AddRange(source.rotations);
                 }
                 
                 // Update offset for the next nest_geo
