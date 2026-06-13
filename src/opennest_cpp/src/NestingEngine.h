@@ -27,10 +27,6 @@ public:
     NestingEngine() = default;
 
     // --- Polygon processing ---
-    static Point RotatePoint(const Point& p, double cx, double cy, double angle);
-    static NFP GetMinimumBox(const NFP& vv);
-    static NFP ClipSubject(NFP& subject, NFP& clipBounds, double clipperScale);
-    static NFP simplifyFunction(const NFP& polygon, bool inside);
     static NFP simplifyFunction(const NFP& polygon, bool inside, const NestConfig& config);
     static void offsetTree(NFP& t, double offset, const NestConfig& config, std::optional<bool> inside = std::nullopt);
     static std::vector<NFP> polygonOffsetDeepNest(const NFP& polygon, double offset);
@@ -40,7 +36,6 @@ public:
     // --- Clipper conversion ---
     static Clipper2Lib::Path64 svgToClipper(const NFP& polygon);
     static NFP clipperToSvg(const Clipper2Lib::Path64& polygon);
-    static bool pointInPolygon(const Point& point, const NFP& polygon);
 
     // --- Worker management ---
     void launchWorkers(const std::vector<NestItem>& parts);
@@ -54,12 +49,6 @@ public:
     NfpWorker background;
     std::unique_ptr<GeneticAlgorithm> ga;
     std::vector<SheetPlacement> nests;
-
-private:
-    static std::optional<int> find(const Point& v, const NFP& p);
-    static Point getTarget(const Point& o, const NFP& simple, double tol);
-    static bool exterior(const NFP& simple, const NFP& complex, bool inside);
-    static NFP boundingBox(const NFP& offset);
 };
 
 } // namespace nest

@@ -94,7 +94,7 @@ namespace opennest_gh2.components
             // rhino_example parameters[0..8]: rotations, wiggle, placement, spacing, seed, curveTol, mutation, population, time.
             var parameters = new List<double> { rotations, 0, placement, spacing, seed, tol, 10, 10, 0 };
             var nest = new nest_lib.rhino_example(ref sheets, ref geo, parameters, iterations < 1 ? 1 : iterations);
-            nest.Engine = "cpp"; nest.ExactNfp = 1;
+            nest.ExactNfp = 1;
             lock (s_engineLock)
                 nest.static_solver(ref geo);
 

@@ -379,9 +379,6 @@ namespace opennest_2
                 }
                 _pendingFont = parameters_text.Count > 0 ? parameters_text[parameters_text.Count - 1] : "MecSoft_Font-1 1";
 
-                // Solver backend is fixed to the C++ nfp_nest.dll engine (the managed C# path / "Engine"
-                // option was removed). "all_rotations 1" => tightest packing (capped at 8 orientations).
-                string engine = "cpp";
                 int allRotations = 0;
                 int exactNfp = 1;   // default: exact NFP — parts touch with no gap and no overlap
                 int useHoles = 1;   // default: nest smaller parts into larger parts' holes ("element_holes")
@@ -403,7 +400,6 @@ namespace opennest_2
                 try
                 {
                     _pendingNest = new nest_lib.rhino_example(ref nest_sheets, ref nest_geo_dup, parameters, max_iterations);
-                    _pendingNest.Engine = engine;
                     _pendingNest.TryAllRotations = allRotations;
                     _pendingNest.ExactNfp = exactNfp;
                     _pendingNest.UseHoles = useHoles;

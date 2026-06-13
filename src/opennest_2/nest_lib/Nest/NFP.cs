@@ -137,6 +137,9 @@ namespace nest_lib
         public double? offsety;
         public int? source = null;
         public float Rotation;
+        // Per-part rotation-count override: 0 = inherit the global Rotations setting (default);
+        // N>0 = this part may only use N discrete orientations (360/N step; 1 = no rotation).
+        public int rotationCount = 0;
 
         public SvgPoint Center()
         {

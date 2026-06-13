@@ -1,4 +1,4 @@
-﻿using ClipperLib;
+using ClipperLib;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -617,41 +617,6 @@ namespace nest_lib
 
             return polygon.Points.Select(z => new IntPoint((long)z.x, (long)z.y)).ToArray();
         }
-        // returns a less complex polygon that satisfies the curve tolerance
-        public static NFP cleanPolygon(NFP polygon)
-        {
-            var p = svgToClipper2(polygon);
-            // remove self-intersections and find the biggest polygon that's left
-            var simple = ClipperLib.Clipper.SimplifyPolygon(p.ToList(), ClipperLib.PolyFillType.pftNonZero);
-
-            if (simple == null || simple.Count == 0)
-            {
-                return null;
-            }
-
-            var biggest = simple[0];
-            var biggestarea = Math.Abs(ClipperLib.Clipper.Area(biggest));
-            for (var i = 1; i < simple.Count; i++)
-            {
-                var area = Math.Abs(ClipperLib.Clipper.Area(simple[i]));
-                if (area > biggestarea)
-                {
-                    biggest = simple[i];
-                    biggestarea = area;
-                }
-            }
-
-            // clean up singularities, coincident points and edges
-            var clean = ClipperLib.Clipper.CleanPolygon(biggest, 0.01 *
-                Config.curveTolerance * Config.clipperScale);
-
-            if (clean == null || clean.Count == 0)
-            {
-                return null;
-            }
-            return clipperToSvg(clean);
-
-        }
 
         public static NFP cleanPolygon2(NFP polygon)
         {
@@ -712,260 +677,12 @@ namespace nest_lib
         }
 
 
-        public int toTree(PolygonTreeItem[] list, int idstart = 0)
-        {
-            List<PolygonTreeItem> parents = new List<PolygonTreeItem>();
-            int i, j;
-
-            // assign a unique id to each leaf
-            //var id = idstart || 0;
-            var id = idstart;
-
-            for (i = 0; i < list.Length; i++)
-            {
-                var p = list[i];
-
-                var ischild = false;
-                for (j = 0; j < list.Length; j++)
-                {
-                    if (j == i)
-                    {
-                        continue;
-                    }
-                    if (GeometryUtil.pointInPolygon(p.Polygon.Points[0], list[j].Polygon).Value)
-                    {
-                        if (list[j].Childs == null)
-                        {
-                            list[j].Childs = new List<PolygonTreeItem>();
-                        }
-                        list[j].Childs.Add(p);
-                        p.Parent = list[j];
-                        ischild = true;
-                        break;
-                    }
-                }
-
-                if (!ischild)
-                {
-                    parents.Add(p);
-                }
-            }
-
-            for (i = 0; i < list.Length; i++)
-            {
-                if (parents.IndexOf(list[i]) < 0)
-                {
-                    list = list.Skip(i).Take(1).ToArray();
-                    i--;
-                }
-            }
-
-            for (i = 0; i < parents.Count; i++)
-            {
-                parents[i].Polygon.Id = id;
-                id++;
-            }
-
-            for (i = 0; i < parents.Count; i++)
-            {
-                if (parents[i].Childs != null)
-                {
-                    id = toTree(parents[i].Childs.ToArray(), id);
-                }
-            }
-
-            return id;
-        }
-
-        public static NFP cloneTree(NFP tree)
-        {
-            NFP newtree = new NFP();
-            foreach (var t in tree.Points)
-            {
-                newtree.AddPoint(new SvgPoint(t.x, t.y) { exact = t.exact });
-            }
 
 
-            if (tree.children != null && tree.children.Count > 0)
-            {
-                newtree.children = new List<NFP>();
-                foreach (var c in tree.children)
-                {
-                    newtree.children.Add(cloneTree(c));
-                }
-
-            }
-
-            return newtree;
-        }
 
 
-        public Background background = new Background();
 
 
-        PopulationItem individual = null;
-        NFP[] placelist;
-        GeneticAlgorithm ga;
-
-        public List<SheetPlacement> nests = new List<SheetPlacement>();
-
-        public void ResponseProcessor(SheetPlacement payload)
-        {
-            //console.log('ipc response', payload);
-            if (ga == null)
-            {
-                // user might have quit while we're away
-                return;
-            }
-            ga.population[payload.index].processing = null;
-            ga.population[payload.index].fitness = payload.fitness;
-
-            // render placement
-            if (this.nests.Count == 0 || this.nests[0].fitness > payload.fitness)
-            {
-                this.nests.Insert(0, payload);
-
-                if (this.nests.Count > Config.populationSize)
-                {
-                    this.nests.RemoveAt(nests.Count - 1);
-                }
-
-            }
-        }
-
-        public void launchWorkers(NestItem[] parts)
-        {
-            background.ResponseAction = ResponseProcessor;
-            if (ga == null)
-            {
-                List<NFP> adam = new List<NFP>();
-                var id = 0;
-                for (int i = 0; i < parts.Count(); i++)
-                {
-                    if (!parts[i].IsSheet)
-                    {
-                        for (int j = 0; j < parts[i].Quanity; j++)
-                        {
-                            var poly = cloneTree(parts[i].Polygon); // deep copy
-                            poly.id = id; // id is the unique id of all parts that will be nested, including cloned duplicates
-                            poly.source = i; // source is the id of each unique part from the main part list
-
-                            adam.Add(poly);
-                            id++;
-                        }
-                    }
-                }
-
-                adam = adam.OrderByDescending(z => Math.Abs(GeometryUtil.polygonArea(z))).ToList();
-                ga = new GeneticAlgorithm(adam.ToArray(), Config);
-            }
-            individual = null;
-
-            // check if current generation is finished
-            var finished = true;
-            for (int i = 0; i < ga.population.Count; i++)
-            {
-                if (ga.population[i].fitness == null)
-                {
-                    finished = false;
-                    break;
-                }
-            }
-            if (finished)
-            {
-                //console.log('new generation!');
-                // all individuals have been evaluated, start next generation
-                ga.generation();
-            }
-
-            var running = ga.population.Where((p) =>
-            {
-                return p.processing != null;
-            }).Count();
-
-            List<NFP> sheets = new List<NFP>();
-            List<int> sheetids = new List<int>();
-            List<int> sheetsources = new List<int>();
-            List<List<NFP>> sheetchildren = new List<List<NFP>>();
-            var sid = 0;
-            for (int i = 0; i < parts.Count(); i++)
-            {
-                if (parts[i].IsSheet)
-                {
-                    var poly = parts[i].Polygon;
-                    for (int j = 0; j < parts[i].Quanity; j++)
-                    {
-                        var cln = cloneTree(poly);
-                        cln.id = sid; // id is the unique id of all parts that will be nested, including cloned duplicates
-                        cln.source = poly.source; // source is the id of each unique part from the main part list
-
-                        sheets.Add(cln);
-                        sheetids.Add(sid);
-                        sheetsources.Add(i);
-                        sheetchildren.Add(poly.children);
-                        sid++;
-                    }
-                }
-            }
-            for (int i = 0; i < ga.population.Count; i++)
-            {
-                // Evaluate exactly ONE individual per NestIterate. Each BackgroundStart is a FULL NFP
-                // placement (O(n^2) Minkowski pairs, internally Parallel.For across all cores) and costs
-                // ~seconds; processing the whole population in one call froze the PC for an entire
-                // generation (~3 min, even at Iterations=1). With this gate one Iteration == one bounded
-                // candidate (responsive, "normally fast"); a generation completes after ~populationSize
-                // Iterations, after which the `finished` check above fires ga.generation() and the pool
-                // EVOLVES. So evolution still happens -- it just needs enough Iterations -- without freezing.
-                if (running < 1 && ga.population[i].processing == null && ga.population[i].fitness == null)
-                {
-                    ga.population[i].processing = true;
-
-                    // hash values on arrays don't make it across ipc, store them in an array and reassemble on the other side....
-                    List<int> ids = new List<int>();
-                    List<int> sources = new List<int>();
-                    List<List<NFP>> children = new List<List<NFP>>();
-
-                    for (int j = 0; j < ga.population[i].placements.Count; j++)
-                    {
-                        var id = ga.population[i].placements[j].id;
-                        var source = ga.population[i].placements[j].source;
-                        var child = ga.population[i].placements[j].children;
-                        //ids[j] = id;
-                        ids.Add(id);
-                        //sources[j] = source;
-                        sources.Add(source.Value);
-                        //children[j] = child;
-                        children.Add(child);
-                    }
-
-                    DataInfo data = new DataInfo()
-                    {
-                        index = i,
-                        sheets = sheets,
-                        sheetids = sheetids.ToArray(),
-                        sheetsources = sheetsources.ToArray(),
-                        sheetchildren = sheetchildren,
-                        individual = ga.population[i],
-                        config = Config,
-                        ids = ids.ToArray(),
-                        sources = sources.ToArray(),
-                        children = children
-
-                    };
-
-
-                    background.BackgroundStart(data);
-                    //ipcRenderer.send('background-start', { index: i, sheets: sheets, sheetids: sheetids, sheetsources: sheetsources, sheetchildren: sheetchildren, individual: GA.population[i], config: config, ids: ids, sources: sources, children: children});
-                    running++;
-                }
-            }
-        }
-
-        public PolygonTreeItem[] tree;
-
-
-        public bool useHoles;
-        public bool searchEdges;
     }
 
     public class DataInfo
@@ -976,20 +693,12 @@ namespace nest_lib
         public int[] sheetids;
         public int[] sheetsources;
         public List<List<NFP>> sheetchildren;
-        public PopulationItem individual;
         public SvgNestConfig config;
         public int[] ids;
         public int[] sources;
         public List<List<NFP>> children;
         //ipcRenderer.send('background-start', { index: i, sheets: sheets, sheetids: sheetids, sheetsources: sheetsources, sheetchildren: sheetchildren, 
         //individual: GA.population[i], config: config, ids: ids, sources: sources, children: children});
-    }
-
-    public class PolygonTreeItem
-    {
-        public NFP Polygon;
-        public PolygonTreeItem Parent;
-        public List<PolygonTreeItem> Childs = new List<PolygonTreeItem>();
     }
 
     public enum PlacementTypeEnum

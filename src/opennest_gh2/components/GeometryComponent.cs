@@ -22,8 +22,9 @@ namespace opennest_gh2.components
 
         protected override Grasshopper2.UI.Icon.IIcon IconInternal => opennest_gh2.icons.SvgVectorIcon.Load("element.svg");
 
-        // First 6 inputs are FIXED (mirror GH1); +/- only adds/removes extra Attributes ports after them.
-        private const int FIXED_INPUTS = 6;
+        // First 7 inputs are FIXED (mirror GH1); +/- only adds/removes extra Attributes ports after them.
+        private const int FIXED_INPUTS = 7;
+        private const int ROTATIONS_INPUT = 6;   // fixed integer port, not an attribute tree
 
         protected override void AddInputs(InputAdder inputs)
         {
@@ -37,6 +38,12 @@ namespace opennest_gh2.components
             inputs.AddInteger("Copies", "C", "Copies per part (one value, or one per part).", Access.Tree, Requirement.MayBeMissing).Set(1);
             inputs.AddNumber("Offset", "O", "Nesting clearance (model units; 0 = off). Outer grows / holes shrink so placed parts keep this gap — the ORIGINAL curves are still what get placed/output.", Access.Tree, Requirement.MayBeMissing).Set(0.0);
             inputs.AddGeneric("Attributes", "A", "Extra geometry carried with each part (data-tree: one branch per part; flat list: applied to every part). Use the +/- on the component to add more Attributes inputs.", Access.Tree, Requirement.MayBeMissing);
+            inputs.AddInteger("Rotations", "R",
+                "OPTIONAL per-part rotation constraint (one value, or one per part, repeats like Copies).\n" +
+                "Empty / 0 = part inherits the solver's global Rotations setting (default).\n" +
+                "N > 0 = THIS part may only use N orientations (360/N degree steps); 1 = fixed, no rotation.\n" +
+                "Lets rectangular parts stay at 4 orientations while freeform parts rotate freely in ONE nest.",
+                Access.Tree, Requirement.MayBeMissing).Set(0);
         }
 
         protected override void AddOutputs(OutputAdder outputs)
@@ -66,11 +73,18 @@ namespace opennest_gh2.components
             }
             if (curves.Count == 0) { access.AddWarning("No closed parts", "Parts must be closed curves."); return; }
 
+            // Per-part rotation constraints (fixed integer port — 0 = inherit solver setting).
+            access.GetTree(ROTATIONS_INPUT, out Tree<int> rotT);
+            var rotVals = NestGh2Util.AllOr(rotT, 0);
+
             // Every Attributes port (base index 5 + any +/- variable ports) as a tree of geometry, by branch.
             var attrTrees = new List<GeometryBase[][]>();
             for (int ai = 5; ai < Parameters.InputCount; ai++)
+            {
+                if (ai == ROTATIONS_INPUT) continue;   // integer port, not an attribute tree
                 if (access.GetTree(ai, out Tree<GeometryBase> at) && at != null && at.LeafCount > 0)
                 { at.ToArrays(out GeometryBase[][] ab); attrTrees.Add(ab); }
+            }
 
             // FLAT LIST (single branch) -> explode to one curve per part so identify_groups auto-pairs each
             // outer ring with the smaller rings it contains. DATA TREE -> keep each branch pre-grouped.
@@ -107,9 +121,12 @@ namespace opennest_gh2.components
             // Per-part copies, cycled like GH1 (one value applies to all; a list maps one-per-part).
             var copiesList = new List<int>(curves.Count);
             for (int i = 0; i < curves.Count; i++) { int c = copiesVals[i % copiesVals.Count]; copiesList.Add(c < 1 ? 1 : c); }
+            // Per-part rotation overrides, cycled the same way (0 = inherit the solver setting).
+            var rotationsList = new List<int>(curves.Count);
+            for (int i = 0; i < curves.Count; i++) { int rv = rotVals[i % rotVals.Count]; rotationsList.Add(rv < 0 ? 0 : rv); }
             var simp = new List<double> { simplify, hull ? 1.0 : 0.0 };
 
-            var geo = nest_geo_util.geo_to_nest_geo(curves, copiesList, simp, attrsPerPart, hard_coded_input: !flatList);
+            var geo = nest_geo_util.geo_to_nest_geo(curves, copiesList, simp, attrsPerPart, hard_coded_input: !flatList, rotations: rotationsList);
             if (geo.boundary_sorted == null || geo.boundary_sorted.Count == 0)
             {
                 access.AddWarning("No boundaries detected", "Could not extract closed part boundaries.");

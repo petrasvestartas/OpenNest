@@ -44,6 +44,6 @@ On-canvas settings shown on the component body (zoom in on the component to reve
 | **Seed** | Number | 30 | 0 – 100000 | Random seed (same seed = same result). |
 | **Mutation** | Number | 10 | 0 – 100 | GA mutation rate. |
 | **Population** | Number | 10 | 1 – 100000 | GA population size — candidates evaluated per generation. |
-| **All Rotations** | Choice | On | Off · On | Try every orientation per part for the tightest packing — **C++ engine only** (the C# engine ignores it and uses **Rotations**). Capped at 8 orientations so a large **Rotations** value can't hang the solver. |
+| **All Rotations** | Choice | On | Off · On | Try every orientation per part for the tightest packing. Capped at 8 orientations so a large **Rotations** value can't hang the solver. |
 | **Element Holes** | Choice | Fill | Off · Fill | Nest smaller parts **inside** larger parts' holes. |
 | **Sheet Font** | Text | `MecSoft_Font-1 1` | — | Sheet-number label: font name + text size. |

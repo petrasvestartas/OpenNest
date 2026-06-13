@@ -59,6 +59,10 @@ NP_EXPORT int np_nest(
     int           part_count,
     const int*    part_vertex_counts,
     const double* part_xy,
+    const int*    part_rotations,           // [part_count] per-part rotation override: 0 = free
+                                            //   continuous rotation (default), N>0 = this part may
+                                            //   only use N discrete orientations (360/N deg step;
+                                            //   1 = fixed at 0 deg). NULL = no overrides.
     int           sheet_count,
     const int*    sheet_outer_vertex_counts,
     const double* sheet_outer_xy,

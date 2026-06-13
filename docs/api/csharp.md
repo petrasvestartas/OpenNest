@@ -60,7 +60,6 @@ Everything ships inside `opennest_2.gha` (also used by the `.rhp` command and th
 `rhino_example` has a few switches and the live‑preview fields you read while it solves:
 
 ```csharp
-nest.Engine = "cpp";          // "cpp" = native nfp_nest.dll (default); "cs" = managed SvgNest
 nest.UseHoles = 1;            // nest small parts into bigger parts' holes
 nest.TryAllRotations = 1;     // try every rotation (tighter, slower)
 
@@ -115,7 +114,6 @@ nest.StopRequested = true;    // cancel the solve
     public rhino_example(ref nest_rhino_lib.nest_sheets sheets, ref nest_rhino_lib.nest_geo geometry,
                          List<double> parameters, int max_iterations = 3);
 
-    public string Engine = "cpp";   // "cpp" native (default) | "cs" managed SvgNest
     public int    TryAllRotations;  // 1 = score every rotation per placement
     public int    ExactNfp = 1;     // 1 = exact NFP (no gap); 0 = simplify+dilate (fast)
     public int    UseHoles  = 1;    // 1 = nest parts into holes
@@ -144,10 +142,15 @@ nest.StopRequested = true;    // cancel the solve
 
     The thin bindings under the library — use these only if you want to skip `rhino_example`.
     The `NfpParams` / `NpParams` fields match the native structs on the [C++ API page](cpp.md).
+    Both `nfp_nest` and `np_nest` take an optional `part_rotations[]` array (one int per part:
+    `0` = use the global rotations setting, `N>0` = only N orientations, `1` = fixed; `null` = no
+    overrides) — this is what the Geometry component's per-part **Rotations** input feeds.
 
     ```csharp
     // namespace NfpNest — nfp_nest.dll
     NfpNestWrapper.nfp_nest(...);            // returns placed-instance count
+    NfpNestWrapper.nfp_pack(...);            // simple row/grid layout (no nesting)
+    NfpNestWrapper.nfp_offset_polygon(...);  // grow/shrink one polygon (Clipper2)
     NfpNestWrapper.nfp_progress();           // GA generation reached
     NfpNestWrapper.nfp_poll_layout(...);     // best layout so far
     NfpNestWrapper.nfp_cancel();             // stop early

@@ -1,13 +1,11 @@
 #pragma once
 
 #include <vector>
-#include <string>
 #include <optional>
 #include <memory>
 #include <unordered_map>
 #include <mutex>
 #include <shared_mutex>
-#include <functional>
 #include <cstdint>
 
 #include "Point.h"
@@ -16,23 +14,7 @@
 
 namespace nest {
 
-// Forward declarations — NFP defined in WP2
 class NFP;
-
-// ---------- NfpKey ----------
-struct NfpKey {
-    NFP* A = nullptr;
-    NFP* B = nullptr;
-    float ARotation = 0;
-    float BRotation = 0;
-    bool Inside = false;
-    int AIndex = 0;
-    int BIndex = 0;
-    std::optional<int> Asource;
-    std::optional<int> Bsource;
-
-    std::string stringify() const;
-};
 
 // ---------- DbCacheKey ----------
 struct DbCacheKey {
@@ -41,14 +23,13 @@ struct DbCacheKey {
     float ARotation = 0;
     float BRotation = 0;
     std::vector<std::shared_ptr<NFP>> nfp;   // owned copies (cloned on insert)
-    int Type = 0;
+    int Type = 0;   // 0 = outer pair NFP, 1 = inner-fit entry (sheet/part source spaces overlap)
 };
 
 // ---------- NfpPair ----------
 struct NfpPair {
     NFP* A = nullptr;
     NFP* B = nullptr;
-    NfpKey Key;
     std::shared_ptr<NFP> nfp;
     float ARotation = 0;
     float BRotation = 0;
@@ -58,11 +39,7 @@ struct NfpPair {
 
 // ---------- PlacementItem ----------
 struct PlacementItem {
-    std::optional<double> mergedLength;
-    // mergedSegments omitted (typed as 'object' in C#, unused in core logic)
     int id = 0;
-    std::shared_ptr<NFP> hull;
-    std::shared_ptr<NFP> hullsheet;
     float rotation = 0;
     double x = 0;
     double y = 0;
@@ -83,18 +60,12 @@ struct PopulationItem {
     std::optional<double> fitness;
     std::vector<float> Rotation;
     std::vector<std::shared_ptr<NFP>> placements;
-    std::vector<std::shared_ptr<NFP>> paths;
-    double area = 0;
 };
 
 // ---------- SheetPlacement ----------
 struct SheetPlacement {
     std::optional<double> fitness;
-    std::vector<float> Rotation;
     std::vector<std::vector<SheetPlacementItem>> placements;
-    std::vector<std::shared_ptr<NFP>> paths;
-    double area = 0;
-    double mergedLength = 0;
     int index = 0;
 };
 
@@ -117,23 +88,6 @@ struct DataInfo {
     std::vector<int> ids;
     std::vector<int> sources;
     std::vector<std::vector<std::shared_ptr<NFP>>> children;
-};
-
-// ---------- PolygonTreeItem ----------
-struct PolygonTreeItem {
-    std::shared_ptr<NFP> Polygon;
-    PolygonTreeItem* Parent = nullptr;
-    std::vector<std::shared_ptr<PolygonTreeItem>> Childs;
-};
-
-// ---------- NonameReturn ----------
-struct NonameReturn {
-    NfpKey key;
-    std::vector<std::shared_ptr<NFP>> nfp;
-
-    NonameReturn() = default;
-    NonameReturn(const NfpKey& k, std::vector<std::shared_ptr<NFP>> n)
-        : key(k), nfp(std::move(n)) {}
 };
 
 // ---------- ClipCacheItem ----------
@@ -180,9 +134,5 @@ private:
     // parallel; only insert() takes an exclusive lock. Critical for the parallel-population place phase.
     std::shared_mutex lockobj;
 };
-
-// ---------- Sheet ----------
-// Sheet and RectangleSheet extend NFP — defined in NFP.h (WP2)
-// Forward-declared here for reference in other headers.
 
 } // namespace nest

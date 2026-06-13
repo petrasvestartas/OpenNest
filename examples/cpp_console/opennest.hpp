@@ -144,10 +144,12 @@ struct NpParams {
     int       iter_mode, max_sheets, n_starts, part_holes_mode, pole_max, final_compact, fit_mode;
 };
 
-using nfp_nest_fn = int (*)(int, const int*, const double*, const int*, const int*, const int*, const double*,
+using nfp_nest_fn = int (*)(int, const int*, const double*, const int*, const int* /*part_rotations*/,
+                            const int*, const int*, const double*,
                             int, const int*, const double*, const int*, const int*, const double*,
                             const NfpParams*, double*, double*, double*, int*, int*, int*, double*);
-using np_nest_fn  = int (*)(int, const int*, const double*, int, const int*, const double*,
+using np_nest_fn  = int (*)(int, const int*, const double*, const int* /*part_rotations*/,
+                            int, const int*, const double*,
                             const int*, const int*, const double*, const int*, const int*, const double*,
                             const NpParams*, double*, double*, double*, int*, int*);
 
@@ -237,7 +239,7 @@ struct opennest_collision {
 
         std::vector<double> tx(part_count), ty(part_count), ang(part_count);
         std::vector<int> sid(part_count); int n_sheets = 0;
-        np_nest()(part_count, ip(parts.vcount), dp(parts.xy), sheet_count, ip(sh.vcount), dp(sh.xy),
+        np_nest()(part_count, ip(parts.vcount), dp(parts.xy), nullptr, sheet_count, ip(sh.vcount), dp(sh.xy),
                   ip(sh.hole_count), ip(sh.hole_vcount), dp(sh.hole_xy),
                   ip(parts.hole_count), ip(parts.hole_vcount), dp(parts.hole_xy),
                   &q, tx.data(), ty.data(), ang.data(), sid.data(), &n_sheets);
@@ -282,7 +284,7 @@ struct opennest_nfp {
 
         std::vector<double> tx(instances), ty(instances), ang(instances);
         std::vector<int> sid(instances), pidx(instances); int n_sheets = 0; double fitness = 0;
-        nfp_nest()(part_count, ip(parts.vcount), dp(parts.xy), qty.data(),
+        nfp_nest()(part_count, ip(parts.vcount), dp(parts.xy), qty.data(), nullptr,
                    ip(parts.hole_count), ip(parts.hole_vcount), dp(parts.hole_xy),
                    sheet_count, ip(sh.vcount), dp(sh.xy), ip(sh.hole_count), ip(sh.hole_vcount), dp(sh.hole_xy),
                    &p, tx.data(), ty.data(), ang.data(), sid.data(), pidx.data(), &n_sheets, &fitness);

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -9,57 +9,6 @@ namespace nest_lib
 {
     public partial class NestingContext
     {
-
-        ///////////////////////////////////////////////////////////////////////////////////////////////
-        //Rhino methods
-        ///////////////////////////////////////////////////////////////////////////////////////////////
-        public void load_sample_data(List<Rectangle3d> sheets, List<Polyline> outlines)
-        {
-
-            for (int i = 0; i < sheets.Count; i++)
-                AddSheet((int)sheets[i].Width, (int)sheets[i].Height, i);
-
-            int src1 = GetNextSource();
-            for (int i = 0; i < outlines.Count; i++)
-                AddPolygon(outlines[i], i);
-
-        }
-
-        public void load_sample_data(List<Rectangle3d> sheets, Polyline[][] outlines)
-        {
-
-            for (int i = 0; i < sheets.Count; i++)
-                AddSheet((int)sheets[i].Width, (int)sheets[i].Height, i);
-
-
-            int src1 = GetNextSource();
-            for (int i = 0; i < outlines.Length; i++)
-                AddPolygon(outlines[i], i);
-
-        }
-
-        public void load_sample_data(List<Polyline> sheets, Polyline[][] outlines)
-        {
-
-            for (int i = 0; i < sheets.Count; i++)
-                AddSheet(sheets[i], i);
-
-            int src1 = GetNextSource();
-            for (int i = 0; i < outlines.Length; i++)
-                AddPolygon(outlines[i], i);
-
-        }
-
-        public void load_sample_data(List<Rectangle3d> sheets, Polyline[][] outlines, Polyline[][] holes)
-        {
-
-            for (int i = 0; i < sheets.Count; i++)
-                AddSheet((int)sheets[i].Width, (int)sheets[i].Height, i);
-
-            int src1 = GetNextSource();
-            for (int i = 0; i < outlines.Length; i++)
-                AddPolygon(outlines[i][0], holes[i], i);
-        }
 
         public void load_sample_data(ref nest_rhino_lib.nest_sheets nest_sheets, ref nest_rhino_lib.nest_geo nest_geo, ref Transform[] xforms_geometry)
         {
@@ -90,13 +39,21 @@ namespace nest_lib
 
             for (int i = 0; i < nest_geo.boundary_sorted.Count; i++)
                 {
+                // Per-part rotation override travels with each instance (0 = inherit; same
+                // per-geometry-item indexing as copies).
+                int rotationOverride = 0;
+                {
+                    int gi = nest_geo.geometry_sorted[i][0];
+                    if (nest_geo.rotations != null && gi >= 0 && gi < nest_geo.rotations.Count)
+                        rotationOverride = Math.Max(0, nest_geo.rotations[gi]);
+                }
                 for (int l = 0; l < nest_geo.copies[nest_geo.geometry_sorted[i][0]]; l++)
                     {
                     //Rhino.RhinoApp.WriteLine("11");
                     if (nest_geo.boundary_sorted[i][0].Item2.Count > 2)
                         {
 
-                            NFP polygon = new NFP() { source = i, Points = new SvgPoint[] { }, children = new List<NFP>() };
+                            NFP polygon = new NFP() { source = i, Points = new SvgPoint[] { }, children = new List<NFP>(), rotationCount = rotationOverride };
 
                         //NFP polygon is closed by default, no need to add end point
                         //Add boundary
@@ -127,101 +84,6 @@ namespace nest_lib
                 }
 
  
-
-
-        }
-
-        public void AddPolygon(Polyline polyline, int id)
-        {
-
-            if (polyline.IsValid)
-                if (polyline.Count > 2)
-                {
-
-                    NFP pl = new NFP() { source = id, Points = new SvgPoint[] { } };
-
-                    for (int i = 0; i < polyline.Count - 1; i++)
-                        pl.AddPoint(new SvgPoint(polyline[i].X, polyline[i].Y));
-
-                    Polygons.Add(pl);
-                }
-
-        }
-
-        public void AddSheet(Polyline polyline, int id)
-        {
-
-            if (polyline.IsValid)
-                if (polyline.Count > 2)
-                {
-
-                    NFP pl = new NFP() { source = id, Points = new SvgPoint[] { } };
-
-                    for (int i = 0; i < polyline.Count - 1; i++)
-                        pl.AddPoint(new SvgPoint(polyline[i].X, polyline[i].Y));
-
-                    Sheets.Add(pl);
-                }
-
-        }
-
-        public void AddPolygon(Polyline[] polyline, int id)
-        {
-
-            //Polyline is just a list of points which end point is the same
-
-            NFP polygon = new NFP();
-            polygon.source = id;
-
-            polygon.Points = new SvgPoint[] { };
-            int last = (polyline.Length - 1) % polyline.Length;
-            for (int i = 0; i < polyline[last].Count - 1; i++)
-                polygon.AddPoint(new SvgPoint(polyline[last][i].X, polyline[last][i].Y));
-
-            if (polyline.Length > 1)
-            {//if there are holes
-
-                polygon.children = new List<NFP>();
-
-                for (int i = 0; i < polyline.Length - 1; i++)
-                { //dont include last outline
-                    NFP hole = new NFP();
-                    for (int j = 0; j < polyline[i].Count - 1; j++) //dont include last point
-                        hole.AddPoint(new SvgPoint(polyline[i][j].X, polyline[i][j].Y));
-                    polygon.children.Add(hole);
-                }
-            }
-
-            Polygons.Add(polygon);
-
-        }
-
-        public void AddPolygon(Polyline polyline, Polyline[] holes, int id)
-        {
-
-
-            if (polyline.IsValid)
-                if (polyline.Count > 2)
-                {
-                    NFP polygon = new NFP() { source = id, Points = new SvgPoint[] { } };
-
-                    //NFP polygon is closed by default, no need to add end point
-                    for (int i = 0; i < polyline.Count - 1; i++)
-                        polygon.AddPoint(new SvgPoint(polyline[i].X, polyline[i].Y));
-
-
-                    polygon.children = new List<NFP>();
-
-                    for (int i = 0; i < holes.Length; i++)
-                    {
-                        NFP hole = new NFP();
-                        for (int j = 0; j < holes[i].Count - 1; j++)
-                            hole.AddPoint(new SvgPoint(polyline[i].X, polyline[i].Y));
-                        polygon.children.Add(hole);
-                    }
-
-                    Polygons.Add(polygon);
-                }
 
 
         }

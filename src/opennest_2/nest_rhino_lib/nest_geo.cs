@@ -40,6 +40,11 @@ namespace nest_rhino_lib
 
         public List<int> copies;
 
+        // Per-part rotation-count override, index-aligned with indices/copies/geometry.
+        // 0 = inherit the solver's global Rotations setting (the default); N>0 = this part
+        // may only use N discrete orientations (360/N step; 1 = fixed, no rotation).
+        public List<int> rotations;
+
         public List<GeometryBase> geometry;
 
         public List<GeometryBase[]> geometry_attributes;
@@ -72,6 +77,7 @@ namespace nest_rhino_lib
         {
             this.indices = new List<int>();
             this.copies = new List<int>();
+            this.rotations = new List<int>();
             this.geometry = new List<GeometryBase>();
             this.geometry_attributes = new List<GeometryBase[]>();
             this.attributes = new List<ObjectAttributes>();
@@ -409,6 +415,7 @@ namespace nest_rhino_lib
             {
                 indices = this.indices,
                 copies = this.copies,
+                rotations = this.rotations,
                 attributes = this.attributes,
                 geometry_sorted = this.geometry_sorted,
                 boudary_indices_non_sorted = this.boudary_indices_non_sorted,
@@ -462,31 +469,6 @@ namespace nest_rhino_lib
                 nestGeo.disply_texts.Add(this.disply_texts[n]);
             }
             return nestGeo;
-        }
-
-        public void duplicate_openlines_and_flip(string layer_name = "Planks")
-        {
-            for (int i = 0; i < this.geometry_sorted.Count; i++)
-            {
-                List<int> nums = new List<int>();
-                foreach (int item in this.geometry_sorted[i])
-                {
-                    nums.Add(item);
-                    if (this.geometry[item].ObjectType.ToString() == "Curve")
-                    {
-                        Curve curve = this.geometry[item] as Curve;
-                        if (RhinoDoc.ActiveDoc.Layers.FindIndex(this.attributes[i].LayerIndex).Name == layer_name)
-                        {
-                            Curve curve1 = curve.DuplicateCurve();
-                            curve1.Reverse();
-                            this.geometry.Add(curve1);
-                            this.attributes.Add(this.attributes[item]);
-                            nums.Add(this.geometry.Count - 1);
-                        }
-                    }
-                }
-                this.geometry_sorted[i] = nums;
-            }
         }
 
         public void extend_openlines(double distance)
@@ -745,40 +727,6 @@ namespace nest_rhino_lib
 
         }
 
-        public void offset_boundaries(double distance, bool keep_original_curve = true, bool flip = true)
-        {
-            Polyline polyline = null;
-            for (int i = 0; i < this.boundary_sorted.Count; i++)
-            {
-                for (int j = 0; j < this.boundary_sorted[i].Count; j++)
-                {
-                    Curve curve = this.boundary_sorted[i][j].Item4.DuplicateCurve();
-                    Curve[] curveArray = curve.Offset(Plane.WorldXY, distance, RhinoDoc.ActiveDoc.ModelAbsoluteTolerance, CurveOffsetCornerStyle.Round);
-                    Curve[] curveArray1 = this.boundary_sorted[i][j].Item2.ToNurbsCurve().Offset(Plane.WorldXY, distance, RhinoDoc.ActiveDoc.ModelAbsoluteTolerance, CurveOffsetCornerStyle.Sharp);
-                    if ((curveArray == null ? true : curveArray1 == null))
-                    {
-                        RhinoApp.WriteLine("Could not offset in nest_geo.cs");
-                    }
-                    else if (!curveArray1[0].TryGetPolyline(out polyline))
-                    {
-                        RhinoApp.WriteLine("Could not offset in nest_geo.cs");
-                    }
-                    else
-                    {
-                        this.boundary_sorted[i][j] = Tuple.Create<int, Polyline, BoundingBox, Curve>(this.boundary_sorted[i][j].Item1, polyline, polyline.BoundingBox, curveArray[0]);
-                        this.geometry[this.boundary_sorted[i][j].Item1] = curveArray[0];
-                        if (keep_original_curve)
-                        {
-                            this.geometry.Add(curve);
-                            this.attributes.Add(this.attributes[this.boundary_sorted[i][j].Item1]);
-                            this.geometry_sorted[i].Add(this.geometry.Count - 1);
-                            this.copies.Add(this.copies[this.boundary_sorted[i][j].Item1]);
-                        }
-                    }
-                }
-            }
-        }
-
         // Offset ONLY the NESTING polyline (boundary_sorted Item2, what the solver collides on): each OUTER loop
         // OUTWARD, each HOLE INWARD, so placed parts keep `distance` of clearance — while Item4 and geometry[]
         // stay the ORIGINAL curve, so the OUTPUT is the original geometry (the offset is nesting-only). Direction
@@ -908,6 +856,11 @@ namespace nest_rhino_lib
                 combined.disply_texts.AddRange(source.disply_texts);
                 combined.boundary_curves_non_sorted.AddRange(source.boundary_curves_non_sorted);
                 combined.copies.AddRange(source.copies);
+                // rotations is index-aligned with copies; pad with 0 (inherit) if a source predates it
+                if (source.rotations != null && source.rotations.Count == source.copies.Count)
+                    combined.rotations.AddRange(source.rotations);
+                else
+                    for (int ri = 0; ri < source.copies.Count; ri++) combined.rotations.Add(0);
                 
                 // Handle indices with offset
                 foreach (int index in source.indices)
@@ -964,16 +917,6 @@ namespace nest_rhino_lib
             }
             
             return combined;
-        }
-        
-        /// <summary>
-        /// Merges this nest_geo instance with another one
-        /// </summary>
-        /// <param name="other">Other nest_geo instance to merge with</param>
-        /// <returns>A new nest_geo instance that contains elements from both instances</returns>
-        public nest_geo MergeWith(nest_geo other)
-        {
-            return Merge(new List<nest_geo> { this, other });
         }
     }
 }

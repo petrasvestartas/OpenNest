@@ -37,6 +37,7 @@ internal static class Program
     [DllImport("nfp_nest", CallingConvention = CallingConvention.Cdecl)]
     static extern int nfp_nest(
         int part_count, int[] part_vertex_counts, double[] part_xy, int[] part_quantities,
+        int[] part_rotations,   // per-part rotation override (0 = global, 1 = fixed; null ok)
         int[] part_hole_counts, int[] part_hole_vertex_counts, double[] part_hole_xy,
         int sheet_count, int[] sheet_vertex_counts, double[] sheet_xy,
         int[] sheet_hole_counts, int[] sheet_hole_vertex_counts, double[] sheet_hole_xy,
@@ -47,6 +48,7 @@ internal static class Program
     [DllImport("nest_physics", CallingConvention = CallingConvention.Cdecl)]
     static extern int np_nest(
         int part_count, int[] part_vertex_counts, double[] part_xy,
+        int[] part_rotations,   // per-part rotation override (0 = free continuous; null ok)
         int sheet_count, int[] sheet_outer_vertex_counts, double[] sheet_outer_xy,
         int[] sheet_hole_counts, int[] hole_vertex_counts, double[] hole_xy,
         int[] part_hole_counts, int[] part_hole_vertex_counts, double[] part_hole_xy,
@@ -80,7 +82,7 @@ internal static class Program
         };
         var tx = new double[instances]; var ty = new double[instances]; var ang = new double[instances];
         var sid = new int[instances]; var pidx = new int[instances];
-        int placed = nfp_nest(partCount, pvc.ToArray(), pxy.ToArray(), pqty, phc, null, null,
+        int placed = nfp_nest(partCount, pvc.ToArray(), pxy.ToArray(), pqty, null, phc, null, null,
             sheetCount, svc.ToArray(), sxy.ToArray(), shc, null, null,
             ref p, tx, ty, ang, sid, pidx, out int nSheets, out double fitness);
         Console.WriteLine($"nfp_nest : placed {placed}/{instances} instances on {nSheets} sheet(s), fitness {fitness:F3}");
@@ -91,7 +93,7 @@ internal static class Program
         var q2 = new NpParams { num_rotations = 16, seed = 1, iter_mode = 0, time_budget_secs = 2.0, n_starts = 1, max_sheets = 6, fit_mode = 0 };
         var ntx = new double[partCount]; var nty = new double[partCount]; var nang = new double[partCount];
         var nsid = new int[partCount];
-        int rc = np_nest(partCount, pvc.ToArray(), pxy.ToArray(), sheetCount, svc.ToArray(), sxy.ToArray(),
+        int rc = np_nest(partCount, pvc.ToArray(), pxy.ToArray(), null, sheetCount, svc.ToArray(), sxy.ToArray(),
             shc, null, null, phc, null, null, ref q2, ntx, nty, nang, nsid, out int nSheets2);
         Console.WriteLine($"np_nest  : rc={rc}, {nSheets2} sheet(s)");
         for (int i = 0; i < partCount; i++)

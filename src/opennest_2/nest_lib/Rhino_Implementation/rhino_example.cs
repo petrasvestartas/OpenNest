@@ -13,73 +13,11 @@ using Rhino.UI;
 
 namespace nest_lib
 {
-    public class NumberInputForm : Dialog<DialogResult>
-    {
-        private TextBox _inputTextBox;
-        public double UserInput { get; private set; }
-
-        
-
-        public NumberInputForm()
-        {
-            Title = "How long the solver will run in seconds?  Save file first.";
-            ClientSize = new Eto.Drawing.Size(400, 85);
-            Resizable = false;
-
-            var layout = new DynamicLayout { Padding = 10, Spacing = new Eto.Drawing.Size(20, 5) };
-
-            _inputTextBox = new TextBox();
-            layout.AddRow(new Label { Text = "Enter a duration (seconds):" }, _inputTextBox);
-
-            var okButton = new Button { Text = "OK" };
-            okButton.Click += OkButton_Click;
-
-            var cancelButton = new Button { Text = "Cancel"};
-            cancelButton.Click += (sender, e) => Close(DialogResult.Cancel);
-
-            var buttonLayout = new StackLayout
-            {
-                Orientation = Orientation.Horizontal,
-                HorizontalContentAlignment = HorizontalAlignment.Center,
-                AlignLabels = true,
-                Items = { okButton, cancelButton }
-            };
-
-            layout.AddRow(buttonLayout);
-
-            Content = layout;
-        }
-
-        // Method to set a predefined number in the input field
-        public void PredefineNumber(double number)
-        {
-            _inputTextBox.Text = number.ToString();
-        }
-
-        private void OkButton_Click(object sender, EventArgs e)
-        {
-            if (double.TryParse(_inputTextBox.Text, out double result))
-            {
-                UserInput = result;
-                Close(DialogResult.Ok);
-            }
-            else
-            {
-                MessageBox.Show(this, "Please enter a valid number.", "Invalid Input", MessageBoxButtons.OK, MessageBoxType.Error);
-            }
-        }
-    }
 
     public partial class rhino_example
     {
         private NestingContext context = new NestingContext();
 
-        // Per-source-index rotation sample count for the C++ nfp_nest solver (null = global for all).
-        internal int[] _partRotations;
-
-        // Solver backend: "cpp" => nfp_nest.dll (canonical C++ engine, default), "cs" => managed SvgNest
-        // GA (fallback/reference). Set by the component from the "engine" option before static_solver runs.
-        public string Engine = "cpp";
 
         // C++ engine: 1 => evaluate ALL rotations per placement (tightest packing, ~4-5x slower first
         // run); 0 => GA explores rotations over generations (fast). Set from the "all_rotations" option.
@@ -205,7 +143,6 @@ namespace nest_lib
             SvgNest.Config.clipByRects = true; //clip by AABB + MinRect
 
 
-            Background.UseParallel = true;
 
             ///////////////////////////////////////////////////////////////////////////////////
             //load sheets and geometry
@@ -244,133 +181,13 @@ namespace nest_lib
 
 
 
-        private static volatile bool stopLoop = false;
-        private static Eto.Forms.UITimer keyMonitorTimer;
 
         private void run(int max_iterations, long max_time_in_seconds=0)
         {
-            // C++ DLL backend (default): solve via nfp_nest.dll and write placement back into
-            // context.Polygons so the existing get_results / output assembly is reused unchanged.
-            if (string.Equals(Engine, "cpp", StringComparison.OrdinalIgnoreCase))
-            {
-                run_cpp();
-                return;
-            }
-
-            // DIAGNOSTIC (managed C# engine): how many part-holes actually reached the solver as
-            // NFP.children. The full DeepNest hole-fill chain (thenIterate inner-fit -> placeParts
-            // void) is present, so if parts fail to nest into element holes the cause is almost
-            // always upstream: the surface's inner loop wasn't captured or identify_groups didn't
-            // pair it, so parts arrive with 0 children and there is nothing to fill.
-            //   part_holes>0  => holes reached the engine; the C# void-fill should place parts inside.
-            //   part_holes==0 => holes lost in geometry intake/pairing (fix the Geometry component,
-            //                    NOT the solver).
-            try
-            {
-                int _ph = 0;
-                foreach (var p in context.Polygons) _ph += (p.children != null ? p.children.Count : 0);
-                Rhino.RhinoApp.WriteLine($"[nest C#] engine=managed parts={context.Polygons.Count} part_holes={_ph} UseHoles={UseHoles}");
-            }
-            catch { }
-
-            //RhinoApp.WriteLine("NestCounter: " + nest_counter.ToString());
-            //Rhino.RhinoApp.WriteLine("Settings updated.. \nStart nesting.. \n" + "Parts: " + context.Polygons.Count() + "\nSheets: " + context.Sheets.Count());
-
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            if (nest_counter == 0)
-            {
-                context.StartNest();
-                Rhino.RhinoApp.WriteLine("Nesting context created");
-            }
-
-            nest_counter++;
-
-
-
-
-            long double_check_max_time_in_seconds = max_time_in_seconds;
-            if (max_time_in_seconds > 0)
-            {
-                var dialog = new NumberInputForm();
-                dialog.PredefineNumber(max_time_in_seconds);
-                var result = dialog.ShowModal(Rhino.UI.RhinoEtoApp.MainWindow);
-
-                
-                if (result == DialogResult.Ok)
-                {
-                    //RhinoApp.WriteLine($"Are you sure you will run the solver for {max_time_in_seconds}: {dialog.UserInput}");
-                    double_check_max_time_in_seconds = (long)dialog.UserInput;
-                }
-                else { return; }
-
-
-                long ElapsedMilliseconds = 0;
-
-
-                // Reset the elapsed milliseconds and stop flag for each run
-                stopLoop = false;
-
-                do
-                {
-                    var seconds_counter = Stopwatch.StartNew();
-                    // Replace this with your actual context and iteration call
-                    context.NestIterate(1);
-                    seconds_counter.Stop();
-                    ElapsedMilliseconds += seconds_counter.ElapsedMilliseconds;
-                    RhinoApp.WriteLine("Time: " + ElapsedMilliseconds + "ms" + " Elapsed: " + (ElapsedMilliseconds/1000).ToString() + "s Max Time: " + double_check_max_time_in_seconds.ToString() + "s Iteration: " + context.Iterations + "; fitness: " + context.Current.fitness + "; nesting time: " + sw.ElapsedMilliseconds + "ms");
-
-                } while (!(ElapsedMilliseconds >= double_check_max_time_in_seconds * 1000) && !stopLoop);
-
-                // Output the result
-                RhinoApp.WriteLine("Loop completed or stopped by user");
-            }
-            else
-            {
-
-                //RhinoApp.WriteLine("Max Iterations: " + max_iterations.ToString());
-
-
-
-                if (max_iterations == 0)
-                {
-                    sw = System.Diagnostics.Stopwatch.StartNew();
-                  
-                    context.NestIterate(max_iterations);
-                    sw.Stop();
-                    Rhino.RhinoApp.WriteLine("Iteration: " + context.Iterations + "; preparation for nesting time: " + sw.ElapsedMilliseconds + "ms");
-                }
-                else
-                {
-                    // Iterations == GENERATIONS, but drive ONE CANDIDATE at a time (NestIterate) and publish
-                    // a live snapshot after each. This shows the FIRST result as soon as the first candidate
-                    // is placed (~1/population of a generation) instead of waiting for the whole first
-                    // generation — important because generation 1 also builds the cold NFP cache (the bulk
-                    // of the startup cost). The GA still evolves internally once each population is fully
-                    // scored; the best-so-far only improves (single elitism), so more generations = better.
-                    int pop = (SvgNest.Config != null && SvgNest.Config.populationSize > 0) ? SvgNest.Config.populationSize : 10;
-                    long totalSteps = (long)max_iterations * pop;
-                    for (long step = 1; step <= totalSteps && !StopRequested; step++)
-                    {
-                        sw = System.Diagnostics.Stopwatch.StartNew();
-                        context.NestIterate(1);   // score one candidate (inits once; evolves when the pool fills)
-                        sw.Stop();
-
-                        CurrentGeneration = (int)((step - 1) / pop) + 1;   // 1-based generation currently being built
-                        CurrentFitness = (context.Current != null && context.Current.fitness.HasValue) ? context.Current.fitness.Value : 0.0;
-                        if (LiveSheets.Count == 0)
-                        {
-                            try { var ls = new List<Polyline>(); foreach (var s in context.Sheets) ls.AddRange(s.ToPolylines()); LiveSheets = ls; } catch { }
-                        }
-                        _liveBorders = BuildLayoutBorders();   // swap a fresh snapshot for the UI preview (fast first preview)
-
-                        if (step % pop == 0)
-                            Rhino.RhinoApp.WriteLine("Generation: " + (step / pop) + "/" + max_iterations + "; fitness: " + (context.Current != null ? context.Current.fitness : null) + "; ~ms/cand: " + sw.ElapsedMilliseconds);
-                    }
-                }
-
-            }
-
-
+            // Single backend: the native nfp_nest.dll engine. (The managed C# SvgNest solver
+            // and its Engine="cs" switch were removed - the C# classes that remain are the
+            // data model / marshalling layer the native path shares.)
+            run_cpp();
         }
 
         // Placed part outlines in the LAYOUT frame (same frame as context.Sheets / LiveSheets), built from
