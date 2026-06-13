@@ -212,7 +212,6 @@ NFP_API int nfp_nest(
     const int*    part_hole_counts,
     const int*    part_hole_vertex_counts,
     const double* part_hole_xy,
-    const int*    part_rotations,
     int           sheet_count,
     const int*    sheet_vertex_counts,
     const double* sheet_xy,
@@ -239,9 +238,6 @@ NFP_API int nfp_nest(
       g_snap.sheetId.clear(); g_snap.partIndex.clear(); }
 
     NestConfig cfg = toConfig(params);
-    if (part_rotations) {
-        cfg.part_rotations.assign(part_rotations, part_rotations + part_count);
-    }
     const int mode = params->mode;
 
     // Build inputs into a context.

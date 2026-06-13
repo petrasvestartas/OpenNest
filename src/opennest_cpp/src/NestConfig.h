@@ -51,18 +51,6 @@ struct NestConfig {
     // speedup for exact mode. Result is identical to serial (cache is a pure (source,rotation) map;
     // GA trajectory depends only on fitness + RNG, not eval order).
     bool parallelPopulation = false;
-
-    // Per-part-type rotation sample counts (indexed by NFP::source). Empty = all parts use global `rotations`.
-    // Entry 0 at a given index means "use global rotations" for that part type.
-    std::vector<int> part_rotations;
-
-    // Return the rotation sample count for a part type (by source index). Falls back to the global
-    // `rotations` when `partSrc` is out of range or the per-part value is 0.
-    int rotationsForPart(int partSrc) const {
-        if (partSrc >= 0 && partSrc < (int)part_rotations.size() && part_rotations[partSrc] > 0)
-            return part_rotations[partSrc];
-        return rotations;
-    }
 };
 
 } // namespace nest

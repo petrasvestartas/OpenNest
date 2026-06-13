@@ -72,7 +72,6 @@ NP_EXPORT int np_nest(
     const int*    part_hole_counts,         // [part_count] holes per part (NULL => no part holes)
     const int*    part_hole_vertex_counts,  // [sum(part_hole_counts)] vertex count per part-hole, part-major (NULL ok)
     const double* part_hole_xy,             // interleaved x,y for all part holes, part-major (NULL ok)
-    const int*    part_rotations,           // [part_count] per-part rotation sample count (NULL or 0 => use global num_rotations)
     const NpParams* params,
     double*       out_tx,
     double*       out_ty,

@@ -161,9 +161,6 @@ namespace nest_lib
             context.partsLocal = new List<NestItem>();
             context.load_sample_data(ref nest_sheets, ref geometry, ref to_xy);
 
-            // Cache per-source rotation counts; source index matches boundary_sorted group index.
-            if (geometry.rotations != null && geometry.rotations.Count > 0)
-                _partRotations = geometry.rotations.ToArray();
         }
 
         public void static_solver(ref nest_rhino_lib.nest_geo geometry)

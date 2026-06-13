@@ -903,18 +903,6 @@ namespace opennest_2
             _phcA = phc.ToArray();
             _phvcA = phvc.Count > 0 ? phvc.ToArray() : new int[1];
             _phxyA = phxy.Count > 0 ? phxy.ToArray() : new double[1];
-            // Per-flat-part rotation: nest_geo.rotations[i] (per group index) -> repeated for each copy.
-            // 0 means "use global num_rotations"; non-zero overrides for that part only.
-            var partRotList = new int[F];
-            bool hasAnyRot = false;
-            for (int fi = 0; fi < F; fi++)
-            {
-                int gi = flatGroup[fi];
-                int r = (nest_geo.rotations != null && gi < nest_geo.rotations.Count) ? nest_geo.rotations[gi] : 0;
-                partRotList[fi] = r;
-                if (r != 0) hasAnyRot = true;
-            }
-            _partRotA = hasAnyRot ? partRotList : null;   // null -> C++ falls back to global for all parts
             _partHolesTotal = 0; foreach (int hcount in phc) _partHolesTotal += hcount;
             _sheetHolesTotal = 0; foreach (int hcount in shc) _sheetHolesTotal += hcount;
             _ptx = new double[F == 0 ? 1 : F]; _pty = new double[F == 0 ? 1 : F];

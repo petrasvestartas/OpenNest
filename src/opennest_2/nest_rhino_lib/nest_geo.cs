@@ -63,10 +63,6 @@ namespace nest_rhino_lib
 
         public List<List<Transform>> xforms;
 
-        // Per-group rotation sample count for the physics solver (0 = use global num_rotations).
-        // Length must match boundary_sorted.Count; shorter or empty falls back to global.
-        public List<int> rotations;
-
         private HashSet<int> visited = new HashSet<int>();
 
         private List<int> ids = new List<int>();
@@ -87,7 +83,6 @@ namespace nest_rhino_lib
             this.boundary_sorted = new List<List<Tuple<int, Polyline, BoundingBox, Curve>>>();
             this.disply_texts = new List<TextEntity>();
             this.xforms = new List<List<Transform>>();
-            this.rotations = new List<int>();
         }
 
         public List<Guid> bake()
@@ -418,8 +413,7 @@ namespace nest_rhino_lib
                 rotations = this.rotations,
                 attributes = this.attributes,
                 geometry_sorted = this.geometry_sorted,
-                boudary_indices_non_sorted = this.boudary_indices_non_sorted,
-                rotations = this.rotations,
+                boudary_indices_non_sorted = this.boudary_indices_non_sorted
             };
             nestGeo.attributes = new List<ObjectAttributes>();
             for (int i = 0; i < this.attributes.Count; i++)
@@ -904,12 +898,6 @@ namespace nest_rhino_lib
                 if (source.xforms != null)
                 {
                     combined.xforms.AddRange(source.xforms);
-                }
-
-                // Handle per-group rotations
-                if (source.rotations != null)
-                {
-                    combined.rotations.AddRange(source.rotations);
                 }
                 
                 // Update offset for the next nest_geo

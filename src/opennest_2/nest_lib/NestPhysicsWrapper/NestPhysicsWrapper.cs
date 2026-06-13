@@ -48,7 +48,6 @@ namespace NestPhysics
             int[] part_hole_counts,
             int[] part_hole_vertex_counts,
             double[] part_hole_xy,
-            int[] part_rotations,
             ref NpParams parameters,
             double[] out_tx,
             double[] out_ty,
