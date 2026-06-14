@@ -119,3 +119,23 @@ container grid. CPU FFT (FFTW/pocketfft) for portability; optional CUDA fast pat
    **sparrow-3d/MeshCore** (CPU, mesh-exact, but a non-spectral algorithm and LGPL).
 3. For OpenNest's "runs anywhere inside Rhino" model, **(B)** or **(C)** fit the deployment story
    better; **(A)** is the fastest to a working prototype if a CUDA requirement is acceptable.
+
+## Update — option (B) built: `nest_spectral` (CPU port)
+
+Decision taken: **(B)**. A working CPU port of psacking's spectral method now lives in
+[`src/nest_spectral_cpp/`](src/nest_spectral_cpp/) on this branch — the cuFFT core swapped for
+header-only **pocketfft** (BSD-3), so it has **no GPU/CUDA dependency** and builds like the other
+OpenNest engines. Self-contained header-only core (`spectral/grid,fft,distance,voxelize,packer.hpp`),
+a C ABI (`nest_spectral_capi.h`, P/Invokable like `np_nest`, returns `world = R·p + t` per instance),
+and a CMake target emitting `nest_spectral.dll`.
+
+Validated (MinGW g++ 15.2 **and** MSVC via `cmake -A x64`):
+- CPU FFT-correlation pipeline reproduces the method — 24 synthetic parts into a 32³ tray, **zero
+  overlap** at every orientation count, density 50/48/57 % for 1/6/24 orientations.
+- Voxelizer: a 10³ cube fills exactly 1000/1000 voxels (solid).
+- ABI: 10 box instances packed, and transforming each by the returned `R·p + t` confirms **all inside
+  the container, no overlap** (`tools/abi_smoke.cpp`).
+
+Remaining for production: wire it into the Grasshopper plugin (a 3D `nest_Geo`/P-Invoke), and the
+CPU-speed work noted in the project README (cache the tray FFT across a part's orientations, r2c
+transforms, parallel orientation search).
