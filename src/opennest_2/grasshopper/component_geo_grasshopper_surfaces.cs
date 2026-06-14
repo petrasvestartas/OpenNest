@@ -58,13 +58,21 @@ namespace opennest_2
             pManager.AddBooleanParameter("Hull", "Hull", "Use the convex hull of each simplified outline.", GH_ParamAccess.item, false );
             pManager.AddIntegerParameter("Copies", "Copies", "Number of copies per part.", GH_ParamAccess.list);
             pManager.AddNumberParameter("Offset", "Offset", "Clearance offset for NESTING only (model units; 0 = OFF, fast).\nParts: outer grows / holes shrink so placed parts keep this gap.\nThe ORIGINAL curves are still what get placed/output.", GH_ParamAccess.item, 0);
+            pManager.AddIntegerParameter("Rotations", "Rotations",
+                "OPTIONAL per-part rotation constraint (one value per part, repeats like Copies).\n" +
+                "Empty / 0 = part inherits the solver's global Rotations setting (default).\n" +
+                "N > 0 = THIS part may only use N orientations (360/N degree steps).\n" +
+                "1 = fixed, no rotation (e.g. grain direction).\n" +
+                "Lets rectangular parts stay at 4 orientations while freeform parts rotate freely in ONE nest.",
+                GH_ParamAccess.list);
             pManager.AddGeometryParameter("Attributes", "Attributes", "Additional geometry: points, lines, surfaces, meshes... \nUse data-tree, one list of additional geometry per branch..", GH_ParamAccess.list);
 
             pManager[1].Optional = true;
             pManager[2].Optional = true;
             pManager[3].Optional = true;
             pManager[4].Optional = true;
-            pManager[5].Optional = true;
+            pManager[5].Optional = true;   // Rotations
+            pManager[6].Optional = true;   // Attributes
         }
 
         protected override void RegisterOutputParams(GH_Component.GH_OutputParamManager pManager)
@@ -111,13 +119,24 @@ namespace opennest_2
             var copies = new List<int>();
             DA.GetDataList(3, copies);
 
+            // Per-part rotation constraints + Attributes are read BY NAME so component instances saved before
+            // the Rotations input existed (Attributes at index 5) keep working after it was inserted at index 5.
+            var rotations = new List<int>();
+            int rotIdx = -1;
+            for (int pi = 0; pi < Params.Input.Count; pi++)
+                if (Params.Input[pi].Name == "Rotations") { rotIdx = pi; break; }
+            if (rotIdx >= 0) DA.GetDataList(rotIdx, rotations);
+
             var sort = 1.0;
 
             var geo_current = new List<Brep>();
             bool result = DA.GetDataList(0, geo_current);
 
             var attributes = new List<IGH_GeometricGoo>();
-            DA.GetDataList(5, attributes);
+            int attrIdx = -1;
+            for (int pi = 0; pi < Params.Input.Count; pi++)
+                if (Params.Input[pi].Name == "Attributes") { attrIdx = pi; break; }
+            if (attrIdx >= 0) DA.GetDataList(attrIdx, attributes);
 
 
             List<Curve[]> curves = new List<Curve[]>();
@@ -169,7 +188,7 @@ namespace opennest_2
 
 
             //Solution
-            nest_geo = nest_rhino_lib.nest_geo_util.geo_to_nest_geo(curves, copies, simplify_parameters, attributes_geometries);
+            nest_geo = nest_rhino_lib.nest_geo_util.geo_to_nest_geo(curves, copies, simplify_parameters, attributes_geometries, rotations: rotations);
             if (offset_distance != 0) nest_geo.offset_nesting_boundary(offset_distance);   // 0 = skip entirely (fast)
 
             //Output
