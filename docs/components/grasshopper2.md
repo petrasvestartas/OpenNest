@@ -5,11 +5,9 @@ OpenNest runs in **Grasshopper 2** — the new node editor shipped in **Rhino 9 
 tutorials apply — **Nesting** ([OpenNest2](opennest2.md), [OpenNest1](opennest1.md),
 [OpenNestCollision](opennest_collision.md)), **Geometry & sheets**, and **Utilities** (see the navigation).
 
-![OpenNest components on the Grasshopper 2 canvas](../assets/gh2_1.png)
+![OpenNest2 nesting in Grasshopper 2](../assets/opennest2.png)
 
-![Nesting result in Grasshopper 2](../assets/gh2_2.png)
-
-![OpenNest in Grasshopper 2](../assets/gh2_3.png)
+![OpenNestCollision nesting in Grasshopper 2](../assets/opennest_collsions.png)
 
 ## Installation (Rhino 9 WIP)
 
