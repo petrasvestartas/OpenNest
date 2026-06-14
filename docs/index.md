@@ -1,7 +1,7 @@
 # OpenNest
 
 <div style="text-align:right" markdown>
-<a href="https://ko-fi.com/petrasvestartas" target="_blank" rel="noopener"><img src="assets/kofi.webp" alt="Buy me a coffee" style="height:48px;border:0"></a>
+<a href="https://ko-fi.com/petrasvestartas" target="_blank" rel="noopener" class="kofi-btn">☕ Buy me a coffee</a>
 </div>
 
 <p style="text-align:center" markdown>

@@ -156,3 +156,27 @@ a[href*="ko-fi.com"] img:hover {
 /* Home-page logo: the SVG is near-black, so invert it in dark mode to keep it visible. */
 .home-logo { display: inline-block; margin: .4rem 0 .8rem; }
 [data-md-color-scheme="slate"] .home-logo { filter: invert(1); }
+
+/* Buy-me-a-coffee: a subtle pink pill with black text (☕ = the clickable "logo"). */
+.md-typeset a.kofi-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  padding: .28rem .8rem;
+  border-radius: 999px;
+  background: #ffb3c7;                 /* soft pink */
+  color: #000;                          /* black letters */
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .01em;
+  text-decoration: none;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .14);
+  transition: background .15s ease, transform .15s ease, box-shadow .15s ease;
+}
+.md-typeset a.kofi-btn:hover,
+.md-typeset a.kofi-btn:focus {
+  background: #ff96b3;                  /* a touch deeper on hover */
+  color: #000;
+  transform: translateY(-1px);
+  box-shadow: 0 3px 9px rgba(0, 0, 0, .2);
+}
