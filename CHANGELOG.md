@@ -8,6 +8,9 @@ GitHub Releases. Each entry describes what the release actually changed.
 > the previous tag), so a clear commit subject per push becomes the changelog line — refine an entry
 > here anytime if you want more detail.
 
+## [2.78.0.0] - 2026-06-14
+- docs: inline header tabs (one-line header) + rewrite Build & Publish
+
 ## [2.77.0.0] - 2026-06-14
 - docs: fix 3 broken download links (filename mismatches)
 
