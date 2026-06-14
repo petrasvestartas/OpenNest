@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- OpenNest3D — the 3D mesh-mesh nesting Grasshopper plugin. Sibling to opennest_2 (the 2D plugin);
+       it wraps the native nest_spectral engine (src/nest_spectral_cpp -> nest_spectral.dll) the way
+       opennest_2 wraps nfp_nest / nest_physics. Builds opennest_3d.gha for Rhino 8 (.NET 7). -->
+
+  <PropertyGroup>
+    <!-- Rhino 8 Windows. (Add net7.0;net48 later for Mac/legacy parity, like opennest_2.) -->
+    <TargetFramework>net7.0-windows</TargetFramework>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <TargetExt>.gha</TargetExt>
+    <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
+    <NoWarn>NU1701;NETSDK1086;CA1416;CS0618;CS0168;CS0219;CS0162;CS0649;CS0169;CS0414</NoWarn>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <Version>1.0</Version>
+    <Title>opennest_3d</Title>
+    <Company>OpenNest Authors</Company>
+    <Description>3D mesh-mesh nesting (spectral / FFT packing).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Grasshopper" Version="8.0.23304.9001" ExcludeAssets="runtime" />
+    <PackageReference Include="System.Drawing.Common" Version="7.0.0" />
+  </ItemGroup>
+
+  <!-- Copy the native spectral solver DLL next to opennest_3d.gha so the bare-name P/Invoke resolves it. -->
+  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
+    <Copy Condition=" '$(OS)' == 'Windows_NT' AND Exists('../nest_spectral_cpp/build/Release/nest_spectral.dll') "
+          SourceFiles="../nest_spectral_cpp/build/Release/nest_spectral.dll" DestinationFolder="$(TargetDir)" />
+    <Copy Condition=" '$(OS)' != 'Windows_NT' AND Exists('../nest_spectral_cpp/build/nest_spectral.dylib') "
+          SourceFiles="../nest_spectral_cpp/build/nest_spectral.dylib" DestinationFolder="$(TargetDir)" />
+  </Target>
+
+</Project>
