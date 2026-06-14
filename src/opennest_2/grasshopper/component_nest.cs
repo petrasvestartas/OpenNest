@@ -324,6 +324,7 @@ namespace opennest_2
                 DA.GetData(1, ref nest_geo_in);
                 if (nest_sheets == null || nest_geo_in == null) { ReleaseEngine(); this.Message = "missing Sheets/Geometry"; return; }
 
+                nest_sheets = nest_sheets.duplicate();        // don't mutate the upstream sheets (shared with sibling nesters)
                 var nest_geo_dup = nest_geo_in.duplicate();   // don't mutate upstream geometry
                 this.nest_geos.Add(nest_geo_dup);
 
@@ -340,7 +341,7 @@ namespace opennest_2
 
                 // element_holes / poles / compact: parse BY NAME (robust to dropdown order). Sheet holes are
                 // ALWAYS kept out when the sheet has them (no toggle). element_holes: 0=off, 1=fill, 2=fill-first.
-                int partHolesMode = 1; int poles = 48; bool compact = true; int fitMode = 1;
+                int partHolesMode = 1; int poles = 48; bool compact = true; int fitMode = 0;   // 0 = all parts / fewest sheets (default)
                 foreach (var ln in parameters_text)
                 {
                     string t = (ln ?? "").Trim();

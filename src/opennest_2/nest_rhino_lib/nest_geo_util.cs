@@ -84,7 +84,7 @@ namespace nest_rhino_lib
             return nestGeo;
         }
 
-        public static nest_geo guid_to_nest_geo(List<Guid[]> guids, string boundary_layer = "outlines", List<int> copies = null, List<double> simplify_parameters = null)
+        public static nest_geo guid_to_nest_geo(List<Guid[]> guids, string boundary_layer = "outlines", List<int> copies = null, List<double> simplify_parameters = null, List<int> rotations = null)
         {
             nest_geo nestGeo = new nest_geo();
             List<int> nums = new List<int>();
@@ -96,6 +96,10 @@ namespace nest_rhino_lib
             {
                 nums = Enumerable.Repeat<int>(1, guids.Count).ToList<int>();
             }
+            // Per-part rotation overrides, aligned with guids like copies (0 = inherit the solver setting).
+            List<int> rots = (rotations != null && rotations.Count == guids.Count)
+                ? rotations
+                : Enumerable.Repeat<int>(0, guids.Count).ToList<int>();
             int num = 0;
             for (int i = 0; i < guids.Count; i++)
             {
@@ -108,6 +112,7 @@ namespace nest_rhino_lib
                     nestGeo.attributes.Add(attributes);
                     nestGeo.indices.Add(num);
                     nestGeo.copies.Add(nums[i]);
+                    nestGeo.rotations.Add(System.Math.Max(0, rots[i]));
                     string str = geometry.ObjectType.ToString();
                     if (RhinoDoc.ActiveDoc.Layers.FindIndex(attributes.LayerIndex).Name == boundary_layer)
                     {
@@ -129,7 +134,11 @@ namespace nest_rhino_lib
                     }
                 }
             }
-            nestGeo.identify_groups(simplify_parameters[0], simplify_parameters[1] > 0);
+            // Defensive: callers may pass one value (e.g. Simplify = 0) or none. Don't index [1] blindly —
+            // that threw "Index out of range" when only a single Simplify value was wired.
+            double sp0 = (simplify_parameters != null && simplify_parameters.Count > 0) ? simplify_parameters[0] : 100;
+            bool   sp1 = (simplify_parameters != null && simplify_parameters.Count > 1) && simplify_parameters[1] > 0;
+            nestGeo.identify_groups(sp0, sp1);
             return nestGeo;
         }
     }

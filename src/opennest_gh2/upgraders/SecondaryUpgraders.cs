@@ -117,7 +117,9 @@ namespace opennest_gh2.upgraders
         public IDocumentObject Upgrade(IGH_Component c)
         {
             var g = new GeometryRhinoComponent();
-            Up.Safe(() => c.TransferInputs(g, new[] { (0, 0), (1, 1), (2, 2), (3, 3), (4, 4), (5, 5) }));
+            // Legacy GH1 layout: 0 Layer,1 Copies,2 Simplify,3 Sort,4 Offset,5 Guid. GH2 now inserts
+            // Rotations at 5, so the old Guid maps to GH2 index 6 (Rotations 5 keeps its default).
+            Up.Safe(() => c.TransferInputs(g, new[] { (0, 0), (1, 1), (2, 2), (3, 3), (4, 4), (5, 6) }));
             Up.Safe(() => c.TransferOutputs(g, new[] { (0, 0), (1, 1), (2, 2), (3, 3), (4, 4) }));
             Up.Safe(() => c.TransferInstanceId(g));
             return g;

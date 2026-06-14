@@ -58,6 +58,26 @@ namespace opennest_gh2
                 return null;
             };
             W("resolver installed; dirs: " + string.Join(" | ", dirs));
+
+            // Capture the real load-time exception Rhino swallows behind "application initialization failed".
+            // Windowed (first 25s) + filtered to load-relevant types so we don't log unrelated Rhino exceptions.
+            var t0 = DateTime.UtcNow;
+            AppDomain.CurrentDomain.FirstChanceException += (sender, e) =>
+            {
+                try
+                {
+                    if ((DateTime.UtcNow - t0).TotalSeconds > 25) return;
+                    string msg = e.Exception.Message ?? "";
+                    // Skip only the truly-benign satellite/theme probes (FileNotFound for *.resources / theme asms).
+                    if (e.Exception is FileNotFoundException &&
+                        (msg.IndexOf(".resources", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                         msg.IndexOf("Eto.Wpf.Aero2", StringComparison.OrdinalIgnoreCase) >= 0)) return;
+                    string tn = e.Exception.GetType().Name;
+                    string st = (e.Exception.StackTrace ?? "").Split('\n').FirstOrDefault()?.Trim();
+                    W("EXC " + tn + ": " + msg + (st != null ? "  @ " + st : ""));
+                }
+                catch { }
+            };
         }
     }
 

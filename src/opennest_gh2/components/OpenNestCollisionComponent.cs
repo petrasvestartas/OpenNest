@@ -89,6 +89,10 @@ namespace opennest_gh2.components
             { access.AddError("No sheets", "Connect the OpenNest Sheets output."); return false; }
             if (!access.GetItem(1, out nest_geo geo) || geo == null)
             { access.AddError("No geometry", "Connect the OpenNest Geometry output."); return false; }
+            // Solvers transform/offset their sheets + geometry in place; duplicate so a sibling nester fed by
+            // the SAME Sheets/Geometry components isn't left reading already-transformed input.
+            sheets = sheets.duplicate();
+            geo = geo.duplicate();
             access.GetItem(2, out int iterations);
 
             int rotations = OptInt("num_of_rotations", 3600);
@@ -97,7 +101,7 @@ namespace opennest_gh2.components
             int partHolesMode = OptToken("element_holes", 1);   // 0=Off 1=Fill 2=Fill First
             int poles = OptInt("poles", 48);
             bool compactOn = OptToken("compact", 1) != 0;        // Off=>false, Bottom-Left/Multi=>true
-            int fitMode = OptToken("fit", 1);                    // One sheet=>1, All parts=>0
+            int fitMode = OptToken("fit", 0);                    // default All parts=>0 (One sheet=>1)
 
             var run = new NpRun();
             // NpRun.Flatten reads parameters positionally: [0]=rotations [1]=seed [2]=starts.

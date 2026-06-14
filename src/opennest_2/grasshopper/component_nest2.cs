@@ -159,7 +159,7 @@ namespace opennest_2
             string Tok(string key, string fallback) { var o = Opt(key); return o != null ? o.EmitToken() : key + " " + fallback; }
             return new List<string>
             {
-                Tok("num_of_rotations", "8"),
+                Tok("num_of_rotations", "4"),
                 "wiggle 0",                       // not exposed (unused by the discrete GA)
                 Tok("placement_type", "1"),
                 "spacing 0",                      // not exposed: gaps are set upstream in the Geometry (part offset)
@@ -366,6 +366,7 @@ namespace opennest_2
                     return;
                 }
 
+                nest_sheets = nest_sheets.duplicate();        // don't mutate the upstream sheets (shared with sibling nesters)
                 var nest_geo_dup = nest_geo_in.duplicate();   // don't mutate upstream geometry
                 this.nest_geos.Add(nest_geo_dup);
 

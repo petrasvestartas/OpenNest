@@ -19,7 +19,7 @@ namespace opennest_2
         // spacing parameter is still emitted as a fixed 0 in BuildOptionStrings to keep the indices intact.
         public static List<NestOption> OpenNest2() => new List<NestOption>
         {
-            NestOption.Number("num_of_rotations", "Rotations", 8, 1, 3600, 0, "Orientations each part may try (360/n)."),
+            NestOption.Number("num_of_rotations", "Rotations", 4, 1, 3600, 0, "Orientations each part may try (360/n). Default 4 = faster; raise it (e.g. 8) for tighter packing."),
             NestOption.Choice("placement_type", "Packing", new[] { "Box", "Gravity", "Squeeze", "Bottom Left" }, new[] { "0", "1", "2", "3" }, 1, "Placement strategy. Bottom Left = pack each part into the lowest-then-leftmost feasible spot."),
             NestOption.Number("seed", "Seed", 30, 0, 100000, 0, "Random seed (same seed = same result)."),
             NestOption.Number("mutation", "Mutation", 10, 0, 100, 0, "GA mutation rate."),
@@ -40,7 +40,7 @@ namespace opennest_2
             NestOption.Choice("element_holes", "Element Holes", new[] { "Off", "Fill", "Fill First" }, new[] { "0", "1", "2" }, 1, "Nest small ELEMENTS into larger elements' holes. Fill = after the nest; Fill First = pre-pack into holes before nesting (sometimes tighter). (Sheet holes are always kept out automatically.)"),
             NestOption.Number("poles", "Poles", 48, 4, 64, 0, "Inscribed circles per part for collision tests; more = more accurate (cleaner pack), fewer = faster but can pack worse."),
             NestOption.Choice("compact", "Compact", new[] { "Off", "Bottom-Left", "Multi" }, new[] { "0", "1", "2" }, 1, "Post-pack tightening slide."),
-            NestOption.Choice("fit", "Fit", new[] { "One sheet (max fill)", "All parts (fewest sheets)" }, new[] { "1", "0" }, 0, "One sheet = fill a SINGLE sheet as full as possible; parts that don't fit are placed OUTSIDE. All parts = use as many sheets as needed so nothing is left off."),
+            NestOption.Choice("fit", "Fit", new[] { "One sheet (max fill)", "All parts (fewest sheets)" }, new[] { "1", "0" }, 1, "One sheet = fill a SINGLE sheet as full as possible; parts that don't fit are placed OUTSIDE. All parts = use as many sheets as needed so nothing is left off."),
             NestOption.Text("font", "Sheet Font", "MecSoft_Font-1 1", "Sheet-number label: font name + text size."),
         };
 

@@ -12,7 +12,7 @@ EXAMPLES = [
     ("01", "01_collision",     "Collision",            "Nest parts (one with a hole) into a sheet (with a hole) with the physics (collision) engine."),
     ("02", "02_nfp",           "NFP + GA",             "Nest parts into a sheet with the NFP + genetic-algorithm engine (handles concave parts + holes)."),
     ("03", "03_live",          "Live animation (NFP)", "Run the NFP engine on a background thread and poll the evolving best layout (progress, fitness, live poses)."),
-    ("04", "04_offset",        "Clearance offset",     "Grow (or shrink) a polygon by a distance with Clipper2 — the building block for nesting with clearance."),
+    ("04", "04_offset",        "Clearance offset",     "Grow every part and shrink the sheet by a clearance with nfp_offset_polygon, then nest the offset geometry — the spacing-via-offset workflow (the solver `spacing` param is ignored)."),
     ("05", "05_attributes",    "Attributes",           "Carry a point (a part's centroid) and read it at the placed pose: attributes move with the part."),
     ("06", "06_pack_array",    "Pack (array)",         "Lay parts out in a deterministic grid: a fixed number of columns per row (no nesting)."),
     ("07", "07_pack_distance", "Pack (distance)",      "Lay parts out in a grid, wrapping to a new row once a row reaches a maximum width."),

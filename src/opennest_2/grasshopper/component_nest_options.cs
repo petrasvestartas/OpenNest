@@ -27,8 +27,6 @@ namespace opennest_2
     {
         public const int SOLVER_AUTO = -1, SOLVER_OPENNEST2 = 0, SOLVER_COLLISION = 1;
         private int _solver = SOLVER_OPENNEST2;   // the solver whose option inputs are currently registered (never Auto)
-        private bool _autoActive = false;         // last solve resolved Solver = Auto (so SolutionEnd may re-detect)
-        private bool _reentry = false;            // guards the SolutionEnd -> ScheduleSolution re-detect
 
         public component_nest_options()
             : base("NestOptions", "NestOptions",
@@ -84,7 +82,15 @@ namespace opennest_2
         public override void AddedToDocument(GH_Document document)
         {
             base.AddedToDocument(document);
-            if (document != null) document.SolutionEnd += OnSolutionEnd;
+            if (document != null)
+            {
+                document.SolutionEnd -= OnSolutionEnd;   // avoid a double subscription on re-add
+                document.SolutionEnd += OnSolutionEnd;
+                // A COPY-PASTED (or loaded) component carries its saved solver layout and may land already
+                // wired to a solver — sync once now so it matches what it's connected to, not what it was
+                // copied from. (A fresh drag-drop starts at the default, so it adapts on the first wire.)
+                document.ScheduleSolution(10, d => { try { SyncToDownstream(); } catch { } });
+            }
         }
 
         public override void RemovedFromDocument(GH_Document document)
@@ -93,24 +99,51 @@ namespace opennest_2
             base.RemovedFromDocument(document);
         }
 
-        // After each solution: if we're following Auto and the downstream solver no longer matches the
-        // registered layout (e.g. the output was just wired to a solver), schedule the input swap + recompute.
-        // The re-entry guard + the fact that the swap makes detection match again means this converges.
-        private void OnSolutionEnd(object sender, GH_SolutionEventArgs e)
+        // The effective Solver input value WITHOUT a SolveInstance pass: the wired (volatile) value if any,
+        // else the on-canvas (persistent) value, else Auto. Lets OnSolutionEnd decide whether to auto-follow
+        // even when the solver is orange and Grasshopper never pulled the Options input (so NestOptions never
+        // re-solved this pass) — the case where the layout used to stay stuck on the wrong solver.
+        private int CurrentSolverInput()
         {
-            if (_reentry || !_autoActive) return;
+            try
+            {
+                if (Params.Input[0] is Param_Integer p)
+                {
+                    if (p.VolatileDataCount > 0)
+                    {
+                        var b = p.VolatileData.get_Branch(0);
+                        if (b != null && b.Count > 0 && b[0] is Grasshopper.Kernel.Types.GH_Integer gi) return gi.Value;
+                    }
+                    if (p.PersistentData != null && p.PersistentData.DataCount > 0)
+                    {
+                        var pd = p.PersistentData.get_FirstItem(true);
+                        if (pd != null) return pd.Value;
+                    }
+                }
+            }
+            catch { }
+            return SOLVER_AUTO;
+        }
+
+        // After each solution, re-sync to whatever the output is wired into. Runs for EVERY component
+        // instance (fresh, pasted or loaded), so a copy-pasted Options component reconnected to a different
+        // solver swaps its inputs just like a freshly dropped one.
+        private void OnSolutionEnd(object sender, GH_SolutionEventArgs e) => SyncToDownstream();
+
+        // If Solver is Auto and the downstream solver no longer matches the registered layout (output just
+        // wired to a solver — possibly an orange one, or a pasted component still showing the copied layout),
+        // commit the new solver and schedule the input swap + recompute. Reads the Solver input directly (not
+        // a cached flag), so it fires even when NestOptions itself wasn't re-solved this pass. Self-converging:
+        // _solver is committed immediately, so the next solution sees detected == _solver and does nothing —
+        // no re-entry latch that could stick and freeze future swaps (the copy-paste failure mode).
+        private void SyncToDownstream()
+        {
+            int solverInput = CurrentSolverInput();
+            if (solverInput == SOLVER_OPENNEST2 || solverInput == SOLVER_COLLISION) return;  // explicit override; don't auto-follow
             int detected = DetectDownstreamSolver(out _);
             if (detected == _solver) return;
-            var doc = OnPingDocument();
-            if (doc == null) return;
-            _reentry = true;
-            doc.ScheduleSolution(5, d =>
-            {
-                _reentry = false;
-                _solver = detected;
-                RebuildOptionInputs();
-                ExpireSolution(false);
-            });
+            _solver = detected;   // commit now; the scheduled callback below brings the params in line
+            OnPingDocument()?.ScheduleSolution(5, d => { RebuildOptionInputs(); ExpireSolution(false); });
         }
 
         protected override void RegisterOutputParams(GH_Component.GH_OutputParamManager pManager)
@@ -173,13 +206,11 @@ namespace opennest_2
             if (solverInput == SOLVER_OPENNEST2 || solverInput == SOLVER_COLLISION)
             {
                 desired = solverInput;          // explicit override
-                _autoActive = false;
             }
             else
             {
                 if (solverInput != SOLVER_AUTO)
                     AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "Solver must be -1 (Auto), 0 (OpenNest2) or 1 (OpenNestCollision); using Auto.");
-                _autoActive = true;             // follow the downstream solver (re-checked on SolutionEnd)
                 desired = DetectDownstreamSolver(out bool both);
                 if (both) AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, "Auto: wired to both solvers; showing OpenNest2 options. Set Solver to 0 or 1 to choose.");
             }

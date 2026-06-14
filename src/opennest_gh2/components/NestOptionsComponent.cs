@@ -23,8 +23,12 @@ namespace opennest_gh2.components
         public const int SOLVER_AUTO = -1, SOLVER_OPENNEST2 = 0, SOLVER_COLLISION = 1;
         private int _solver = SOLVER_OPENNEST2;   // the solver whose option inputs are currently registered (never Auto)
         private volatile bool _swapPending;       // a layout swap is queued on the UI thread
-        private bool _autoActive = false;         // last Process resolved Solver = Auto (so the hook may re-detect)
-        private bool _reentry = false;            // guards the SolutionCompleted -> swap re-detect
+        // The last Solver INPUT value seen by Process. Defaults to Auto so a freshly dropped OR copy-pasted
+        // component auto-follows the solver it gets wired to BEFORE Process ever runs (a pasted component
+        // wired to an orange solver never re-processes, so a flag set only inside Process would stay stale and
+        // the layout would never swap — the copy-paste bug). Process overwrites it with the real value, so an
+        // explicit Solver = 0/1 still wins once the component actually runs.
+        private int _lastSolverInput = SOLVER_AUTO;
         private Grasshopper2.Doc.SolutionServer _hookedSolution;   // the solution server we listen to
 
         public NestOptionsComponent()
@@ -60,15 +64,17 @@ namespace opennest_gh2.components
 
         private void OnSolutionCompleted(object sender, Grasshopper2.Doc.SolutionEventArgs e)
         {
-            if (_reentry || _swapPending || !_autoActive) return;
+            if (_swapPending) return;
+            if (_lastSolverInput == SOLVER_OPENNEST2 || _lastSolverInput == SOLVER_COLLISION) return;  // explicit override
             int detected = DetectDownstreamSolver(out _);
             if (detected == _solver) return;
-            _reentry = true;
+            _solver = detected;       // commit now -> the next SolutionCompleted sees detected == _solver (no loop, no sticky latch)
+            _swapPending = true;
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
             {
-                try { _solver = detected; RebuildOptionInputs(); Document?.Solution.DelayedExpire(this); }
+                try { RebuildOptionInputs(); Document?.Solution.DelayedExpire(this); }
                 catch (Exception ex) { Rhino.RhinoApp.WriteLine(ex.ToString()); }
-                finally { _reentry = false; }
+                finally { _swapPending = false; }
             }));
         }
 
@@ -188,18 +194,17 @@ namespace opennest_gh2.components
         {
             int solverInput = SOLVER_AUTO;
             access.GetItem(0, out solverInput);
+            _lastSolverInput = solverInput;     // record for the SolutionCompleted hook (auto-follow vs explicit)
 
             int desired;
             if (solverInput == SOLVER_OPENNEST2 || solverInput == SOLVER_COLLISION)
             {
                 desired = solverInput;          // explicit override
-                _autoActive = false;
             }
             else
             {
                 if (solverInput != SOLVER_AUTO)
                     access.AddWarning("Invalid solver", "Solver must be -1 (Auto), 0 (OpenNest2) or 1 (OpenNestCollision); using Auto.");
-                _autoActive = true;             // follow the downstream solver (re-checked on SolutionCompleted)
                 desired = DetectDownstreamSolver(out bool both);
                 if (both) access.AddRemark("Auto", "Wired to both solvers; showing OpenNest2 options. Set Solver to 0 or 1 to choose.");
             }

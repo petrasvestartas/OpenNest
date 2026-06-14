@@ -124,7 +124,7 @@ namespace opennest_gh2.components
             if (breps.Length == 0) return;
             access.GetTree(1, out Tree<double> sT); double simplify = NestGh2Util.First(sT, 0.0);
             access.GetTree(2, out Tree<bool> hT); bool hull = NestGh2Util.First(hT, false);
-            access.GetTree(3, out Tree<int> cT); int copies = NestGh2Util.First(cT, 1);
+            access.GetTree(3, out Tree<int> cT); var copiesVals = NestGh2Util.AllOr(cT, 1);
             access.GetTree(4, out Tree<double> oT); double offset = NestGh2Util.First(oT, 0.0);
             access.GetTree(ROTATIONS_INPUT, out Tree<int> rT); var rotVals = NestGh2Util.AllOr(rT, 0);
             // Each brep is ONE part: its boundary loops (outer + holes) are kept together (hard_coded_input).
@@ -159,7 +159,11 @@ namespace opennest_gh2.components
                 }
             }
 
-            var copiesList = Enumerable.Repeat(copies < 1 ? 1 : copies, grouped.Count).ToList();
+            // Per-part copies, cycled like the main Geometry component (one value applies to all; a list maps
+            // one-per-part). Was First(cT) before -> only the first value was used, so a copies LIST never
+            // duplicated per part.
+            var copiesList = new List<int>(grouped.Count);
+            for (int i = 0; i < grouped.Count; i++) { int c = copiesVals[i % copiesVals.Count]; copiesList.Add(c < 1 ? 1 : c); }
             var rotationsList = new List<int>(grouped.Count);
             for (int i = 0; i < grouped.Count; i++) { int rv = rotVals[i % rotVals.Count]; rotationsList.Add(rv < 0 ? 0 : rv); }
             var geo = nest_geo_util.geo_to_nest_geo(grouped, copiesList, new List<double> { simplify, hull ? 1.0 : 0.0 }, attrsPerPart, hard_coded_input: true, rotations: rotationsList);

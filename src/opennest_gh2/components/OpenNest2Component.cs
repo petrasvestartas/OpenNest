@@ -79,13 +79,17 @@ namespace opennest_gh2.components
             { access.AddError("No sheets", "Connect the OpenNest Sheets output."); return false; }
             if (!access.GetItem(1, out nest_geo geo) || geo == null)
             { access.AddError("No geometry", "Connect the OpenNest Geometry output."); return false; }
+            // Solvers transform/offset their sheets + geometry in place; duplicate so a sibling nester fed by
+            // the SAME Sheets/Geometry components isn't left reading already-transformed input.
+            sheets = sheets.duplicate();
+            geo = geo.duplicate();
             access.GetItem(2, out int iterations);
             int totalGen = iterations < 1 ? 1 : iterations;
 
             // rhino_example parameters[0..8]: rotations, wiggle, placement, spacing, seed, curveTol, mutation, population, time.
             var parameters = new List<double>
             {
-                OptNum("num_of_rotations", 8), 0, OptToken("placement_type", 1), OptNum("spacing", 0),
+                OptNum("num_of_rotations", 4), 0, OptToken("placement_type", 1), OptNum("spacing", 0),
                 OptNum("seed", 30), 1.0, OptNum("mutation", 10), OptNum("population", 10), 0
             };
 

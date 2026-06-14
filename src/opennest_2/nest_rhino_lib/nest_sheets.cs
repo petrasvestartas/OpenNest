@@ -44,6 +44,29 @@ namespace nest_rhino_lib
 
         public double[] overwrite_values = new double[] { 2000, 100, 300, 300, 2, 10 };
 
+        // Deep copy. A solver transforms / offsets its sheets IN PLACE (see offset_sheet_boundary and the
+        // placement transforms), so two nesting components fed by the SAME Sheets component would corrupt
+        // each other's input — one's solve leaves the other reading already-transformed sheets ("OpenNest2
+        // doesn't start after OpenNestCollision finished"). Each consumer duplicates first, like nest_geo.
+        public nest_sheets duplicate()
+        {
+            nest_sheets c = (nest_sheets)this.MemberwiseClone();
+            if (this.sheets != null)
+            {
+                c.sheets = new Polyline[this.sheets.Length][];
+                for (int i = 0; i < this.sheets.Length; i++)
+                {
+                    if (this.sheets[i] == null) { c.sheets[i] = null; continue; }
+                    c.sheets[i] = new Polyline[this.sheets[i].Length];
+                    for (int j = 0; j < this.sheets[i].Length; j++)
+                        c.sheets[i][j] = this.sheets[i][j] == null ? null : new Polyline(this.sheets[i][j]);
+                }
+            }
+            c.overwrite = this.overwrite != null ? (bool[])this.overwrite.Clone() : null;
+            c.overwrite_values = this.overwrite_values != null ? (double[])this.overwrite_values.Clone() : null;
+            return c;
+        }
+
         public nest_sheets(List<List<Polyline>> unsorted_polylines, List<double> gap_xy, List<int> row_count, int copies)
         {
 
