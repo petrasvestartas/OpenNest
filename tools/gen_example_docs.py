@@ -33,7 +33,7 @@ def page(num, slug, title, desc, src_rel, fence, code):
 def index(lang_dir, lang_name, blurb):
     rows = "\n".join(f"| {num} | [{title}]({slug}.md) — {desc.split('—')[0].strip().rstrip('.')} |"
                      for (num, slug, title, desc) in EXAMPLES)
-    return (f"# {lang_name} API\n\n{blurb}\n\n"
+    return (f"# {lang_name} Examples\n\n{blurb}\n\n"
             "Each example below is a self-contained project — download it, run `run.bat` (Windows) or\n"
             "`run.command` (macOS); the first build compiles the OpenNest engines from source.\n\n"
             "| # | Example |\n| --- | --- |\n" + rows + "\n")

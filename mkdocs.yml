@@ -68,7 +68,7 @@ nav:
   - Rhino Commands:
       - "OpenNest": rhino/index.md
   - API Reference:
-      - "C++ API":
+      - "C++ Examples":
           - "Overview": api/cpp/index.md
           - "01 Collision": api/cpp/01_collision.md
           - "02 NFP + GA": api/cpp/02_nfp.md
@@ -78,7 +78,7 @@ nav:
           - "06 Pack array": api/cpp/06_pack_array.md
           - "07 Pack distance": api/cpp/07_pack_distance.md
           - "08 Text": api/cpp/08_text.md
-      - "C# API":
+      - "C# Examples":
           - "Overview": api/csharp/index.md
           - "01 Collision": api/csharp/01_collision.md
           - "02 NFP + GA": api/csharp/02_nfp.md
@@ -88,7 +88,7 @@ nav:
           - "06 Pack array": api/csharp/06_pack_array.md
           - "07 Pack distance": api/csharp/07_pack_distance.md
           - "08 Text": api/csharp/08_text.md
-      - "Python API":
+      - "Python Examples":
           - "Overview": api/python/index.md
           - "01 Collision": api/python/01_collision.md
           - "02 NFP + GA": api/python/02_nfp.md
