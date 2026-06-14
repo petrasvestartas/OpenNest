@@ -8,6 +8,9 @@ GitHub Releases. Each entry describes what the release actually changed.
 > the previous tag), so a clear commit subject per push becomes the changelog line — refine an entry
 > here anytime if you want more detail.
 
+## [2.77.0.0] - 2026-06-14
+- docs: fix 3 broken download links (filename mismatches)
+
 ## [2.76.0.0] - 2026-06-14
 - docs: professional left nav — drop toc.integrate, add section tabs + instant nav
 
