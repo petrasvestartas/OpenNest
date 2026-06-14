@@ -12,6 +12,10 @@
          the net8 flavor of GH2. The plugin uses only cross-platform APIs (Eto, Rhino.Geometry, GH2), so the
          net8.0 build is cross-built on the Windows CI runner, mirroring opennest_2 / opennest_commands. -->
     <TargetFrameworks>net8.0-windows;net8.0</TargetFrameworks>
+    <!-- GH2 component libraries are .rhp (like the native G2*Components.rhp). They are loaded by the
+         Grasshopper 2 host from GH2's Components folder, which the Rhino plug-in manager does NOT scan -
+         so there is no "register as a Rhino plug-in" attempt and no popup. (.gha would route to Grasshopper
+         1, which can't load a GH2 assembly.) -->
     <TargetExt>.rhp</TargetExt>
     <EnableDynamicLoading>true</EnableDynamicLoading>
     <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
