@@ -76,3 +76,6 @@ src/opennest_cpp/out/*
 !src/opennest_cpp/out/baseline.csv
 !src/opennest_cpp/out/part5.txt
 !src/opennest_cpp/out/tshape.txt
+
+out.svg
+**/out.svg
