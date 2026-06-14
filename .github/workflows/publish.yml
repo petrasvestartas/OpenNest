@@ -1,10 +1,13 @@
 name: Build & Publish (Windows + macOS -> Yak)
 
-# Manual publish. Bumps the version ONCE, builds every engine from source on BOTH platforms, packages a
-# SEPARATE Yak distribution per OS (…-rh8_0-win and …-rh8_0-mac) at the same version, pushes both, refreshes
-# the committed grasshopper_plugin/ packages, tags, and creates a GitHub Release.
+# Bumps the version ONCE, builds every engine from source on BOTH platforms, then packages and pushes the
+# OpenNest Yak distributions at the same version (…-any-win / …-any-mac): Grasshopper 1 + the OpenNest Rhino
+# command auto-install on Rhino 8/9/later. The Grasshopper 2 plug-in is NOT a separate auto-loading package
+# (Rhino's plug-in manager crashes on a registered GH2 .rhp); instead its files ride inside each package's
+# grasshopper2/ subfolder as a manual-load download. Refreshes the committed grasshopper_plugin/ packages,
+# tags, and creates a GitHub Release.
 # A plugin with platform-specific native binaries (.dll on Windows, .dylib on macOS) MUST ship as separate
-# per-OS Yak packages — `yak build --platform win|mac` sets the distribution tag (see the Yak CLI reference).
+# per-OS Yak packages — `yak build --platform win|mac` sets the platform tag (see the Yak CLI reference).
 # Add a repo secret YAK_TOKEN (from `yak login --ci`) to enable the push step.
 on:
   # Auto-publish on every push to main (the version bumps each time — that's intended).
@@ -84,18 +87,23 @@ jobs:
         run: |
           $win = "grasshopper_plugin/opennest_win/manifest.yml"
           $mac = "grasshopper_plugin/opennest_mac/manifest.yml"
+          # Single OpenNest package (GH1 + command). The Grasshopper 2 files ride inside its grasshopper2/
+          # subfolder as a manual-load download — no separate OpenNest_GH2 package any more.
+          $manifests = @($win, $mac)
           $c = Get-Content $win -Raw
           if ($c -notmatch 'version:\s*([0-9]+)\.([0-9]+)\.([0-9]+)') { throw "version not found in $win" }
           $base = [version]"$($Matches[1]).$($Matches[2]).$($Matches[3])"
-          # Never publish a duplicate: start from the HIGHER of the committed manifest and the version
-          # already live on Yak (a prior run can push to Yak but fail to commit the bump after a race).
-          try {
-            $y = (Invoke-RestMethod -Uri "https://yak.rhino3d.com/packages/opennest" -TimeoutSec 20).version
-            if ($y -match '([0-9]+)\.([0-9]+)\.([0-9]+)') {
-              $yv = [version]"$($Matches[1]).$($Matches[2]).$($Matches[3])"
-              if ($yv -gt $base) { $base = $yv }
-            }
-          } catch { Write-Host "Yak version query failed; using manifest version. $_" }
+          # Never publish a duplicate: start from the HIGHER of the committed manifest and the version already
+          # live on Yak for EITHER package (a prior run can push to Yak but fail to commit the bump after a race).
+          foreach ($pkg in @("opennest")) {
+            try {
+              $y = (Invoke-RestMethod -Uri "https://yak.rhino3d.com/packages/$pkg" -TimeoutSec 20).version
+              if ($y -match '([0-9]+)\.([0-9]+)\.([0-9]+)') {
+                $yv = [version]"$($Matches[1]).$($Matches[2]).$($Matches[3])"
+                if ($yv -gt $base) { $base = $yv }
+              }
+            } catch { Write-Host "Yak version query failed for $pkg; ignoring. $_" }
+          }
           $maj=$base.Major; $min=$base.Minor; $pat=$base.Build
           switch ("${{ github.event.inputs.bump }}") {
             "major" { $maj++; $min=0; $pat=0 }
@@ -103,7 +111,7 @@ jobs:
             default { $min++; $pat=0 }   # minor
           }
           $new = "$maj.$min.$pat.0"
-          foreach ($m in @($win, $mac)) {
+          foreach ($m in $manifests) {
             (Get-Content $m -Raw) -replace 'version:\s*[0-9.]+', "version: $new" | Set-Content $m -NoNewline
           }
           "version=$new" | Out-File $env:GITHUB_OUTPUT -Append
@@ -136,12 +144,17 @@ jobs:
       - name: Build opennest_commands.rhp
         run: dotnet build src/opennest_commands/opennest_commands.csproj -c Release
 
-      # ---- NOTE: the Grasshopper 2 plug-in (src/opennest_gh2) is intentionally NOT built or shipped here.
-      #      GH2 is only really available on Rhino 9 (it ships inside R9 and is always present there); the
-      #      Rhino-8 GH2 SDK is a vestigial/broken WIP, and a GH2 .rhp bundled for R8 makes Rhino throw
-      #      FileNotFoundException('Grasshopper2') for every GH1-only user. When GH2 reaches Beta, revive it as
-      #      a SEPARATE package built against the Rhino 9 SDK (Grasshopper2 9.0-wip / RhinoCommon 9.x, net8.0)
-      #      so Yak tags it rh9_0 and the Package Manager only offers it on Rhino 9+. ----
+      # ---- 4c) Build the Grasshopper 2 plug-in (.rhp) for RHINO 9 (net8.0-windows + net8.0). It compiles
+      #          against the Rhino-9 GH2 SDK (Grasshopper2 9.0.x-wip NuGet -> pinned RhinoCommon 9.x). The
+      #          net8.0 (portable) flavor is then staged into each OpenNest package's grasshopper2/ subfolder
+      #          (steps 6/7) as a manual-load download — it is NOT registered as a Rhino plug-in, because
+      #          Rhino's plug-in manager crashes on a registered GH2 .rhp (InternalOnLoad NRE). continue-on-
+      #          error: the GH2 SDK is still WIP — never let a GH2 hiccup block the proven GH1 + commands
+      #          release; the staging steps guard on the .rhp existing (no .rhp => no grasshopper2/ subfolder,
+      #          main OpenNest still ships). ----
+      - name: Build opennest_gh2.rhp (Grasshopper 2, Rhino 9)
+        continue-on-error: true
+        run: dotnet build src/opennest_gh2/opennest_gh2.csproj -c Release
 
       # ---- 5) Pull the universal macOS dylibs built by the mac job ----
       - name: Download macOS dylibs
@@ -154,68 +167,88 @@ jobs:
         shell: pwsh
         run: Invoke-WebRequest -Uri "https://files.mcneel.com/yak/tools/latest/yak.exe" -OutFile "$PWD/yak.exe"
 
-      # ---- 6) WINDOWS Yak package (rh8_0-win) from the net7.0-windows build ----
-      - name: Build Windows Yak package
+      # ---- 6) Build ALL FOUR OpenNest Yak distributions: {Rhino 8 = net7/RC8, Rhino 9 = net8/RC9} x
+      #         {win, mac}. SAME package name + version, four distribution tags — Rhino's Package Manager
+      #         installs the one matching the running Rhino, so GH1 (.gha) + the OpenNest command (.rhp)
+      #         auto-install on Rhino 8 AND 9, on Windows AND macOS. The Grasshopper 2 plug-in is NEVER in the
+      #         package root (Rhino's plug-in manager would register it and crash:
+      #         Rhino.PlugIns.PlugIn.InternalOnLoad NRE); it rides in the "grasshopper2/" SUBFOLDER as a plain
+      #         download the user loads by hand inside Grasshopper 2 (Rhino 9 only). The command MUST match the
+      #         Rhino runtime: a net7/RC8 .rhp can't load on Rhino 9, so the rh9 packages ship the net8/RC9
+      #         command. yak infers the distribution tag from the inspected plug-in; we force it by rename
+      #         (guide-sanctioned) since we KNOW which Rhino each staging targets. ----
+      - name: Build OpenNest Yak packages (R8+R9, win+mac)
         shell: pwsh
         run: |
-          $stage = "yak_win"
-          New-Item -ItemType Directory -Force $stage | Out-Null
-          Copy-Item "src/opennest_2/bin/Release/net7.0-windows/*" $stage -Recurse -Force
-          # Drop the Rhino command plug-in next to the .gha so the Yak package installs commands too.
-          Copy-Item "src/opennest_commands/bin/Release/net7.0-windows/opennest_commands.rhp" $stage -Force
-          Copy-Item "src/opennest_commands/bin/Release/net7.0-windows/opennest_commands.deps.json" $stage -Force
-          # NOTE: the Grasshopper 2 plug-in is NOT staged here (and not shipped at all) — GH2 belongs on Rhino 9
-          # where it is always present; an R8 GH2 .rhp makes Rhino throw FileNotFoundException for GH1-only users.
-          Copy-Item "grasshopper_plugin/opennest_win/manifest.yml" $stage -Force
-          Copy-Item "grasshopper_plugin/opennest_win/icon.png"     $stage -Force
-          if (Test-Path "README.md") { Copy-Item "README.md" "$stage/" -Force }
-          if (Test-Path "LICENSE")   { Copy-Item "LICENSE"   "$stage/" -Force }
-          Push-Location $stage
-          & "$env:GITHUB_WORKSPACE/yak.exe" build --platform win
-          Pop-Location
-          Get-ChildItem "$stage/*.yak" | Select-Object Name
+          $yak = "$env:GITHUB_WORKSPACE/yak.exe"
+          function Build-Pkg($stage, $platform, $rh, $ghaDir, $cmdDir, $manifestDir, $useDylibs) {
+            New-Item -ItemType Directory -Force $stage | Out-Null
+            # GH1 payload (managed deps included). On mac, drop the Windows-native DLLs the PostBuild copied in
+            # and ship the universal dylibs instead.
+            Copy-Item "$ghaDir/*" $stage -Recurse -Force
+            if ($useDylibs) {
+              Remove-Item "$stage/nfp_nest.dll","$stage/nest_physics.dll" -Force -ErrorAction SilentlyContinue
+              Copy-Item "mac_dylibs/*.dylib" $stage -Force
+            }
+            # Rhino command — net7/RC8 for the rh8 package, net8/RC9 for the rh9 package (runtimeconfig.json
+            # must be present for the .NET plug-in to start).
+            Copy-Item "$cmdDir/opennest_commands.rhp" $stage -Force
+            Copy-Item "$cmdDir/opennest_commands.deps.json" $stage -Force -ErrorAction SilentlyContinue
+            Copy-Item "$cmdDir/opennest_commands.runtimeconfig.json" $stage -Force -ErrorAction SilentlyContinue
+            # GH2 manual-load subfolder: the net8 (portable) .rhp + GH1 payload + engines beside it.
+            if (Test-Path "src/opennest_gh2/bin/Release/net8.0/opennest_gh2.rhp") {
+              $g2 = "$stage/grasshopper2"; New-Item -ItemType Directory -Force $g2 | Out-Null
+              Copy-Item "src/opennest_gh2/bin/Release/net8.0/opennest_gh2.rhp" $g2 -Force
+              Copy-Item "src/opennest_gh2/bin/Release/net8.0/opennest_gh2.deps.json" $g2 -Force -ErrorAction SilentlyContinue
+              Copy-Item "src/opennest_gh2/bin/Release/net8.0/opennest_gh2.runtimeconfig.json" $g2 -Force -ErrorAction SilentlyContinue
+              Copy-Item "$ghaDir/opennest_2.gha" $g2 -Force
+              if ($useDylibs) { Copy-Item "mac_dylibs/*.dylib" $g2 -Force }
+              else { Copy-Item "$ghaDir/nest_physics.dll" $g2 -Force; Copy-Item "$ghaDir/nfp_nest.dll" $g2 -Force }
+              Copy-Item "grasshopper_plugin/GRASSHOPPER2_INSTALL.txt" $g2 -Force -ErrorAction SilentlyContinue
+            }
+            Copy-Item "$manifestDir/manifest.yml" $stage -Force
+            Copy-Item "$manifestDir/icon.png" $stage -Force
+            if (Test-Path "README.md") { Copy-Item "README.md" "$stage/" -Force }
+            if (Test-Path "LICENSE")   { Copy-Item "LICENSE"   "$stage/" -Force }
+            Push-Location $stage
+            & $yak build --platform $platform
+            Pop-Location
+            Get-ChildItem "$stage/*.yak" | ForEach-Object {
+              $n = $_.Name -replace '-(any|rh[0-9_]+)-(win|mac|any)\.yak$', "-$rh-`$2.yak"
+              if ($n -ne $_.Name) { Rename-Item $_.FullName $n; Write-Host "Retagged $($_.Name) -> $n" }
+            }
+            Get-ChildItem "$stage/*.yak" | Select-Object Name
+          }
+          if (-not (Test-Path "src/opennest_gh2/bin/Release/net8.0/opennest_gh2.rhp")) { Write-Host "WARNING: GH2 .rhp missing - packages will ship without the grasshopper2/ subfolder." }
+          Build-Pkg "yak_win_rh8" "win" "rh8_0" "src/opennest_2/bin/Release/net7.0-windows" "src/opennest_commands/bin/Release/net7.0-windows" "grasshopper_plugin/opennest_win" $false
+          Build-Pkg "yak_win_rh9" "win" "rh9_0" "src/opennest_2/bin/Release/net7.0-windows" "src/opennest_commands/bin/Release/net8.0-windows" "grasshopper_plugin/opennest_win" $false
+          Build-Pkg "yak_mac_rh8" "mac" "rh8_0" "src/opennest_2/bin/Release/net7.0"         "src/opennest_commands/bin/Release/net7.0"         "grasshopper_plugin/opennest_mac" $true
+          Build-Pkg "yak_mac_rh9" "mac" "rh9_0" "src/opennest_2/bin/Release/net7.0"         "src/opennest_commands/bin/Release/net8.0"         "grasshopper_plugin/opennest_mac" $true
 
-      # ---- 7) macOS Yak package (rh8_0-mac): the net7.0 managed build + the universal dylibs ----
-      - name: Build macOS Yak package
-        shell: pwsh
-        run: |
-          $stage = "yak_mac"
-          New-Item -ItemType Directory -Force $stage | Out-Null
-          Copy-Item "src/opennest_2/bin/Release/net7.0/*" $stage -Recurse -Force
-          # Drop the Windows-native engine DLLs the PostBuild copied in; ship the universal dylibs instead.
-          Remove-Item "$stage/nfp_nest.dll","$stage/nest_physics.dll" -Force -ErrorAction SilentlyContinue
-          Copy-Item "mac_dylibs/*.dylib" $stage -Force
-          # The Rhino command plug-in (.rhp) is platform-neutral managed code; ship it on mac too.
-          Copy-Item "src/opennest_commands/bin/Release/net7.0/opennest_commands.rhp" $stage -Force
-          Copy-Item "src/opennest_commands/bin/Release/net7.0/opennest_commands.deps.json" $stage -Force
-          # NOTE: the Grasshopper 2 plug-in is NOT staged here (and not shipped at all) — GH2 belongs on Rhino 9
-          # where it is always present; an R8 GH2 .rhp makes Rhino throw FileNotFoundException for GH1-only users.
-          Copy-Item "grasshopper_plugin/opennest_mac/manifest.yml" $stage -Force
-          Copy-Item "grasshopper_plugin/opennest_mac/icon.png"     $stage -Force
-          if (Test-Path "README.md") { Copy-Item "README.md" "$stage/" -Force }
-          if (Test-Path "LICENSE")   { Copy-Item "LICENSE"   "$stage/" -Force }
-          Push-Location $stage
-          & "$env:GITHUB_WORKSPACE/yak.exe" build --platform mac
-          Pop-Location
-          Get-ChildItem "$stage/*.yak" | Select-Object Name
+      # NOTE: there is no longer a separate auto-loading "OpenNest_GH2" Yak package. A GH2 .rhp delivered as a
+      # registered Yak plug-in is scanned by Rhino's plug-in manager, which crashes on it
+      # (Rhino.PlugIns.PlugIn.InternalOnLoad NRE -> "application initialization failed"). Instead the GH2 files
+      # ride along inside the main OpenNest package's "grasshopper2/" subfolder (staged in steps 6/7): downloaded
+      # with the GH1 + command install, but NOT auto-loaded. Rhino-9 users load opennest_gh2.rhp manually in
+      # Grasshopper 2 (see grasshopper_plugin/GRASSHOPPER2_INSTALL.txt).
 
-      # ---- 8) Push BOTH distributions (same version, different platform tag) ----
-      - name: Yak push (win + mac)
+      # ---- 8) Push all four OpenNest distributions (rh8 + rh9, win + mac — same version) ----
+      - name: Yak push (OpenNest, R8+R9, win+mac)
         if: ${{ env.YAK_TOKEN != '' }}
         shell: pwsh
         run: |
-          Get-ChildItem yak_win/*.yak, yak_mac/*.yak | ForEach-Object {
+          Get-ChildItem yak_win_rh8/*.yak, yak_win_rh9/*.yak, yak_mac_rh8/*.yak, yak_mac_rh9/*.yak -ErrorAction SilentlyContinue | ForEach-Object {
             & "$env:GITHUB_WORKSPACE/yak.exe" push $_.FullName
           }
 
-      # ---- 9) Refresh the committed installable packages in grasshopper_plugin/ ----
+      # ---- 9) Refresh the committed installable packages in grasshopper_plugin/ (rh8 + rh9 per OS) ----
       - name: Refresh grasshopper_plugin packages
         shell: pwsh
         run: |
           Remove-Item grasshopper_plugin/opennest_win/*.yak -Force -ErrorAction SilentlyContinue
           Remove-Item grasshopper_plugin/opennest_mac/*.yak -Force -ErrorAction SilentlyContinue
-          Copy-Item yak_win/*.yak grasshopper_plugin/opennest_win/ -Force
-          Copy-Item yak_mac/*.yak grasshopper_plugin/opennest_mac/ -Force
+          Copy-Item yak_win_rh8/*.yak, yak_win_rh9/*.yak grasshopper_plugin/opennest_win/ -Force
+          Copy-Item yak_mac_rh8/*.yak, yak_mac_rh9/*.yak grasshopper_plugin/opennest_mac/ -Force
 
       # ---- 9b) Auto-maintain CHANGELOG.md: prepend this version's changes (commits since the previous tag,
       #          excluding the Release/[skip ci] noise) so every release is connected to what changed. ----

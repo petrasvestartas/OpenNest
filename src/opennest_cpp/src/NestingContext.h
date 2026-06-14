@@ -39,11 +39,7 @@ public:
     void NestIterateGeneration();
     void AssignPlacement(const SheetPlacement& plcpr);
 
-    void AddSheet(int w, int h, int src);
-    void AddRectanglePart(int src, int ww = 50, int hh = 80);
     void ReorderSheets();
-    int GetNextSource();
-    int GetNextSheetSource();
 
     // Multi-seed parallel runner: runs N independent contexts, returns best
     static NestingContext RunParallelSeeds(

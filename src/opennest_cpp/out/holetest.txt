@@ -1,0 +1,19 @@
+# hole-fill probe: 1 square ring (300x300, hole 200x200) + 1 small square (80x80).
+# If hole nesting works, the filler lands INSIDE the ring's hole (zero bbox growth =
+# best gravity/box score). If not, it sits beside the ring.
+sheet 2000 1000
+part 1
+0 0
+300 0
+300 300
+0 300
+
+50 50
+250 50
+250 250
+50 250
+part 1
+0 0
+80 0
+80 80
+0 80

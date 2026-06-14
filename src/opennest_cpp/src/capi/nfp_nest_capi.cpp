@@ -44,11 +44,9 @@ NestConfig toConfig(const NfpParams* p) {
     c.clipperScale   = p->clipperScale > 0 ? p->clipperScale : 1e7;
     c.spacing        = p->spacing;
     c.sheetSpacing   = p->sheetSpacing;
-    c.rotation_limit = static_cast<float>(p->rotationLimit);
-    c.exploreConcave = p->exploreConcave != 0;
-    c.clipByHull     = p->clipByHull != 0;
-    c.clipByRects    = p->clipByRects != 0;
     c.simplify       = p->simplify != 0;
+    // (rotationLimit / exploreConcave / clipByHull / clipByRects remain in the C ABI for
+    // compatibility but map to nothing: their engine paths were dead code and removed.)
     c.faithful       = (p->mode == 0);   // mode 0 = faithful parity with the C# engine
     c.exactNfp       = (p->exactNfp != 0);
     c.parallelPopulation = (p->mode == 1) && (p->useParallel != 0);
@@ -62,7 +60,7 @@ NestConfig toConfig(const NfpParams* p) {
         // Placement-cost knobs: -1 keeps the NestConfig default; >=0 overrides (0 = off, faster).
         if (p->edgeSamples >= 0)      c.edgeSamples = p->edgeSamples;
         if (p->compactionPasses >= 0) c.compactionPasses = p->compactionPasses;
-        c.tryAllRotations = p->tryAllRotations != 0;
+        if (p->tryAllRotations >= 0)  c.tryAllRotations = p->tryAllRotations != 0;
     }
     return c;
 }
@@ -72,6 +70,7 @@ NestConfig toConfig(const NfpParams* p) {
 std::vector<int> buildInputs(
     NestingContext& ctx,
     int part_count, const int* pvc, const double* pxy, const int* pqty,
+    const int* prot,
     const int* phc, const int* phvc, const double* phxy,
     int sheet_count, const int* svc, const double* sxy,
     const int* shc, const int* shvc, const double* shxy)
@@ -108,6 +107,7 @@ std::vector<int> buildInputs(
         for (int c = 0; c < q; c++) {
             auto poly = std::make_shared<NFP>();
             poly->source = i;
+            poly->rotationCount = (prot && prot[i] > 0) ? prot[i] : 0;   // per-part rotation override
             poly->Points = outer;
             for (auto& hp : holes) {
                 auto child = std::make_shared<NFP>();
@@ -208,6 +208,7 @@ NFP_API int nfp_nest(
     const int*    part_vertex_counts,
     const double* part_xy,
     const int*    part_quantities,
+    const int*    part_rotations,
     const int*    part_hole_counts,
     const int*    part_hole_vertex_counts,
     const double* part_hole_xy,
@@ -244,6 +245,7 @@ NFP_API int nfp_nest(
     ctx.config = cfg;
     auto instancePart = buildInputs(
         ctx, part_count, part_vertex_counts, part_xy, part_quantities,
+        part_rotations,
         part_hole_counts, part_hole_vertex_counts, part_hole_xy,
         sheet_count, sheet_vertex_counts, sheet_xy,
         sheet_hole_counts, sheet_hole_vertex_counts, sheet_hole_xy);
@@ -324,6 +326,175 @@ NFP_API int nfp_nest(
 
     return readOutputs(ctx, instancePart, out_tx, out_ty, out_angle,
                        out_sheet_id, out_part_index, out_n_sheets, out_fitness);
+}
+
+NFP_API int nfp_pack(
+    int           part_count,
+    const int*    part_vertex_counts,
+    const double* part_xy,
+    const int*    part_quantities,
+    int           columns,
+    double        gap_x,
+    double        gap_y,
+    double        max_width,
+    double*       out_tx,
+    double*       out_ty,
+    double*       out_angle,
+    int*          out_sheet_id)
+{
+    if (part_count <= 0 || !part_vertex_counts || !part_xy ||
+        !out_tx || !out_ty || !out_angle || !out_sheet_id) return -1;
+    if (columns < 1) columns = 1;
+    const bool distanceMode = max_width > 0;
+
+    double x = 0, y = 0, rowH = 0;
+    int col = 0, k = 0;
+    size_t cur = 0;
+    for (int i = 0; i < part_count; i++) {
+        const int nv = part_vertex_counts[i];
+        double minx = 0, miny = 0, maxx = 0, maxy = 0;
+        for (int v = 0; v < nv; v++) {
+            const double px = part_xy[cur + 2 * v], py = part_xy[cur + 2 * v + 1];
+            if (v == 0) { minx = maxx = px; miny = maxy = py; }
+            else {
+                minx = std::min(minx, px); maxx = std::max(maxx, px);
+                miny = std::min(miny, py); maxy = std::max(maxy, py);
+            }
+        }
+        cur += static_cast<size_t>(nv) * 2;
+        const double w = maxx - minx, h = maxy - miny;
+
+        const int q = (part_quantities && part_quantities[i] > 0) ? part_quantities[i] : 1;
+        for (int c = 0; c < q; c++) {
+            // distance mode: wrap BEFORE placing if this part would overflow the row
+            if (distanceMode && col > 0 && (x + w) > max_width) {
+                col = 0; x = 0; y += rowH + gap_y; rowH = 0;
+            }
+            out_tx[k] = x - minx;   // land the part's min corner at (x, y)
+            out_ty[k] = y - miny;
+            out_angle[k] = 0.0;
+            out_sheet_id[k] = 0;
+            k++;
+            x += w + gap_x;
+            rowH = std::max(rowH, h);
+            col++;
+            // array mode: wrap AFTER a fixed number of columns
+            if (!distanceMode && col >= columns) {
+                col = 0; x = 0; y += rowH + gap_y; rowH = 0;
+            }
+        }
+    }
+    return k;
+}
+
+NFP_API int nfp_offset_polygon(
+    int           vertex_count,
+    const double* xy,
+    double        delta,
+    double        miter_limit,
+    int           max_out_vertices,
+    double*       out_xy)
+{
+    if (vertex_count < 3 || !xy || !out_xy || max_out_vertices < 0) return -1;
+    const double SCALE = 1e7;
+    Clipper2Lib::Path64 ring;
+    ring.reserve(vertex_count);
+    for (int i = 0; i < vertex_count; i++) {
+        // skip a duplicated closing vertex
+        if (i == vertex_count - 1 && vertex_count > 1 &&
+            xy[2 * i] == xy[0] && xy[2 * i + 1] == xy[1]) break;
+        ring.emplace_back(static_cast<int64_t>(std::llround(xy[2 * i] * SCALE)),
+                          static_cast<int64_t>(std::llround(xy[2 * i + 1] * SCALE)));
+    }
+    if (ring.size() < 3) return -1;
+
+    Clipper2Lib::Paths64 result = Clipper2Lib::InflatePaths(
+        Clipper2Lib::Paths64{ring}, delta * SCALE,
+        Clipper2Lib::JoinType::Miter, Clipper2Lib::EndType::Polygon,
+        miter_limit > 0 ? miter_limit : 2.0);
+    if (result.empty()) return 0;   // offset vanished (e.g. over-shrunk)
+
+    // Largest-area loop is the main result.
+    size_t best = 0;
+    double bestArea = -1;
+    for (size_t i = 0; i < result.size(); i++) {
+        const double a = std::fabs(Clipper2Lib::Area(result[i]));
+        if (a > bestArea) { bestArea = a; best = i; }
+    }
+    const int n = static_cast<int>(result[best].size());
+    if (n > max_out_vertices) return -n;   // caller's buffer too small: required size, negated
+    for (int i = 0; i < n; i++) {
+        out_xy[2 * i] = result[best][i].x / SCALE;
+        out_xy[2 * i + 1] = result[best][i].y / SCALE;
+    }
+    return n;
+}
+
+// ---- engraving font (single-stroke text) -----------------------------------
+#include "engraving_font.inc"
+
+namespace {
+// Find a glyph index for a Unicode code point, or -1.
+int eng_glyph_index(const EngFont& f, int code) {
+    for (int i = 0; i < f.n_glyphs; i++) if (f.g_code[i] == code) return i;
+    return -1;
+}
+} // namespace
+
+NFP_API int nfp_text_to_polylines(
+    const char* text, double height, int font, double spacing,
+    int max_strokes, int* out_stroke_vertex_counts,
+    int max_points, double* out_xy, int* out_total_points)
+{
+    if (out_total_points) *out_total_points = 0;
+    if (!text) return 0;
+    const EngFont& f = (font == 1) ? eng_bold_font : eng_regular_font;
+    const double H_SPACING = (spacing < 0) ? 0.1 : spacing;
+    const double V_SPACING = 1.4;
+    const int nul = eng_glyph_index(f, 0);   // fallback glyph (NULL box)
+
+    // First pass: lay everything out into temp strokes (so we can size + then fill).
+    std::vector<std::vector<std::pair<double, double>>> strokes;
+    double x = 0, y = 0;
+    for (const char* p = text; ; ++p) {
+        const char ch = *p;
+        if (ch == '\0') break;
+        if (ch == '\n') { x = 0; y -= V_SPACING * height; continue; }
+        int gi = eng_glyph_index(f, static_cast<unsigned char>(ch));
+        if (gi < 0) gi = nul;
+        if (gi < 0) { x += (0.5 + H_SPACING) * height; continue; }
+        x -= f.g_start[gi] * height;   // left bearing
+        const int s0 = f.g_s0[gi], ns = f.g_ns[gi];
+        for (int s = 0; s < ns; ++s) {
+            const int off = f.stroke_off[s0 + s], np = f.stroke_n[s0 + s];
+            std::vector<std::pair<double, double>> poly;
+            poly.reserve(np);
+            for (int k = 0; k < np; ++k)
+                poly.emplace_back(x + f.pts[2 * (off + k)] * height,
+                                  y + f.pts[2 * (off + k) + 1] * height);
+            strokes.push_back(std::move(poly));
+        }
+        x += f.g_end[gi] * height + H_SPACING * height;
+    }
+
+    int total_points = 0;
+    for (auto& s : strokes) total_points += static_cast<int>(s.size());
+    if (out_total_points) *out_total_points = total_points;
+
+    // Fill caller buffers with whatever fits (the example sizes them generously).
+    int written_xy = 0;
+    for (size_t s = 0; s < strokes.size(); ++s) {
+        if (static_cast<int>(s) < max_strokes && out_stroke_vertex_counts)
+            out_stroke_vertex_counts[s] = static_cast<int>(strokes[s].size());
+        for (auto& pt : strokes[s]) {
+            if (written_xy < max_points && out_xy) {
+                out_xy[2 * written_xy] = pt.first;
+                out_xy[2 * written_xy + 1] = pt.second;
+            }
+            ++written_xy;
+        }
+    }
+    return static_cast<int>(strokes.size());
 }
 
 NFP_API void nfp_cancel(void)        { g_cancel = true; }

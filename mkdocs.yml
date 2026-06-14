@@ -68,9 +68,36 @@ nav:
   - Rhino Commands:
       - "OpenNest": rhino/index.md
   - API Reference:
-      - "C++ API": api/cpp.md
-      - "C# API": api/csharp.md
-      - "Python API": api/python.md
+      - "C++ API":
+          - "Overview": api/cpp/index.md
+          - "01 Collision": api/cpp/01_collision.md
+          - "02 NFP + GA": api/cpp/02_nfp.md
+          - "03 Live animation": api/cpp/03_live.md
+          - "04 Clearance offset": api/cpp/04_offset.md
+          - "05 Attributes": api/cpp/05_attributes.md
+          - "06 Pack array": api/cpp/06_pack_array.md
+          - "07 Pack distance": api/cpp/07_pack_distance.md
+          - "08 Text": api/cpp/08_text.md
+      - "C# API":
+          - "Overview": api/csharp/index.md
+          - "01 Collision": api/csharp/01_collision.md
+          - "02 NFP + GA": api/csharp/02_nfp.md
+          - "03 Live animation": api/csharp/03_live.md
+          - "04 Clearance offset": api/csharp/04_offset.md
+          - "05 Attributes": api/csharp/05_attributes.md
+          - "06 Pack array": api/csharp/06_pack_array.md
+          - "07 Pack distance": api/csharp/07_pack_distance.md
+          - "08 Text": api/csharp/08_text.md
+      - "Python API":
+          - "Overview": api/python/index.md
+          - "01 Collision": api/python/01_collision.md
+          - "02 NFP + GA": api/python/02_nfp.md
+          - "03 Live animation": api/python/03_live.md
+          - "04 Clearance offset": api/python/04_offset.md
+          - "05 Attributes": api/python/05_attributes.md
+          - "06 Pack array": api/python/06_pack_array.md
+          - "07 Pack distance": api/python/07_pack_distance.md
+          - "08 Text": api/python/08_text.md
   - Build & Publish: developing.md
   - Credits: references.md
 

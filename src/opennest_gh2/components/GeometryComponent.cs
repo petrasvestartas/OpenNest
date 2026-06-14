@@ -22,8 +22,9 @@ namespace opennest_gh2.components
 
         protected override Grasshopper2.UI.Icon.IIcon IconInternal => opennest_gh2.icons.SvgVectorIcon.Load("element.svg");
 
-        // First 6 inputs are FIXED (mirror GH1); +/- only adds/removes extra Attributes ports after them.
-        private const int FIXED_INPUTS = 6;
+        // First 7 inputs are FIXED (mirror GH1); +/- only adds/removes extra Attributes ports after them.
+        private const int FIXED_INPUTS = 7;
+        private const int ROTATIONS_INPUT = 5;   // fixed integer port (before Attributes), not an attribute tree
 
         protected override void AddInputs(InputAdder inputs)
         {
@@ -36,6 +37,12 @@ namespace opennest_gh2.components
             inputs.AddBoolean("Hull", "H", "Replace each part's NESTING boundary with its convex hull.", Access.Tree, Requirement.MayBeMissing).Set(false);
             inputs.AddInteger("Copies", "C", "Copies per part (one value, or one per part).", Access.Tree, Requirement.MayBeMissing).Set(1);
             inputs.AddNumber("Offset", "O", "Nesting clearance (model units; 0 = off). Outer grows / holes shrink so placed parts keep this gap — the ORIGINAL curves are still what get placed/output.", Access.Tree, Requirement.MayBeMissing).Set(0.0);
+            inputs.AddInteger("Rotations", "R",
+                "OPTIONAL per-part rotation constraint (one value, or one per part, repeats like Copies).\n" +
+                "Empty / 0 = part inherits the solver's global Rotations setting (default).\n" +
+                "N > 0 = THIS part may only use N orientations (360/N degree steps); 1 = fixed, no rotation.\n" +
+                "Lets rectangular parts stay at 4 orientations while freeform parts rotate freely in ONE nest.",
+                Access.Tree, Requirement.MayBeMissing).Set(0);
             inputs.AddGeneric("Attributes", "A", "Extra geometry carried with each part (data-tree: one branch per part; flat list: applied to every part). Use the +/- on the component to add more Attributes inputs.", Access.Tree, Requirement.MayBeMissing);
         }
 
@@ -53,6 +60,7 @@ namespace opennest_gh2.components
             access.GetTree(2, out Tree<bool> hullT); bool hull = NestGh2Util.First(hullT, false);
             access.GetTree(3, out Tree<int> copiesT); var copiesVals = NestGh2Util.AllOr(copiesT, 1);
             access.GetTree(4, out Tree<double> offT); double offset = NestGh2Util.First(offT, 0.0);
+            access.GetTree(ROTATIONS_INPUT, out Tree<int> rotT); var rotVals = NestGh2Util.AllOr(rotT, 0);
 
             // One List<Curve[]> entry per input BRANCH (closed curves only), mirroring GH1.
             tree.ToArrays(out Curve[][] branches);
@@ -66,11 +74,15 @@ namespace opennest_gh2.components
             }
             if (curves.Count == 0) { access.AddWarning("No closed parts", "Parts must be closed curves."); return; }
 
-            // Every Attributes port (base index 5 + any +/- variable ports) as a tree of geometry, by branch.
+            // Every Attributes port (base "Attributes" at index 6 + any +/- variable ports at 7+) as a tree of
+            // geometry. Scan from index 5 and skip the scalar Rotations port (index 5).
             var attrTrees = new List<GeometryBase[][]>();
             for (int ai = 5; ai < Parameters.InputCount; ai++)
+            {
+                if (ai == ROTATIONS_INPUT) continue;   // integer port, not an attribute tree
                 if (access.GetTree(ai, out Tree<GeometryBase> at) && at != null && at.LeafCount > 0)
                 { at.ToArrays(out GeometryBase[][] ab); attrTrees.Add(ab); }
+            }
 
             // FLAT LIST (single branch) -> explode to one curve per part so identify_groups auto-pairs each
             // outer ring with the smaller rings it contains. DATA TREE -> keep each branch pre-grouped.
@@ -107,9 +119,12 @@ namespace opennest_gh2.components
             // Per-part copies, cycled like GH1 (one value applies to all; a list maps one-per-part).
             var copiesList = new List<int>(curves.Count);
             for (int i = 0; i < curves.Count; i++) { int c = copiesVals[i % copiesVals.Count]; copiesList.Add(c < 1 ? 1 : c); }
+            // Per-part rotation overrides, cycled the same way (0 = inherit the solver setting).
+            var rotationsList = new List<int>(curves.Count);
+            for (int i = 0; i < curves.Count; i++) { int rv = rotVals[i % rotVals.Count]; rotationsList.Add(rv < 0 ? 0 : rv); }
             var simp = new List<double> { simplify, hull ? 1.0 : 0.0 };
 
-            var geo = nest_geo_util.geo_to_nest_geo(curves, copiesList, simp, attrsPerPart, hard_coded_input: !flatList);
+            var geo = nest_geo_util.geo_to_nest_geo(curves, copiesList, simp, attrsPerPart, hard_coded_input: !flatList, rotations: rotationsList);
             if (geo.boundary_sorted == null || geo.boundary_sorted.Count == 0)
             {
                 access.AddWarning("No boundaries detected", "Could not extract closed part boundaries.");
@@ -136,7 +151,7 @@ namespace opennest_gh2.components
         public override bool CanRemoveParameter(Side side, int index)
             => side == Side.Input && index >= FIXED_INPUTS;
 
-        public override void DoCreateParameter(Side side, int index)
+        public override void DoCreateParameter(Side side, int index, Grasshopper2.Undo.ActionList undo)
         {
             if (side != Side.Input) return;
             // Access.Tree is fixed via the ctor (the Access setter is non-public).

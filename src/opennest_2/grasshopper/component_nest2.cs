@@ -140,22 +140,15 @@ namespace opennest_2
         // The settings shown as on-canvas controls (dropdowns + type-in boxes), replacing the old Options
         // string. ORDER IS LOAD-BEARING: the first 9 numeric rows map to rhino_example's parameters[0..8]
         // by index; all_rotations/exact_nfp are parsed by name; the font row must stay LAST.
+        // The settings shown as on-canvas controls (dropdowns + type-in boxes). Defined once in
+        // NestOptionCatalog (shared with the GH2 port and the Nest Options component); see the catalog for the
+        // load-bearing ordering notes. 'wiggle'/'time'/'spacing' are not exposed (the GA uses discrete
+        // rotations; run_cpp drives the solve by Iterations; gaps are set upstream in Geometry/Sheets) but are
+        // still emitted as fixed values in BuildOptionStrings to keep the downstream positional indices intact.
         private void BuildOptions()
         {
-            // Only options that actually affect the C++ engine are exposed. 'wiggle' (rotation jitter) and
-            // 'time' (time budget) are intentionally NOT here: the GA uses discrete rotations so rotation_limit
-            // is unused, and run_cpp drives the solve by Iterations (timeBudgetSecs is hard-coded 0). They are
-            // still emitted as fixed 0 in BuildOptionStrings to keep the downstream positional indices intact.
             _options.Clear();
-            _options.Add(NestOption.Number("num_of_rotations", "Rotations", 8, 1, 3600, 0, "Orientations each part may try (360/n)."));
-            _options.Add(NestOption.Choice("placement_type", "Packing", new[] { "Box", "Gravity", "Squeeze", "Bottom Left" }, new[] { "0", "1", "2", "3" }, 1, "Placement strategy. Bottom Left = pack each part into the lowest-then-leftmost feasible spot."));
-            _options.Add(NestOption.Number("spacing", "Spacing", 0.0, 0, 1000, 2, "Gap kept between parts (model units)."));
-            _options.Add(NestOption.Number("seed", "Seed", 30, 0, 100000, 0, "Random seed (same seed = same result)."));
-            _options.Add(NestOption.Number("mutation", "Mutation", 10, 0, 100, 0, "GA mutation rate."));
-            _options.Add(NestOption.Number("population", "Population", 10, 1, 100000, 0, "GA population size."));
-            _options.Add(NestOption.Choice("all_rotations", "All Rotations", new[] { "Off", "On" }, new[] { "0", "1" }, 1, "Try every orientation per part for tightest packing — C++ engine only (the C# engine ignores it; it uses 'Rotations'). Default ON; capped at 8 orientations so a large 'Rotations' value can't hang the solver."));
-            _options.Add(NestOption.Choice("element_holes", "Element Holes", new[] { "Off", "Fill" }, new[] { "0", "1" }, 1, "Nest smaller parts INSIDE larger parts' holes."));
-            _options.Add(NestOption.Text("font", "Sheet Font", "MecSoft_Font-1 1", "Sheet-number label: font name + text size."));
+            _options.AddRange(NestOptionCatalog.OpenNest2());
         }
 
         // Rebuild the "name value" token list the existing pipeline consumes. Order is LOAD-BEARING: the C# ctor
@@ -166,10 +159,11 @@ namespace opennest_2
             string Tok(string key, string fallback) { var o = Opt(key); return o != null ? o.EmitToken() : key + " " + fallback; }
             return new List<string>
             {
-                Tok("num_of_rotations", "8"),
+                Tok("num_of_rotations", "4"),
                 "wiggle 0",                       // not exposed (unused by the discrete GA)
                 Tok("placement_type", "1"),
-                Tok("spacing", "0"),
+                "spacing 0",                      // not exposed: gaps are set upstream in the Geometry (part offset)
+                                                  // and Sheets (gap) components; only OpenNest1 takes explicit spacing.
                 Tok("seed", "30"),
                 "simplify_tolerance 1",           // not exposed (no simplification; engine always runs exact NFP)
                 Tok("mutation", "10"),
@@ -219,13 +213,16 @@ namespace opennest_2
             pManager.AddGenericParameter("Sheets", "Sheets", "From OpenNest tab, use component Sheets.", GH_ParamAccess.item);
             pManager.AddGenericParameter("Geometry", "Geometry", "From OpenNest tab, use component Geometry.", GH_ParamAccess.item);
 
-            // Nesting options are edited directly on the component body (dropdowns + type-in boxes), so there is
-            // no longer an "Options" string input. See BuildOptions() / NestOptionsAttributes.
+            // Optional wired options ("key value" strings, e.g. from the Nest Options component); they override
+            // the matching on-canvas option rows. Inserted BEFORE Iterations. MakeOptionsInput is shared with the
+            // old-file fixup in NestOptionsHostComponent.Read.
+            pManager.AddParameter(MakeOptionsInput());
             pManager.AddIntegerParameter("Iterations", "Iterations", "GA generations to evolve. Each generation evaluates the whole population and keeps the best, so the result improves over generations. ~10-40 typical (a live orange preview tightens as it runs; press ESC to stop and keep the best). Pair with the 'population' option (default 10).", GH_ParamAccess.item, 10);
             // Standard Run input (replaces the old on-canvas Run button). Wire a Boolean Toggle.
             pManager.AddBooleanParameter("Run", "Run", "Wire a Boolean Toggle. TRUE = solve now and re-solve when an input changes (background thread, live preview); FALSE = hold the last result. (Options are still edited on the component body; ESC also stops a running solve.)", GH_ParamAccess.item, false);
-            pManager[2].Optional = true;
-            pManager[3].Optional = true;
+            pManager[2].Optional = true;   // Options
+            pManager[3].Optional = true;   // Iterations (has a default)
+            pManager[4].Optional = true;   // Run
         }
 
         protected override void RegisterOutputParams(GH_Component.GH_OutputParamManager pManager)
@@ -281,11 +278,15 @@ namespace opennest_2
         {
             if (nest_geos == null) nest_geos = new List<nest_rhino_lib.nest_geo>();
 
+            // Wired options (if any) override the on-canvas rows BEFORE anything reads/signatures them, so both
+            // the launch below and InputsChanged see the values actually in effect.
+            ApplyWiredOptions(DA);   // Options input at index 2
+
             // Run is a standard input port now (was the on-canvas Run button). Edge-drive the existing latch:
             // a rising edge launches a live session; a falling edge stops it and holds the last result. Using the
             // INPUT's previous value (not _runActive) means an ESC-stop mid-solve isn't immediately relaunched
             // just because Run is still held TRUE.
-            bool runInput = false; DA.GetData(3, ref runInput);
+            bool runInput = false; DA.GetData(4, ref runInput);
             if (runInput && !_prevRunInput) { _runActive = true; _runButtonRequested = true; }
             else if (!runInput && _runActive)
             {
@@ -365,6 +366,7 @@ namespace opennest_2
                     return;
                 }
 
+                nest_sheets = nest_sheets.duplicate();        // don't mutate the upstream sheets (shared with sibling nesters)
                 var nest_geo_dup = nest_geo_in.duplicate();   // don't mutate upstream geometry
                 this.nest_geos.Add(nest_geo_dup);
 
@@ -379,9 +381,6 @@ namespace opennest_2
                 }
                 _pendingFont = parameters_text.Count > 0 ? parameters_text[parameters_text.Count - 1] : "MecSoft_Font-1 1";
 
-                // Solver backend is fixed to the C++ nfp_nest.dll engine (the managed C# path / "Engine"
-                // option was removed). "all_rotations 1" => tightest packing (capped at 8 orientations).
-                string engine = "cpp";
                 int allRotations = 0;
                 int exactNfp = 1;   // default: exact NFP — parts touch with no gap and no overlap
                 int useHoles = 1;   // default: nest smaller parts into larger parts' holes ("element_holes")
@@ -397,13 +396,12 @@ namespace opennest_2
                 }
 
                 int max_iterations = 10;
-                DA.GetData(2, ref max_iterations);
+                DA.GetData(3, ref max_iterations);   // Iterations shifted to index 3 (Options inserted at 2)
                 if (max_iterations < 1) max_iterations = 1;
 
                 try
                 {
                     _pendingNest = new nest_lib.rhino_example(ref nest_sheets, ref nest_geo_dup, parameters, max_iterations);
-                    _pendingNest.Engine = engine;
                     _pendingNest.TryAllRotations = allRotations;
                     _pendingNest.ExactNfp = exactNfp;
                     _pendingNest.UseHoles = useHoles;
@@ -708,7 +706,7 @@ namespace opennest_2
         {
             nest_rhino_lib.nest_sheets s = null; DA.GetData(0, ref s);
             nest_rhino_lib.nest_geo g = null; DA.GetData(1, ref g);
-            int it = 10; DA.GetData(2, ref it); if (it < 1) it = 1;
+            int it = 10; DA.GetData(3, ref it); if (it < 1) it = 1;   // Iterations at index 3 (Options at 2)
             _pendingSig = SigOf(s, g, it, BuildOptionStrings());
             _pendingIter = it;
             return _pendingSig != _solvedSig;

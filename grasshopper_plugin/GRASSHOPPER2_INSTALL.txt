@@ -1,0 +1,22 @@
+OpenNest for Grasshopper 2 (Rhino 9 / 9 WIP)
+=============================================
+
+Grasshopper 1 and the OpenNest Rhino command install automatically with this
+Yak package (Rhino 8, 9 and later). Grasshopper 2 is different: a GH2 component
+library (.rhp) must NOT be auto-loaded by Rhino's plug-in manager — Rhino
+crashes on it ("application initialization failed"). So these GH2 files ship as
+a plain download in this "grasshopper2" subfolder and you load them by hand,
+inside Grasshopper 2, where they load correctly.
+
+Install (one time):
+  1. Start Rhino 9 / 9 WIP and open Grasshopper 2.
+  2. Load the component library and point it at, in THIS folder:
+         opennest_gh2.rhp
+  3. Restart Grasshopper 2. The "OpenNest" tab appears.
+
+Keep every file in this folder together — opennest_gh2.rhp loads
+opennest_2.gha and the native engines (nest_physics / nfp_nest) from beside
+itself. Don't move the .rhp out on its own.
+
+Do NOT install opennest_gh2.rhp through Rhino's _PlugInManager or the Package
+Manager — that is the route that crashes. Load it only from inside Grasshopper 2.

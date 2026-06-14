@@ -18,6 +18,7 @@
 #include <optional>
 #include <limits>
 #include <cmath>
+#include <thread>
 
 using namespace nest;
 
@@ -135,12 +136,42 @@ int main(int argc, char** argv) {
     // arg 4 (optional): worker count for best-of-N (0/absent => all hardware cores).
     if (argc > 4) nest::g_n_workers = (unsigned)std::atoi(argv[4]);
     if (argc > 5) nest::g_pole_max = (unsigned)std::atoi(argv[5]);
+    // arg 6 (optional): base_seed override for basin sweeps (the spill partition is seed-decided).
+    uint64_t base_seed = (argc > 6) ? (uint64_t)std::atoll(argv[6]) : 1ull;
+    // arg 7 (optional): PORTFOLIO size K — run K fully independent solves (base_seed..base_seed+K-1)
+    // in K parallel threads and keep the best (valid first, then fewest sheets, then smallest total
+    // used width). The per-sheet basin is seed-decided (measured spread on parts_510x635: 663..765,
+    // ~13%), so the portfolio makes every run as tight as the best seed in its pool at roughly
+    // single-run wall (threads run concurrently; iteration budgets are per-thread via thread_local
+    // g_iter_count). Deterministic: min over a FIXED seed set.
+    int portfolio_k = (argc > 7) ? std::atoi(argv[7]) : 1;
+    if (portfolio_k < 1) portfolio_k = 1;
     std::printf("budget = %.0f %s | workers = %u\n", total_budget,
                 g_iter_mode ? "relaxation rounds (deterministic)" : "seconds (wall-clock)",
                 nest::resolve_n_workers());
 
     const f32 SHEET_W = 510.0f, SHEET_H = 635.0f;
     nest::ROT_N_SAMPLES = 32; // finer orientation search for elongated ribbon parts (default 16)
+    // Post-relaxation geometric COMPACTION on each emitted sheet (CG-SHOP 2024 / Shadoks
+    // slide-to-contact). The separator/relax loop stops at zero pole-overlap, not at contact, so it
+    // leaves a few-mm slack everywhere. compact_left reclaims it: multi-directional (-x, -y, toward
+    // layout centroid, toward nearest neighbour) exact-geometry slide-to-contact, strictly
+    // non-widening and re-verified overlap-free in greedy_fill. On parts_510x635 this tightens the
+    // total used width 901.9 -> 887.8 (sheet1 504.5->494.6, sheet2 397.4->393.2) with all parts
+    // still placed and zero overlaps/bounds. The single-edge strip-shrink alone could not close
+    // these interior voids; sliding from multiple directions does.
+    nest::g_final_compact = true;
+    nest::g_compact_multidir = true;
+    // In-loop ruin-and-recreate: re-insert spilled parts into the current sheet's free space BEFORE they
+    // reach the next sheet's strip solve, so that solve runs on fewer parts and packs narrower.
+    nest::g_reinsert_spill = true;
+    // Best-of-2 on the (now binding) spill sheet: re-solve its fixed carried set at a second seed and keep
+    // the post-compaction tighter result. Monotone-safe => packing never worse; wall-only cost.
+    nest::g_spill_best_of2 = true;
+    // g_compact_rot (rotational kick at compaction fixpoints) measured NEUTRAL on parts_510x635
+    // (663.0 -> 663.0 at seed 1, 710.9 -> 710.9 at seed 6): orientation is already slide-tight at
+    // the translation fixpoints on this geometry. Left OFF; available for instances where the
+    // relaxer parks parts with orientation slack.
 
     // .json => REAL CGSHOP geometry (all entries are parts, x100 scale -> /100 for 510x635 units).
     // .svg  => display catalog (polyline[0] is the container thumbnail; parts are the rest).
@@ -171,7 +202,41 @@ int main(int argc, char** argv) {
     // the next sheet (one strip pack of the remainder per sheet, take the first 510-wide column).
     std::printf("\n--- greedy sequential bin fill (fill each sheet, spill the rest) ---\n");
     double t0 = now_seconds();
-    Sheets res = greedy_fill(parts, engine, SHEET_W, SHEET_H, total_budget);
+    // base_seed: the per-sheet strip-pack basin is seed-decided (the spill partition — how many parts
+    // land on the dense first sheet vs carry over — flips with the seed). On parts_510x635 seed 1 lands
+    // a strictly better partition than the old default 100. Deterministic, free (same budget).
+    Sheets res;
+    if (portfolio_k <= 1) {
+        res = greedy_fill(parts, engine, SHEET_W, SHEET_H, total_budget, 6, {}, base_seed);
+    } else {
+        // Parallel basin portfolio: K independent deterministic solves, one thread each. greedy_fill
+        // only READS parts/engine/config globals; the live-preview publisher is disabled for all runs
+        // (the CLI never polls it) and the iteration budget is per-thread (thread_local g_iter_count).
+        std::vector<Sheets> results((usize)portfolio_k);
+        std::vector<std::thread> pool;
+        pool.reserve((usize)portfolio_k);
+        for (int k = 0; k < portfolio_k; ++k)
+            pool.emplace_back([&, k] {
+                g_iter_count = 0; // fresh per-run iteration budget in this thread
+                results[(usize)k] = greedy_fill(parts, engine, SHEET_W, SHEET_H, total_budget, 6, {},
+                                                base_seed + (uint64_t)k, /*publish_live=*/false);
+            });
+        for (auto& t : pool) t.join();
+        auto better = [](const Sheets& a, const Sheets& b) {
+            if (a.ok != b.ok) return a.ok;                            // valid solves first
+            if (a.n_sheets != b.n_sheets) return a.n_sheets < b.n_sheets;
+            f32 wa = 0.0f, wb = 0.0f;
+            for (f32 w : a.widths) wa += w;
+            for (f32 w : b.widths) wb += w;
+            return wa < wb;                                           // then smallest total used width
+        };
+        int best = 0;
+        for (int k = 1; k < portfolio_k; ++k) if (better(results[(usize)k], results[(usize)best])) best = k;
+        std::printf("portfolio: %d basins (seeds %llu..%llu), winner seed %llu\n", portfolio_k,
+                    (unsigned long long)base_seed, (unsigned long long)(base_seed + portfolio_k - 1),
+                    (unsigned long long)(base_seed + best));
+        res = std::move(results[(usize)best]);
+    }
     double elapsed = now_seconds() - t0;
 
     std::vector<SheetPlacement> placements = std::move(res.placements);

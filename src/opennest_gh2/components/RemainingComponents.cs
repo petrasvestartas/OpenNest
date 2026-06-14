@@ -27,9 +27,15 @@ namespace opennest_gh2.components
             // ALL inputs whole-TREE so nothing drives per-branch iteration: builds exactly ONE nest_geo.
             inputs.AddText("Layer", "L", "Boundary layer name in Rhino.", Access.Tree, Requirement.MayBeMissing).Set("");
             inputs.AddInteger("Copies", "C", "Copies per part (one value, or one per part).", Access.Tree, Requirement.MayBeMissing).Set(1);
-            inputs.AddNumber("Simplify", "S", "Simplify params: [segment divisions, hull 0/1].", Access.Tree, Requirement.MayBeMissing).Set(100.0);
+            inputs.AddNumber("Simplify", "S", "Simplify params: [divisions, hull 0/1]. 0 = keep polyline vertices (no simplification, default).", Access.Tree, Requirement.MayBeMissing).Set(0.0);
             inputs.AddNumber("Sort", "So", "Sort polylines (0 = off).", Access.Tree, Requirement.MayBeMissing).Set(1.0);
             inputs.AddNumber("Offset", "O", "Nesting clearance offset (0 = off).", Access.Tree, Requirement.MayBeMissing).Set(0.0);
+            inputs.AddInteger("Rotations", "R",
+                "OPTIONAL per-part rotation constraint (one value per guid branch, repeats like Copies).\n" +
+                "Empty / 0 = part inherits the solver's global Rotations setting (default).\n" +
+                "N > 0 = THIS part may only use N orientations (360/N degree steps).\n" +
+                "1 = fixed, no rotation (e.g. grain direction).",
+                Access.Tree, Requirement.MayBeMissing).Set(0);
             inputs.AddGeneric("Guid", "G", "Referenced geometry as guid (mesh, brep, curves); one branch per part.", Access.Tree);
         }
         protected override void AddOutputs(OutputAdder outputs)
@@ -48,7 +54,8 @@ namespace opennest_gh2.components
             access.GetTree(2, out Tree<double> simplifyT);
             access.GetTree(3, out Tree<double> sortT); double sort = NestGh2Util.First(sortT, 1.0);
             access.GetTree(4, out Tree<double> offsetT); double offset = NestGh2Util.First(offsetT, 0.0);
-            if (!access.GetTree(5, out Tree<Guid> tree) || tree == null || tree.LeafCount == 0)
+            access.GetTree(5, out Tree<int> rotT); var rotVals = NestGh2Util.AllOr(rotT, 0);
+            if (!access.GetTree(6, out Tree<Guid> tree) || tree == null || tree.LeafCount == 0)
             { access.AddWarning("No guids", "Connect referenced object ids."); return; }
 
             tree.ToArrays(out Guid[][] branches);
@@ -56,9 +63,13 @@ namespace opennest_gh2.components
             if (guids.Count == 0) return;
             var copies = NestGh2Util.AllOr(copiesT, 1);
             var simplifyParams = new List<double>(); if (simplifyT != null) foreach (var v in simplifyT.AllItems) simplifyParams.Add(v);
-            if (simplifyParams.Count == 0) simplifyParams.AddRange(new[] { 100.0, 0.0 });
+            if (simplifyParams.Count == 0) simplifyParams.AddRange(new[] { 0.0, 0.0 });
 
-            var geo = nest_rhino_lib.nest_geo_util.guid_to_nest_geo(guids, layer, copies, simplifyParams);
+            // Per-guid-branch rotation overrides, repeated to one per part (negative clamps to 0 = inherit).
+            var rotations = new List<int>(guids.Count);
+            for (int i = 0; i < guids.Count; i++) { int rv = rotVals[i % rotVals.Count]; rotations.Add(rv < 0 ? 0 : rv); }
+
+            var geo = nest_rhino_lib.nest_geo_util.guid_to_nest_geo(guids, layer, copies, simplifyParams, rotations);
             if (offset != 0) geo.offset_nesting_boundary(offset);
             if (sort != 0) geo.sort_groups(sort == 1);
 

@@ -51,6 +51,7 @@ namespace NfpNest
             int[]        part_vertex_counts,
             double[]     part_xy,
             int[]        part_quantities,
+            int[]        part_rotations,   // [part_count] per-part rotation-count override (0 = global; 1 = fixed; null ok)
             int[]        part_hole_counts,
             int[]        part_hole_vertex_counts,
             double[]     part_hole_xy,
@@ -68,6 +69,37 @@ namespace NfpNest
             int[]        out_part_index,
             out int      out_n_sheets,
             out double   out_fitness);
+
+        // Row-major grid layout (NO nesting; compas_nest pack() semantics): array mode wraps every
+        // `columns` items, distance mode (max_width > 0) wraps when the next part would exceed
+        // max_width. Outputs in expansion order, angle always 0, sheet id always 0. Returns the
+        // number of placed instances (= sum of quantities) or a negative error code.
+        [DllImport(LIBRARY_NAME, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int nfp_pack(
+            int      part_count,
+            int[]    part_vertex_counts,
+            double[] part_xy,
+            int[]    part_quantities,   // null => 1 each
+            int      columns,
+            double   gap_x,
+            double   gap_y,
+            double   max_width,         // > 0 => distance mode
+            double[] out_tx,
+            double[] out_ty,
+            double[] out_angle,
+            int[]    out_sheet_id);
+
+        // Offset (inflate) ONE closed polygon by `delta` model units (Clipper2, miter joins).
+        // Returns the vertex count written into out_xy (largest-area result loop), 0 if the offset
+        // vanished, or the NEGATED required vertex count if max_out_vertices is too small.
+        [DllImport(LIBRARY_NAME, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int nfp_offset_polygon(
+            int      vertex_count,
+            double[] xy,
+            double   delta,
+            double   miter_limit,      // <= 0 => 2.0
+            int      max_out_vertices,
+            double[] out_xy);
 
         // Cooperative cancel + progress for running nfp_nest on a background thread, and a live snapshot
         // of the current best layout for an animated preview (same role as the np_* equivalents).

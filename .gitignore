@@ -70,3 +70,12 @@ site/
 /_svg2png/
 _probe*/
 _iconcheck/
+
+# nfp_bench research output (keep baseline.csv + repro datasets, ignore the rest)
+src/opennest_cpp/out/*
+!src/opennest_cpp/out/baseline.csv
+!src/opennest_cpp/out/part5.txt
+!src/opennest_cpp/out/tshape.txt
+
+out.svg
+**/out.svg

@@ -8,6 +8,24 @@ GitHub Releases. Each entry describes what the release actually changed.
 > the previous tag), so a clear commit subject per push becomes the changelog line — refine an entry
 > here anytime if you want more detail.
 
+## [Unreleased] - nfp_research branch
+- **Tighter, correct packings**: fixed two engine correctness bugs (concave parts could be placed
+  exactly on top of each other; an internal cache collision corrupted feasible regions). Same solve
+  time now packs measurably denser (rects +2.7pp, concave +4.1pp utilization on the benchmark), and
+  hole nesting actually fills holes.
+- **Per-part Rotations**: the Geometry component gained an optional **Rotations** input — one value
+  per part (0 = inherit the solver setting, N = only N orientations, 1 = fixed/no rotation), so
+  rectangular and freeform parts can share one nest with different rotation rules. Works with both
+  OpenNest2 and OpenNestCollision; both C ABIs gained a `part_rotations[]` argument (**breaking
+  native signature change** for `nfp_nest` / `np_nest` — bindings like compas_nest must add the
+  argument, NULL keeps old behavior).
+- **New C API functions**: `nfp_pack` (simple row/grid layout, array or max-width wrapping — the
+  compas_nest `pack()` semantics) and `nfp_offset_polygon` (Clipper2 grow/shrink) so thin bindings
+  need no geometry code of their own.
+- **Removed the unused managed C# solver** (~6,000 lines): every component already used the native
+  engines; the leftover `Engine="cs"` switch and the dead JS-port code in the C++ engine are gone.
+  The C# layer is now purely data preparation + thin P/Invoke bindings.
+
 ## [2.72.0.0] - 2026-06-08
 - OpenNest2 + OpenNestCollision: Run is now a standard Grasshopper input (GH1 + GH2), replacing the on-canvas Run button; refresh docs/components example files (GH2 .ghz set) + component images
 

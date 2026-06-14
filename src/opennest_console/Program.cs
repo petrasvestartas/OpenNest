@@ -130,7 +130,7 @@ namespace OpenNestConsole
                 NestPhysicsWrapper.np_cancel_reset();
                 Console.WriteLine($"Solving (rounds budget = {iterBudget}, rotations = {np.num_rotations})...");
                 rc = NestPhysicsWrapper.np_nest(
-                    n, pvc, pxy, sheetCount, sovc, soxy, shc, hvc, hxy,
+                    n, pvc, pxy, null, sheetCount, sovc, soxy, shc, hvc, hxy,
                     phc, phvc, phxy, ref np, tx, ty, ang, sid, out int nSheets);
 
                 if (rc != 0) { Console.WriteLine($"np_nest returned error code {rc}."); return; }
@@ -221,7 +221,7 @@ namespace OpenNestConsole
                 NfpNestWrapper.nfp_cancel_reset();
                 Console.WriteLine($"Solving (generations = {generations}, rotations = {pr.rotations})...");
                 int placedCount = NfpNestWrapper.nfp_nest(
-                    n, pvc, pxy, pqty, phc, phvc, phxy,
+                    n, pvc, pxy, pqty, null, phc, phvc, phxy,
                     sheetCount, svc, sxy, shc, shvc, shxy,
                     ref pr, tx, ty, ang, sid, pidx, out int nSheets, out double fitness);
 

@@ -63,6 +63,30 @@ namespace opennest_2
         protected double OptNum(string key, double dflt = 0) { var o = Opt(key); return o != null ? o.Value : dflt; }
         protected int OptChoiceIndex(string key, int dflt = 0) { var o = Opt(key); return o != null ? o.SelectedIndex : dflt; }
 
+        // ---- the wired "Options" input (index 2, inserted before Iterations) ----
+        // The input takes the same "key value" token strings the on-canvas rows emit (see NestOptionCatalog);
+        // wire the Nest Options component into it. Built here (not just in RegisterInputParams) because the
+        // old-file fixup in Read() needs to recreate the parameter.
+        protected static Grasshopper.Kernel.Parameters.Param_String MakeOptionsInput() =>
+            new Grasshopper.Kernel.Parameters.Param_String
+            {
+                Name = "Options",
+                NickName = "Options",
+                Description = NestOptionCatalog.OptionsInputDescription,
+                Access = GH_ParamAccess.list,
+                Optional = true,
+            };
+
+        // Apply the wired Options tokens (if any) onto the on-canvas option rows, so the panel always shows
+        // the values actually used by the solve. No data wired -> the panel values rule, exactly as before.
+        protected void ApplyWiredOptions(IGH_DataAccess DA, int index = 2)
+        {
+            var tokens = new List<string>();
+            if (!DA.GetDataList(index, tokens) || tokens.Count == 0) return;
+            foreach (var bad in NestOptionCatalog.ApplyTokens(_options, tokens))
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "Unknown option line ignored: \"" + bad + "\"");
+        }
+
         // Persist each option value (keyed by "opt_<Key>") plus the panel state. Additive — neither component
         // had Write/Read before.
         public override bool Write(GH_IWriter writer)
@@ -93,6 +117,27 @@ namespace opennest_2
                 }
                 catch { /* tolerate missing/legacy keys */ }
             }
+
+            // The "Options" input was INSERTED at index 2 (before Iterations), so a file saved with the older
+            // 4-input layout (Sheets, Geometry, Iterations, Run) archives 4 input chunks — and GH1 binds archived
+            // param chunks to registered params BY INDEX, which would land Iterations on Options and Run on
+            // Iterations. Fix: bind such files against the old layout (temporarily drop Options), then re-insert
+            // a fresh Options param at index 2. Files with 3 archived inputs (pre-Run) already bind 0..2 correctly
+            // and leave the trailing params at their defaults, so they need no special case.
+            try
+            {
+                int archived = 0;
+                while (reader.FindChunk("param_input", archived) != null) archived++;
+                if (archived == 4 && Params.Input.Count == 5)
+                {
+                    Params.UnregisterInputParameter(Params.Input[2], false);   // Options: brand new, no wires to isolate
+                    bool ok = base.Read(reader);
+                    Params.RegisterInputParam(MakeOptionsInput(), 2);
+                    Params.OnParametersChanged();
+                    return ok;
+                }
+            }
+            catch { /* fall through to a plain read */ }
             return base.Read(reader);
         }
     }

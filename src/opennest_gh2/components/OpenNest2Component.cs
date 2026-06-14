@@ -36,22 +36,11 @@ namespace opennest_gh2.components
 
         protected override void RequestCancel() { var n = _activeNest; if (n != null) try { n.StopRequested = true; } catch { } }
 
-        // Read the standard "Run" boolean input (port 3) that drives the solve (replaces the on-canvas button).
-        protected override bool ReadRunInput(IDataAccess access) { access.GetItem(3, out bool run); return run; }
+        // Read the standard "Run" boolean input (port 4) that drives the solve (replaces the on-canvas button).
+        protected override bool ReadRunInput(IDataAccess access) { access.GetItem(4, out bool run); return run; }
 
-        // Exact GH1 option set (component_nest2.cs BuildOptions).
-        private static List<NestOption> BuildOptions() => new List<NestOption>
-        {
-            NestOption.Number("num_of_rotations", "Rotations", 8, 1, 3600, 0, "Orientations each part may try (360/n)."),
-            NestOption.Choice("placement_type", "Packing", new[] { "Box", "Gravity", "Squeeze", "Bottom Left" }, new[] { "0", "1", "2", "3" }, 1, "Placement strategy. Bottom Left = pack each part into the lowest-then-leftmost feasible spot."),
-            NestOption.Number("spacing", "Spacing", 0.0, 0, 1000, 2, "Gap kept between parts (model units)."),
-            NestOption.Number("seed", "Seed", 30, 0, 100000, 0, "Random seed (same seed = same result)."),
-            NestOption.Number("mutation", "Mutation", 10, 0, 100, 0, "GA mutation rate."),
-            NestOption.Number("population", "Population", 10, 1, 100000, 0, "GA population size."),
-            NestOption.Choice("all_rotations", "All Rotations", new[] { "Off", "On" }, new[] { "0", "1" }, 1, "Try every orientation per part for tightest packing (capped at 8)."),
-            NestOption.Choice("element_holes", "Element Holes", new[] { "Off", "Fill" }, new[] { "0", "1" }, 1, "Nest smaller parts INSIDE larger parts' holes."),
-            NestOption.Text("font", "Sheet Font", "MecSoft_Font-1 1", "Sheet-number label: font name + text size."),
-        };
+        // Exact GH1 option set — defined once in NestOptionCatalog (shared with GH1 and Nest Options).
+        private static List<NestOption> BuildOptions() => NestOptionCatalog.OpenNest2();
 
         private double OptNum(string key, double def) { foreach (var o in _options) if (o.Key == key) return o.Value; return def; }
         private int OptToken(string key, int def)
@@ -62,6 +51,9 @@ namespace opennest_gh2.components
             inputs.AddGeneric("Sheets", "Sheets", "From OpenNest tab, use component Sheets.");
             inputs.AddGeneric("Geometry", "Geometry", "From OpenNest tab, use component Geometry.");
             inputs.AddInteger("Iterations", "Iterations", "GA generations to evolve (~10-40 typical).", Access.Item, Requirement.MayBeMissing).Set(10);
+            // Optional wired options ("key value" strings, e.g. from the Nest Options component); they
+            // override the matching on-canvas option rows. MayBeMissing keeps pre-v2.73 files loading.
+            inputs.AddText("Options", "Options", NestOptionCatalog.OptionsInputDescription, Access.Twig, Requirement.MayBeMissing);
             inputs.AddBoolean("Run", "Run", "Wire a Boolean Toggle. TRUE = nest now; FALSE = hold the last result (toggle off then on to re-run after an input change). ESC also stops a running solve, keeping the best so far. (Options are still edited on the component body.)", Access.Item, Requirement.MayBeMissing).Set(false);
         }
 
@@ -87,18 +79,21 @@ namespace opennest_gh2.components
             { access.AddError("No sheets", "Connect the OpenNest Sheets output."); return false; }
             if (!access.GetItem(1, out nest_geo geo) || geo == null)
             { access.AddError("No geometry", "Connect the OpenNest Geometry output."); return false; }
+            // Solvers transform/offset their sheets + geometry in place; duplicate so a sibling nester fed by
+            // the SAME Sheets/Geometry components isn't left reading already-transformed input.
+            sheets = sheets.duplicate();
+            geo = geo.duplicate();
             access.GetItem(2, out int iterations);
             int totalGen = iterations < 1 ? 1 : iterations;
 
             // rhino_example parameters[0..8]: rotations, wiggle, placement, spacing, seed, curveTol, mutation, population, time.
             var parameters = new List<double>
             {
-                OptNum("num_of_rotations", 8), 0, OptToken("placement_type", 1), OptNum("spacing", 0),
+                OptNum("num_of_rotations", 4), 0, OptToken("placement_type", 1), OptNum("spacing", 0),
                 OptNum("seed", 30), 1.0, OptNum("mutation", 10), OptNum("population", 10), 0
             };
 
             var nest = new nest_lib.rhino_example(ref sheets, ref geo, parameters, totalGen);
-            nest.Engine = "cpp";
             nest.ExactNfp = 1;
             nest.TryAllRotations = OptToken("all_rotations", 1);
             nest.UseHoles = OptToken("element_holes", 1);

@@ -93,8 +93,9 @@ namespace opennest_gh2.components
         public GeometrySurfacesComponent(IReader reader) : base(reader) { }
         protected override Grasshopper2.UI.Icon.IIcon IconInternal => icons.SvgVectorIcon.Load("element_surface.svg");
 
-        // First 6 inputs are FIXED (mirror the main Geometry component); +/- only adds extra Attributes ports after.
-        private const int FIXED_INPUTS = 6;
+        // First 7 inputs are FIXED (mirror the main Geometry component); +/- only adds extra Attributes ports after.
+        private const int FIXED_INPUTS = 7;
+        private const int ROTATIONS_INPUT = 5;   // fixed integer port (before Attributes), not an attribute tree
 
         protected override void AddInputs(InputAdder inputs)
         {
@@ -103,6 +104,11 @@ namespace opennest_gh2.components
             inputs.AddBoolean("Hull", "H", "Convex hull each part.", Access.Tree, Requirement.MayBeMissing).Set(false);
             inputs.AddInteger("Copies", "C", "Copies per part.", Access.Tree, Requirement.MayBeMissing).Set(1);
             inputs.AddNumber("Offset", "O", "Nesting clearance (model units; 0 = off). Outer grows / holes shrink so placed parts keep this gap — the ORIGINAL curves are still what get placed/output.", Access.Tree, Requirement.MayBeMissing).Set(0.0);
+            inputs.AddInteger("Rotations", "R",
+                "OPTIONAL per-part rotation constraint (one value, or one per part, repeats like Copies).\n" +
+                "Empty / 0 = part inherits the solver's global Rotations setting (default).\n" +
+                "N > 0 = THIS part may only use N orientations (360/N degree steps); 1 = fixed, no rotation.",
+                Access.Tree, Requirement.MayBeMissing).Set(0);
             inputs.AddGeneric("Attributes", "A", "Extra geometry carried with each part (one branch per part/surface). Use the +/- on the component to add more Attributes inputs.", Access.Tree, Requirement.MayBeMissing);
         }
         protected override void AddOutputs(OutputAdder outputs)
@@ -118,8 +124,9 @@ namespace opennest_gh2.components
             if (breps.Length == 0) return;
             access.GetTree(1, out Tree<double> sT); double simplify = NestGh2Util.First(sT, 0.0);
             access.GetTree(2, out Tree<bool> hT); bool hull = NestGh2Util.First(hT, false);
-            access.GetTree(3, out Tree<int> cT); int copies = NestGh2Util.First(cT, 1);
+            access.GetTree(3, out Tree<int> cT); var copiesVals = NestGh2Util.AllOr(cT, 1);
             access.GetTree(4, out Tree<double> oT); double offset = NestGh2Util.First(oT, 0.0);
+            access.GetTree(ROTATIONS_INPUT, out Tree<int> rT); var rotVals = NestGh2Util.AllOr(rT, 0);
             // Each brep is ONE part: its boundary loops (outer + holes) are kept together (hard_coded_input).
             var grouped = new List<Curve[]>();
             foreach (var brep in breps)
@@ -130,11 +137,14 @@ namespace opennest_gh2.components
             }
             if (grouped.Count == 0) return;
 
-            // Every Attributes port (base index 5 + any +/- variable ports) as a tree of geometry, by branch.
+            // Every Attributes port (base "Attributes" at index 6 + any +/- ports at 7+); skip Rotations (index 5).
             var attrTrees = new List<GeometryBase[][]>();
             for (int ai = 5; ai < Parameters.InputCount; ai++)
+            {
+                if (ai == ROTATIONS_INPUT) continue;
                 if (access.GetTree(ai, out Tree<GeometryBase> at) && at != null && at.LeafCount > 0)
                 { at.ToArrays(out GeometryBase[][] ab); attrTrees.Add(ab); }
+            }
 
             // Attributes per part: positional branch match (part i <- attribute branch i), merged across ports.
             List<GeometryBase[]> attrsPerPart = null;
@@ -149,8 +159,14 @@ namespace opennest_gh2.components
                 }
             }
 
-            var copiesList = Enumerable.Repeat(copies < 1 ? 1 : copies, grouped.Count).ToList();
-            var geo = nest_geo_util.geo_to_nest_geo(grouped, copiesList, new List<double> { simplify, hull ? 1.0 : 0.0 }, attrsPerPart, hard_coded_input: true);
+            // Per-part copies, cycled like the main Geometry component (one value applies to all; a list maps
+            // one-per-part). Was First(cT) before -> only the first value was used, so a copies LIST never
+            // duplicated per part.
+            var copiesList = new List<int>(grouped.Count);
+            for (int i = 0; i < grouped.Count; i++) { int c = copiesVals[i % copiesVals.Count]; copiesList.Add(c < 1 ? 1 : c); }
+            var rotationsList = new List<int>(grouped.Count);
+            for (int i = 0; i < grouped.Count; i++) { int rv = rotVals[i % rotVals.Count]; rotationsList.Add(rv < 0 ? 0 : rv); }
+            var geo = nest_geo_util.geo_to_nest_geo(grouped, copiesList, new List<double> { simplify, hull ? 1.0 : 0.0 }, attrsPerPart, hard_coded_input: true, rotations: rotationsList);
             if (offset != 0) geo.offset_nesting_boundary(offset);   // outer grows / holes shrink on the NFP boundary only
             access.SetItem(0, geo);
             var borders = new List<Curve>();
@@ -161,7 +177,7 @@ namespace opennest_gh2.components
         // ---- variable +/- Attributes input ports (same as the main Geometry component) ----
         public override bool CanCreateParameter(Side side, int index) => side == Side.Input && index >= FIXED_INPUTS;
         public override bool CanRemoveParameter(Side side, int index) => side == Side.Input && index >= FIXED_INPUTS;
-        public override void DoCreateParameter(Side side, int index)
+        public override void DoCreateParameter(Side side, int index, Grasshopper2.Undo.ActionList undo)
         {
             if (side != Side.Input) return;
             var p = new Grasshopper2.Parameters.Standard.GenericParameter(

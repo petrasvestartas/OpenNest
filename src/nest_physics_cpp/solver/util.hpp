@@ -73,6 +73,30 @@ inline bool g_compact_hole_guard = true;
 // can only reduce the sheet count / parts-left-outside. Env NP_FILL_GAPS=0 disables for A/B.
 inline bool g_fill_gaps = true;
 
+// IN-LOOP SPILL RE-INSERTION (ruin-and-recreate, default off). greedy_fill cuts the strip at x=sheet_w
+// and carries EVERY part whose x_max exceeds it to the NEXT sheet's fresh strip solve — even though the
+// current sheet still has a free right-column (sheet_w - max kept x_max) plus interior voids. When on,
+// after the cut greedy_fill grid-searches each spilled part (smallest-area first, with rotation) into the
+// current sheet's open free space with the SAME exact brute_overlap feasibility used everywhere else, and
+// commits the first collision-free, in-bounds pose. Crucially this runs BEFORE the spill is handed to the
+// next sheet, so that sheet's strip solve runs on FEWER parts => genuinely narrower (unlike the host's
+// post-hoc fill_sheet_gaps, which can only leave a hole in an already-solved sheet). Verified moves only,
+// re-checked by the caller, so it can never create overlap. OFF => byte-identical to before.
+inline bool g_reinsert_spill = false;
+
+// Best-of-2 on spill sheets (default off): re-solve each spill sheet's fixed carried set at a second
+// seed and keep whichever packs tighter AFTER compaction (the slide-to-contact pass closes different
+// slack in different basins, so raw strip width mis-ranks them). Monotone-safe: sheet 0 and the part
+// set are untouched, so packing can never get worse; the cost is wall-only. OFF => byte-identical.
+inline bool g_spill_best_of2 = false;
+
+// ROTATIONAL kick in compact_left (default off): the slide passes are translation-only, so
+// orientation slack at contact is never reclaimed. When the translation sweeps reach a fixpoint,
+// try small +/-deg rotations per part (about its centroid, exact brute_overlap feasibility,
+// strictly non-widening) and keep a rotation iff it enables a strictly deeper -x slide; then the
+// sweeps continue. OFF => byte-identical.
+inline bool g_compact_rot = false;
+
 // Drop INVALID placements (default on): a part the solver couldn't actually fit can end up reported on a
 // sheet while hanging OUT OF BOUNDS or overlapping a sheet hole (it took a fresh sheet for nothing). This
 // demotes any such placement to UNPLACED so the host lays it out OUTSIDE the sheets instead of wasting a

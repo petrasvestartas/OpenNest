@@ -147,7 +147,7 @@ namespace opennest_commands
             {
                 var p = new List<double> { s_nfpRot, 0, s_nfpPlace, s_nfpSpacing, s_nfpSeed, 1, s_nfpMut, s_nfpPop, 0 };
                 nfp = new nest_lib.rhino_example(ref sheetsLocal, ref geoLocal, p, s_nfpIter);
-                nfp.Engine = "cpp"; nfp.TryAllRotations = s_nfpAllRot ? 1 : 0; nfp.UseHoles = s_nfpHoles; nfp.ExactNfp = 1;
+                nfp.TryAllRotations = s_nfpAllRot ? 1 : 0; nfp.UseHoles = s_nfpHoles; nfp.ExactNfp = 1;
             }
             else
             {

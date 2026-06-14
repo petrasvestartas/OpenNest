@@ -134,22 +134,13 @@ namespace opennest_2
             BuildOptions();
         }
 
-        // Settings shown as on-canvas controls (dropdowns + type-in boxes), replacing the old Options string.
-        // ORDER IS LOAD-BEARING: the first 3 numeric rows map to NpRun.Flatten GetP(0..2) by index
-        // (rotations, seed, starts); element_holes/poles/compact are parsed by name; font stays LAST.
+        // Settings shown as on-canvas controls (dropdowns + type-in boxes). Defined once in NestOptionCatalog
+        // (shared with the GH2 port and the Nest Options component); see the catalog for the load-bearing
+        // ordering notes and for why 'spacing'/'simplify_tolerance' are not exposed.
         private void BuildOptions()
         {
             _options.Clear();
-            _options.Add(NestOption.Number("num_of_rotations", "Rotations", 3600, 1, 3600, 0, "Orientations each part may try; more = tighter, slower."));
-            // 'spacing' removed: polygon-offset (offset_shape) isn't ported, so any spacing>0 silently skipped parts.
-            _options.Add(NestOption.Number("seed", "Seed", 100, 0, 100000, 0, "Random seed; change it if a run spills to a 2nd sheet."));
-            // 'simplify_tolerance' removed: parts are nested at full detail (no simplification).
-            _options.Add(NestOption.Number("starts", "Starts", 1, 1, 64, 0, "Multi-start seeds; keeps densest, stops at first single-sheet."));
-            _options.Add(NestOption.Choice("element_holes", "Element Holes", new[] { "Off", "Fill", "Fill First" }, new[] { "0", "1", "2" }, 1, "Nest small ELEMENTS into larger elements' holes. Fill = after the nest; Fill First = pre-pack into holes before nesting (sometimes tighter). (Sheet holes are always kept out automatically.)"));
-            _options.Add(NestOption.Number("poles", "Poles", 48, 4, 64, 0, "Inscribed circles per part for collision tests; more = more accurate (cleaner pack), fewer = faster but can pack worse."));
-            _options.Add(NestOption.Choice("compact", "Compact", new[] { "Off", "Bottom-Left", "Multi" }, new[] { "0", "1", "2" }, 1, "Post-pack tightening slide."));
-            _options.Add(NestOption.Choice("fit", "Fit", new[] { "One sheet (max fill)", "All parts (fewest sheets)" }, new[] { "1", "0" }, 0, "One sheet = fill a SINGLE sheet as full as possible; parts that don't fit are placed OUTSIDE. All parts = use as many sheets as needed so nothing is left off."));
-            _options.Add(NestOption.Text("font", "Sheet Font", "MecSoft_Font-1 1", "Sheet-number label: font name + text size."));
+            _options.AddRange(NestOptionCatalog.Collision());
         }
 
         // Rebuild the "name value" token list the existing solve pipeline consumes (font emitted last).
@@ -205,13 +196,16 @@ namespace opennest_2
             pManager.AddGenericParameter("Sheets", "Sheets", "From OpenNest tab, use component Sheets.", GH_ParamAccess.item);
             pManager.AddGenericParameter("Geometry", "Geometry", "From OpenNest tab, use component Geometry.", GH_ParamAccess.item);
 
-            // Nesting options are edited directly on the component body (dropdowns + type-in boxes), so there is
-            // no longer an "Options" string input. See BuildOptions() / NestOptionsAttributes.
+            // Optional wired options ("key value" strings, e.g. from the Nest Options component); they override
+            // the matching on-canvas option rows. Inserted BEFORE Iterations. MakeOptionsInput is shared with the
+            // old-file fixup in NestOptionsHostComponent.Read.
+            pManager.AddParameter(MakeOptionsInput());
             pManager.AddIntegerParameter("Iterations", "Iterations", "Relaxation rounds; higher packs tighter but is slower. ~4000 = the tight all-on-one-sheet pack; lower for a quick rough preview.", GH_ParamAccess.item, 4000);
             // Standard Run input (replaces the old on-canvas Run button). Wire a Boolean Toggle.
             pManager.AddBooleanParameter("Run", "Run", "Wire a Boolean Toggle. TRUE = solve now and re-solve when an input changes (background thread, live preview); FALSE = hold the last result. (Options are still edited on the component body; ESC also stops a running solve.)", GH_ParamAccess.item, false);
-            pManager[2].Optional = true;
-            pManager[3].Optional = true;
+            pManager[2].Optional = true;   // Options
+            pManager[3].Optional = true;   // Iterations (has a default)
+            pManager[4].Optional = true;   // Run
         }
 
         protected override void RegisterOutputParams(GH_Component.GH_OutputParamManager pManager)
@@ -264,11 +258,15 @@ namespace opennest_2
 
         protected override void SolveInstance(IGH_DataAccess DA)
         {
+            // Wired options (if any) override the on-canvas rows BEFORE anything reads/signatures them, so both
+            // the launch below and InputsChanged see the values actually in effect.
+            ApplyWiredOptions(DA);   // Options input at index 2
+
             // Run is a standard input port now (was the on-canvas Run button). Edge-drive the existing latch:
             // a rising edge launches a live session; a falling edge stops it and holds the last result. Using the
             // INPUT's previous value (not _runActive) means an ESC-stop mid-solve isn't immediately relaunched
             // just because Run is still held TRUE.
-            bool runInput = false; DA.GetData(3, ref runInput);
+            bool runInput = false; DA.GetData(4, ref runInput);
             if (runInput && !_prevRunInput) { _runActive = true; _runButtonRequested = true; }
             else if (!runInput && _runActive)
             {
@@ -326,6 +324,7 @@ namespace opennest_2
                 DA.GetData(1, ref nest_geo_in);
                 if (nest_sheets == null || nest_geo_in == null) { ReleaseEngine(); this.Message = "missing Sheets/Geometry"; return; }
 
+                nest_sheets = nest_sheets.duplicate();        // don't mutate the upstream sheets (shared with sibling nesters)
                 var nest_geo_dup = nest_geo_in.duplicate();   // don't mutate upstream geometry
                 this.nest_geos.Add(nest_geo_dup);
 
@@ -342,7 +341,7 @@ namespace opennest_2
 
                 // element_holes / poles / compact: parse BY NAME (robust to dropdown order). Sheet holes are
                 // ALWAYS kept out when the sheet has them (no toggle). element_holes: 0=off, 1=fill, 2=fill-first.
-                int partHolesMode = 1; int poles = 48; bool compact = true; int fitMode = 1;
+                int partHolesMode = 1; int poles = 48; bool compact = true; int fitMode = 0;   // 0 = all parts / fewest sheets (default)
                 foreach (var ln in parameters_text)
                 {
                     string t = (ln ?? "").Trim();
@@ -355,7 +354,7 @@ namespace opennest_2
                 }
 
                 int max_iterations = 1;
-                DA.GetData(2, ref max_iterations);
+                DA.GetData(3, ref max_iterations);   // Iterations shifted to index 3 (Options inserted at 2)
 
                 NpRun pending = new NpRun();
                 try { pending.Flatten(nest_sheets, nest_geo_dup, parameters, max_iterations, partHolesMode, poles, compact, fitMode); }
@@ -646,7 +645,7 @@ namespace opennest_2
         {
             nest_rhino_lib.nest_sheets s = null; DA.GetData(0, ref s);
             nest_rhino_lib.nest_geo g = null; DA.GetData(1, ref g);
-            int it = 1; DA.GetData(2, ref it);
+            int it = 1; DA.GetData(3, ref it);   // Iterations at index 3 (Options at 2)
             _pendingSig = SigOf(s, g, it, BuildOptionStrings());
             _pendingIter = it;
             return _pendingSig != _solvedSig;
@@ -739,7 +738,7 @@ namespace opennest_2
         private Transform[] _to_xy;
         private Point3d[] _sheetOrigin;
         private List<int> _pvc, _flatGroup;
-        private int[] _pvcA, _sovcA, _shcA, _hvcA, _phcA, _phvcA, _out_sheet, _psh;
+        private int[] _pvcA, _protA, _sovcA, _shcA, _hvcA, _phcA, _phvcA, _out_sheet, _psh;
         private double[] _pxyA, _soxyA, _hxyA, _phxyA, _out_tx, _out_ty, _out_angle, _ptx, _pty, _pang;
         private NpParams _np;
 
@@ -775,6 +774,7 @@ namespace opennest_2
             List<int> pvc = new List<int>();
             List<double> pxy = new List<double>();
             List<int> flatGroup = new List<int>();
+            List<int> prot = new List<int>();   // per-flat-part rotation-count override (0 = free continuous)
             List<int> phc = new List<int>();    // part-hole count per flat part
             List<int> phvc = new List<int>();   // vertex count per part-hole (part-major)
             List<double> phxy = new List<double>();
@@ -783,6 +783,9 @@ namespace opennest_2
                 int ncopies = 1;
                 int gi = nest_geo.geometry_sorted[i][0];
                 if (gi >= 0 && gi < nest_geo.copies.Count) ncopies = Math.Max(1, nest_geo.copies[gi]);
+                int rotOverride = 0;   // 0 = free continuous rotation (the solver default)
+                if (nest_geo.rotations != null && gi >= 0 && gi < nest_geo.rotations.Count)
+                    rotOverride = Math.Max(0, nest_geo.rotations[gi]);
 
                 Polyline outer = new Polyline(nest_geo.boundary_sorted[i][0].Item2);
                 outer.Transform(to_xy[i]);
@@ -808,6 +811,7 @@ namespace opennest_2
                     pvc.Add(cnt);
                     for (int k = 0; k < cnt; k++) { pxy.Add(outer[k].X); pxy.Add(outer[k].Y); }
                     flatGroup.Add(i);
+                    prot.Add(rotOverride);
                     phc.Add(groupHoles.Count);
                     foreach (var hv in groupHoles) { phvc.Add(hv.Length / 2); phxy.AddRange(hv); }
                 }
@@ -892,6 +896,7 @@ namespace opennest_2
             _to_xy = to_xy; _sheetOrigin = sheetOrigin; _pvc = pvc; _flatGroup = flatGroup;
             _out_tx = out_tx; _out_ty = out_ty; _out_angle = out_angle; _out_sheet = out_sheet;
             _pvcA = pvc.ToArray(); _pxyA = pxy.ToArray();
+            _protA = prot.ToArray();
             _sovcA = sovc.ToArray(); _soxyA = soxy.ToArray();
             _shcA = shc.ToArray(); _hvcA = hvc.ToArray(); _hxyA = hxy.ToArray();
             _phcA = phc.ToArray();
@@ -1014,7 +1019,7 @@ namespace opennest_2
             if (!Ready) return;
             NestPhysicsWrapper.np_cancel_reset();
             rc = NestPhysicsWrapper.np_nest(
-                _F, _pvcA, _pxyA, _nsheet, _sovcA, _soxyA, _shcA, _hvcA, _hxyA,
+                _F, _pvcA, _pxyA, _protA, _nsheet, _sovcA, _soxyA, _shcA, _hvcA, _hxyA,
                 _phcA, _phvcA, _phxyA,
                 ref _np, _out_tx, _out_ty, _out_angle, _out_sheet, out _n_sheets_used);
             rounds_done = NestPhysicsWrapper.np_progress();

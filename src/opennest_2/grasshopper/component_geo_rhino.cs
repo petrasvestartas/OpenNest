@@ -53,9 +53,15 @@ namespace opennest_2
         {
             pManager.AddTextParameter("Layer", "Layer", "Boundary layer in Rhino you need to create to select objects. ", GH_ParamAccess.item);
             pManager.AddIntegerParameter("Copies", "Copies", "Number of copies must be equal to tree branches, number of guids inputs is treated as a separate branch", GH_ParamAccess.list, new List<int> { 1 });
-            pManager.AddNumberParameter("Simplify", "Simplify", "Default parameter<0>, parameter<1>, \nsegment divisions (0 takes only ends, x>0 divides by distance,\n x<0 max 3 points per sub-segment), compute only convex-hull from simplified polyline 0/1", GH_ParamAccess.list, new List<double> { 100, 0 });
+            pManager.AddNumberParameter("Simplify", "Simplify", "Optional [divisions, hull].\ndivisions: 0 = keep polyline vertices as-is (no simplification, DEFAULT); x>0 divides curved segments by distance; x<0 max 3 points per sub-segment.\nhull (2nd value, 0/1): replace each part with its convex hull. One value is fine (hull defaults 0).", GH_ParamAccess.list, new List<double> { 0, 0 });
             pManager.AddNumberParameter("Sort", "Sort", "Sort polylines.", GH_ParamAccess.item, 1);
             pManager.AddNumberParameter("Offset", "Offset", "Clearance offset for NESTING only (model units; 0 = OFF, fast).\nParts: outer grows / holes shrink so placed parts keep this gap.\nThe ORIGINAL curves are still what get placed/output.", GH_ParamAccess.item, 0);
+            pManager.AddIntegerParameter("Rotations", "Rotations",
+                "OPTIONAL per-part rotation constraint (one value per guid branch, repeats like Copies).\n" +
+                "Empty / 0 = part inherits the solver's global Rotations setting (default).\n" +
+                "N > 0 = THIS part may only use N orientations (360/N degree steps).\n" +
+                "1 = fixed, no rotation (e.g. grain direction).",
+                GH_ParamAccess.list);
             IGH_Param geometryAsGuid = new Grasshopper.Kernel.Parameters.Param_Guid();
             pManager.AddParameter(geometryAsGuid, "Guid", "Guid", "Referenced geometry as guid (can be mesh, brep, curves in one list)", GH_ParamAccess.tree);
 
@@ -112,11 +118,25 @@ namespace opennest_2
             double offset_distance = 0;
             DA.GetData(4, ref offset_distance);
 
+            // Per-part rotation constraints — located BY NAME so component instances saved before this input
+            // existed (no "Rotations" port) keep working, and so the guid loop below stays order-independent.
+            var rotations = new List<int>();
+            {
+                int rotIdx = -1;
+                for (int pi = 0; pi < Params.Input.Count; pi++)
+                    if (Params.Input[pi].Name == "Rotations") { rotIdx = pi; break; }
+                if (rotIdx >= 0) DA.GetDataList(rotIdx, rotations);
+            }
+
             List<Guid[]> guids = new List<Guid[]>();
 
-            
-            for (int i = non_changing_inputs; i < Params.Input.Count; i++)
+            // The variable inputs are the guid trees (named "Guid"/"guid"); skip the fixed scalar ports
+            // (Layer/Copies/Simplify/Sort/Offset/Rotations) by name so a missing/extra Rotations port can't
+            // shift which inputs are read as guids.
+            for (int i = 0; i < Params.Input.Count; i++)
             {
+                if (!Params.Input[i].Name.Equals("guid", StringComparison.OrdinalIgnoreCase)) continue;
+
                 //get current input
                 var guids_current = new GH_Structure<GH_Guid>();
                 DA.GetDataTree(i, out guids_current);
@@ -132,8 +152,15 @@ namespace opennest_2
                 }
             }
 
+            // Extend rotations like copies: repeat the pattern across all guid branches; empty = all 0 (inherit).
+            if (rotations.Count == 0)
+                for (int i = 0; i < guids.Count; i++) rotations.Add(0);
+            else
+                for (int i = rotations.Count; i < guids.Count; i++) rotations.Add(rotations[i % rotations.Count]);
+            if (rotations.Count > guids.Count) rotations.RemoveRange(guids.Count, rotations.Count - guids.Count);
+
             //Solution
-            nest_geo = nest_rhino_lib.nest_geo_util.guid_to_nest_geo(guids, layer, copies, simplify_parameters);
+            nest_geo = nest_rhino_lib.nest_geo_util.guid_to_nest_geo(guids, layer, copies, simplify_parameters, rotations);
             if (offset_distance != 0) nest_geo.offset_nesting_boundary(offset_distance);   // 0 = skip entirely (fast)
 
             //if (extend != 0)

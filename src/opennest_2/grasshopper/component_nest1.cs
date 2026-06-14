@@ -113,7 +113,7 @@ namespace opennest_2
         {
             pManager.AddGeometryParameter("Sheets", "Sheets", "Sheets — closed planar surfaces (outer + holes) or closed curves. A single sheet is auto-copied so parts can overflow onto more.", GH_ParamAccess.list);
             pManager.AddGeometryParameter("Geo", "Geo", "Parts to nest — closed curves or planar surfaces.", GH_ParamAccess.list);
-            pManager.AddNumberParameter("Spacing", "Spacing", "Gap to keep between placed parts.", GH_ParamAccess.item, 1);
+            pManager.AddNumberParameter("Spacing", "Spacing", "Gap to keep between placed parts AND from the sheet edge.\nApplied as a nesting offset directly to the parts and sheets (this component takes raw polylines, not nest_geo/nest_sheets), so it stands in for the Geometry/Sheets Offset inputs. The ORIGINAL geometry is still what gets output.", GH_ParamAccess.item, 1);
             pManager.AddIntegerParameter("Placement", "Placement", "Placement strategy index (0 Box, 1 Gravity, 2 Squeeze, 3 Bottom-Left).", GH_ParamAccess.item, 1);
             pManager.AddNumberParameter("Tolerance", "Tolerance", "Curve simplification tolerance.", GH_ParamAccess.item, 0.1);
             pManager.AddIntegerParameter("Rotations", "Rotations", "Orientation angles per part. Fewer = much faster on large sets (the cold NFP cache grows with rotations); more = slightly tighter.", GH_ParamAccess.item, 4);
@@ -406,9 +406,9 @@ namespace opennest_2
                     var sheetsRef = _snapSheets;
                     var paramsTry = new List<double>(_snapParams);
                     if (paramsTry.Count > 4) paramsTry[4] = _snapBaseSeed + t;
+                    if (paramsTry.Count > 3) paramsTry[3] = 0.0;   // spacing applied UPSTREAM (geo+sheet offset) — don't double it in the solver
 
                     var nestTry = new nest_lib.rhino_example(ref sheetsRef, ref geoTry, paramsTry, _snapIterations);
-                    nestTry.Engine = "cpp";
                     nestTry.TryAllRotations = 0;   // first valid orientation per placement = far faster; GA still varies rotations
 
                     _liveNest = nestTry;   // expose the in-flight try to the live preview
@@ -591,7 +591,11 @@ namespace opennest_2
             var gaps = new List<double> { 0.0 };
             var rots = new List<int> { 4 };
             int place = 0;
-            return new nest_rhino_lib.nest_sheets(sheetSets, gaps, rots, place);
+            var ns = new nest_rhino_lib.nest_sheets(sheetSets, gaps, rots, place);
+            // Spacing also insets the sheet boundary by spacing/2 (outer shrinks, holes grow) so parts keep the
+            // same clearance from the sheet edge as from each other — mirrors the Sheets component's offset.
+            if (this.spacing > 0) ns.offset_sheet_boundary(this.spacing * 0.5);
+            return ns;
         }
 
         private Polyline CurveToClosedPolyline(Curve curve)
@@ -738,7 +742,14 @@ namespace opennest_2
                 // never auto-paired as holes just because one happens to sit inside another. Holes come ONLY from
                 // surface input. (hard_coded_input sorts each group's rings largest-first, so the outer boundary is
                 // ring 0 and the rest are holes.)
-                return nest_rhino_lib.nest_geo_util.geo_to_nest_geo(outlines.Item1, outlines.Item3, new List<double> { 0, 0 }, outlines.Item2, true);
+                var ng = nest_rhino_lib.nest_geo_util.geo_to_nest_geo(outlines.Item1, outlines.Item3, new List<double> { 0, 0 }, outlines.Item2, true);
+                // OpenNest1 takes RAW polylines (no upstream Geometry/Sheets Offset components), so the Spacing
+                // input applies the nesting offset HERE: grow each part's nesting boundary by spacing/2 (paired
+                // with the sheet inset in process_sheets) so placed parts keep a `spacing` gap. The native solver
+                // spacing is then forced to 0 (see RunSolve) so the gap is applied ONCE. The Geo output stays the
+                // ORIGINAL geometry; only the nesting boundary (Borders) carries the offset — same as OpenNest2.
+                if (this.spacing > 0) ng.offset_nesting_boundary(this.spacing * 0.5);
+                return ng;
             }
             catch (Exception ex)
             {

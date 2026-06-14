@@ -93,3 +93,17 @@ endif()
 if(MINGW OR (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND WIN32))
     target_link_options(nfp_nest PRIVATE -static -static-libgcc -static-libstdc++)
 endif()
+
+# --- nfp_bench research CLI (off by default; not shipped) ---
+# Compiles the C-API directly into the exe so the bench exercises the exact
+# entry path (toConfig, modes 0/1/2, snapshot plumbing) without DLL friction.
+option(NFP_BUILD_BENCH "Build the nfp_bench research CLI" OFF)
+if(NFP_BUILD_BENCH)
+    add_executable(nfp_bench bench/nfp_bench.cpp src/capi/nfp_nest_capi.cpp)
+    target_link_libraries(nfp_bench PRIVATE nest_lib)
+    target_include_directories(nfp_bench PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/bench)
+    if(MSVC)
+        target_compile_definitions(nfp_bench PRIVATE _USE_MATH_DEFINES)
+        target_compile_options(nfp_bench PRIVATE /W3 /wd4244 /wd4267 /wd4305)
+    endif()
+endif()

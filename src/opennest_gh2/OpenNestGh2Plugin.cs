@@ -27,6 +27,24 @@ namespace opennest_gh2
                 }
                 return null;
             };
+
+            // DIAGNOSTIC: GH2 swallows the exception behind "initialization failed", so capture any
+            // exception whose text/stack mentions opennest to %TEMP%\opennest_gh2_load.log for inspection.
+            try
+            {
+                AppDomain.CurrentDomain.FirstChanceException += (s, e) =>
+                {
+                    try
+                    {
+                        string txt = e.Exception.ToString();
+                        if (txt.IndexOf("opennest", StringComparison.OrdinalIgnoreCase) >= 0)
+                            File.AppendAllText(Path.Combine(Path.GetTempPath(), "opennest_gh2_load.log"),
+                                DateTime.Now.ToString("HH:mm:ss") + "  " + txt + "\n\n------\n\n");
+                    }
+                    catch { }
+                };
+            }
+            catch { }
         }
 
         public OpenNestGh2Plugin()

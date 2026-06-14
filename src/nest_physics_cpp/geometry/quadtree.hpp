@@ -20,6 +20,22 @@ inline std::array<bool, 4> collides_with_quadrants(const T& e, const Rect&, cons
     return {collides(e, qs[0]), collides(e, qs[1]), collides(e, qs[2]), collides(e, qs[3])};
 }
 
+// Circle vs the four quadrants — specialized to share the clamp work the generic template repeats.
+// The four child quadrants tile the parent at the split lines, so adjacent quadrants share an x- or
+// y-range: Q0/Q3 (right column) and Q1/Q2 (left column) share the x-clamp; Q0/Q1 (top row) and
+// Q2/Q3 (bottom row) share the y-clamp. Computing each clamp once (2 dx + 2 dy instead of the
+// generic's 8) is bit-identical to four independent collides(Circle,Rect) calls — same min_f/max_f
+// expressions, same squared terms, same x+y addition order — it only removes redundant arithmetic.
+inline std::array<bool, 4> collides_with_quadrants(const Circle& c, const Rect&, const std::array<Rect, 4>& qs) {
+    const f32 cx = c.center.x, cy = c.center.y, r2 = c.radius * c.radius;
+    f32 dxr = max_f(qs[0].x_min, min_f(cx, qs[0].x_max)) - cx; // right column (Q0, Q3)
+    f32 dxl = max_f(qs[1].x_min, min_f(cx, qs[1].x_max)) - cx; // left column  (Q1, Q2)
+    f32 dyt = max_f(qs[0].y_min, min_f(cy, qs[0].y_max)) - cy; // top row      (Q0, Q1)
+    f32 dyb = max_f(qs[2].y_min, min_f(cy, qs[2].y_max)) - cy; // bottom row   (Q2, Q3)
+    f32 xr2 = dxr * dxr, xl2 = dxl * dxl, yt2 = dyt * dyt, yb2 = dyb * dyb;
+    return {xr2 + yt2 <= r2, xl2 + yt2 <= r2, xl2 + yb2 <= r2, xr2 + yb2 <= r2};
+}
+
 // Edge vs four quadrants — faithful port of qt_traits.rs Edge::collides_with_quadrants. Resolves
 // most quadrants via cheap bbox/endpoint checks, then shares bisector intersection tests across
 // adjacent quadrants. Conservative by construction (may over-report a quadrant, never under-report),
@@ -260,17 +276,27 @@ struct QuadtreeNode {
     std::unique_ptr<std::array<QuadtreeNode, 4>> children;
     QuadtreeObstacleVec obstacles;
     uint8_t cd_threshold = 0;
+    // Child quadrant bboxes, cached at split time. The query paths previously gathered a
+    // std::array<Rect,4> from (*children)[i].bbox on EVERY node visit (~113M visits per solve on
+    // the benchmark) — 4 loads through the children pointer per visit, touching all four child
+    // nodes' cache lines even when the entity then descends into only one quadrant. The quadrants
+    // are immutable once split (derived from this node's immutable bbox), so cache them HERE: the
+    // quadrant test runs entirely from this node's memory. Stale values after `children` resets to
+    // null are never read (every use is guarded by `if (children)`), and a re-split recomputes the
+    // byte-identical values from the same bbox.quadrants().
+    std::array<Rect, 4> child_bboxes{};
 
     QuadtreeNode() = default;
     QuadtreeNode(uint8_t level_, Rect bbox_, uint8_t cd_threshold_)
         : level(level_), bbox(bbox_), cd_threshold(cd_threshold_) {}
 
-    QuadtreeNode(const QuadtreeNode& o) : level(o.level), bbox(o.bbox), obstacles(o.obstacles), cd_threshold(o.cd_threshold) {
+    QuadtreeNode(const QuadtreeNode& o) : level(o.level), bbox(o.bbox), obstacles(o.obstacles), cd_threshold(o.cd_threshold), child_bboxes(o.child_bboxes) {
         if (o.children) children = std::make_unique<std::array<QuadtreeNode, 4>>(*o.children);
     }
     QuadtreeNode& operator=(const QuadtreeNode& o) {
         if (this != &o) {
             level = o.level; bbox = o.bbox; obstacles = o.obstacles; cd_threshold = o.cd_threshold;
+            child_bboxes = o.child_bboxes;
             children = o.children ? std::make_unique<std::array<QuadtreeNode, 4>>(*o.children) : nullptr;
         }
         return *this;
@@ -280,7 +306,6 @@ struct QuadtreeNode {
 
     void register_obstacle(QuadtreeObstacle new_qt_haz, const SlotMap<Obstacle>& haz_map) {
         auto constrict_and_register = [&](const QuadtreeObstacle& qt_hazard, std::array<QuadtreeNode, 4>& kids) {
-            std::array<Rect, 4> child_bboxes = {kids[0].bbox, kids[1].bbox, kids[2].bbox, kids[3].bbox};
             auto child_hazards = qt_hazard.constrict(child_bboxes, haz_map);
             for (int i = 0; i < 4; ++i)
                 if (child_hazards[i].presence != QuadtreePresence::None)
@@ -289,6 +314,7 @@ struct QuadtreeNode {
 
         if (!children && level > 0 && new_qt_haz.presence == QuadtreePresence::Partial) {
             auto quads = bbox.quadrants();
+            child_bboxes = quads;
             children = std::make_unique<std::array<QuadtreeNode, 4>>(std::array<QuadtreeNode, 4>{
                 QuadtreeNode(static_cast<uint8_t>(level - 1), quads[0], cd_threshold),
                 QuadtreeNode(static_cast<uint8_t>(level - 1), quads[1], cd_threshold),
@@ -320,9 +346,7 @@ struct QuadtreeNode {
             case QuadtreePresence::Entire: return &strongest->entity;
             case QuadtreePresence::Partial: {
                 if (children) {
-                    std::array<Rect, 4> quads = {(*children)[0].bbox, (*children)[1].bbox,
-                                                 (*children)[2].bbox, (*children)[3].bbox};
-                    auto col = collides_with_quadrants(entity, bbox, quads);
+                    auto col = collides_with_quadrants(entity, bbox, child_bboxes);
                     for (int i = 0; i < 4; ++i)
                         if (col[i]) {
                             const ObstacleRef* r = (*children)[i].detect_collision(entity, filter);
@@ -346,9 +370,7 @@ struct QuadtreeNode {
     void collect_collisions(const T& entity, Collector& collector) const {
         bool perform_cd_now = obstacles.n_active_edges() <= static_cast<usize>(cd_threshold);
         if (children && !perform_cd_now) {
-            std::array<Rect, 4> quads = {(*children)[0].bbox, (*children)[1].bbox,
-                                         (*children)[2].bbox, (*children)[3].bbox};
-            auto col = collides_with_quadrants(entity, bbox, quads);
+            auto col = collides_with_quadrants(entity, bbox, child_bboxes);
             for (int i = 0; i < 4; ++i)
                 if (col[i]) (*children)[i].collect_collisions(entity, collector);
         } else {

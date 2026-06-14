@@ -24,11 +24,6 @@
 
 namespace nest {
 
-struct MergedResult {
-    double totalLength = 0;
-    // segments omitted (commented out in C#)
-};
-
 class NfpWorker {
 public:
     NfpWorker() = default;
@@ -41,7 +36,6 @@ public:
           window(std::move(o.window)),
           callCounter(o.callCounter.load()),
           LastPlacePartTime(o.LastPlacePartTime),
-          displayProgress(std::move(o.displayProgress)),
           data(std::move(o.data)),
           parts_vec(std::move(o.parts_vec)),
           index(o.index),
@@ -54,7 +48,6 @@ public:
             window = std::move(o.window);
             callCounter = o.callCounter.load();
             LastPlacePartTime = o.LastPlacePartTime;
-            displayProgress = std::move(o.displayProgress);
             data = std::move(o.data);
             parts_vec = std::move(o.parts_vec);
             index = o.index;
@@ -70,7 +63,6 @@ public:
           window(),  // fresh NfpCache (non-copyable due to unique_ptr<dbCache>)
           callCounter(o.callCounter.load()),
           LastPlacePartTime(o.LastPlacePartTime),
-          displayProgress(o.displayProgress),
           data(o.data),
           parts_vec(o.parts_vec),
           index(o.index),
@@ -83,7 +75,6 @@ public:
             window = NfpCache();  // fresh
             callCounter = o.callCounter.load();
             LastPlacePartTime = o.LastPlacePartTime;
-            displayProgress = o.displayProgress;
             data = o.data;
             parts_vec = o.parts_vec;
             index = o.index;
@@ -103,12 +94,7 @@ public:
     std::atomic<int> callCounter{0};
     long long LastPlacePartTime = 0;
 
-    // --- Progress callback ---
-    std::function<void(float)> displayProgress;
-    void DisplayProgress(float p);
-
     // --- Simple utility methods (pure, no mutable state) ---
-    static NFP shiftPolygon(const NFP& p, const PlacementItem& shift);
     static std::shared_ptr<NFP> clone(const NFP& nfp);
     static std::vector<std::shared_ptr<NFP>> cloneNfp(const std::vector<std::shared_ptr<NFP>>& nfp, bool inner = false);
     static NFP rotatePolygon(const NFP& polygon, float degrees);
@@ -123,7 +109,6 @@ public:
 
     // --- NFP computation (instance — uses cacheProcess, window) ---
     std::vector<std::shared_ptr<NFP>> Process2(NFP& A, NFP& B, int type);
-    std::vector<std::shared_ptr<NFP>> NewMinkowskiSum(NFP& pattern, NFP& path, int type, bool useChilds = false, bool takeOnlyBiggestArea = true);
     std::shared_ptr<NFP> getOuterNfp(NFP& A, NFP& B, int type, bool inside = false);
     std::vector<std::shared_ptr<NFP>> getInnerNfp(NFP& A, NFP& B, int type, const NestConfig& config);
 
@@ -166,7 +151,6 @@ public:
     void thenDeepNest(std::vector<NfpPair>& processed, const std::vector<std::shared_ptr<NFP>>& parts);
     std::vector<NfpPair> pmapDeepNest(std::vector<NfpPair>& pairs);
     NfpPair process(NfpPair pair);
-    bool inpairs(const NfpPair& key, const std::vector<NfpPair>& p);
 };
 
 } // namespace nest

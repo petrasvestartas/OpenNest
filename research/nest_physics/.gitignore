@@ -1,0 +1,9 @@
+# Transient research-loop artifacts — never commit.
+.snap_best/
+.snap_try/
+build_research/
+bench_out.svg
+experiment.json
+ledger.csv
+ledger.jsonl
+*.log

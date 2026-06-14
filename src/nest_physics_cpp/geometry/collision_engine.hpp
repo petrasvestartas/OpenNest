@@ -63,6 +63,22 @@ struct CollisionEngine {
         return std::move(*h);
     }
 
+    // Replace the exterior obstacle (container outline) IN PLACE, keeping the existing quadtree
+    // root/partition and every registered part. Used by the incremental container swap on strip
+    // width changes: only the container's right wall moves, so rebuilding the whole engine (and
+    // re-registering all N parts) to re-root the tree is wasted work. The kept root bbox is a
+    // strict superset of the new container (callers guarantee Surrounding), which is semantically
+    // safe: regions outside the new outline become Entire-presence exterior nodes during this
+    // re-registration, exactly as a fresh tree would mark them — only the quadrant geometry
+    // (inherited from the old root) differs.
+    void swap_exterior(std::shared_ptr<Polygon> new_outer) {
+        deregister_hazard_by_key(okey_exterior);
+        ObstacleKey okey = obstacles_map.insert(Obstacle(ObstacleRef::exterior(), std::move(new_outer), false));
+        QuadtreeObstacle qt_obs = QuadtreeObstacle::from_root(quadtree.bbox, obstacles_map[okey], okey);
+        quadtree.register_obstacle(std::move(qt_obs), obstacles_map);
+        okey_exterior = okey;
+    }
+
     CollisionSnapshot save() const {
         CollisionSnapshot snap;
         obstacles_map.for_each([&](ObstacleKey, const Obstacle& h) { if (h.dynamic) snap.dynamic_hazards.push_back(h); });

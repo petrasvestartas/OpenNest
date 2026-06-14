@@ -93,13 +93,13 @@ struct RelaxWorker {
     SepStats relax_parts() {
         std::vector<PartKey> candidates;
         prob.layout.placed_parts.for_each([&](PartKey pk, const PlacedPart&) {
-            if (ct.get_loss(pk) > 0.0f) candidates.push_back(pk);
+            if (ct.has_loss(pk)) candidates.push_back(pk);
         });
         rng.shuffle(candidates);
 
         SepStats stats;
         for (PartKey pk : candidates) {
-            if (ct.get_loss(pk) > 0.0f) {
+            if (ct.has_loss(pk)) {
                 usize part_id = prob.layout.placed_parts[pk].part_id;
                 const Part& part = instance.part(part_id);
                 RelaxEvaluator evaluator(prob.layout, part, pk, ct);
@@ -238,6 +238,20 @@ struct Relaxer {
     SepStats relax_round() {
         ++g_iter_count; // one relaxation round (the unit of iteration-based termination); thread_local => per-start budget
         g_iter_pub.fetch_add(1, std::memory_order_relaxed); // global sum, host progress readout only
+        // workers==1 IN-PLACE fast path: best-of-1 needs no master snapshot and no best-pick — run
+        // the single worker directly ON the master state by move-stealing it in and out. The baseline
+        // path costs 2 full layout snapshots + 2 tracker copies per round (prob.save -> load-restore
+        // -> save -> restore), all of which reproduce the identical state at best-of-1. The worker's
+        // own Rng advances exactly as before, so this is state- and result-identical, copy-free.
+        if (workers.size() == 1) {
+            RelaxWorker& w = workers[0];
+            w.prob = std::move(prob);
+            w.ct = std::move(ct);
+            SepStats report = w.relax_parts();
+            prob = std::move(w.prob);
+            ct = std::move(w.ct);
+            return report;
+        }
         StripSolution master_sol = prob.save();
         // Run the N independent workers in parallel (result-identical to serial best-of-N).
         std::vector<SepStats> per_worker(workers.size());
@@ -281,15 +295,49 @@ struct Relaxer {
         prob.layout.placed_parts.for_each([&](PartKey k, const PlacedPart& pi) {
             if (pi.shape->centroid().x > split) to_shift.emplace_back(k, pi.d_transf);
         });
+        // SILENT shift: move the geometry (remove+place updates the engine exactly like
+        // relocate_part) but skip the per-part tracker recompute — the engine is rebuilt and the
+        // tracker re-derived right below, so relocate_part's O(collisions) query per shifted part
+        // was pure waste. Remember (old,new) key pairs for the incremental tracker rebuild.
+        std::vector<std::pair<PartKey, PartKey>> remaps;
+        remaps.reserve(to_shift.size());
         for (auto& [pik, dtransf] : to_shift) {
             AffineTransform existing = dtransf.compose();
             AffineTransform nt = existing.translate(delta, 0.0f);
-            relocate_part(pik, nt.decompose());
+            usize part_id = prob.layout.placed_parts[pik].part_id;
+            prob.remove_item(pik);
+            PartKey new_pk = prob.place_item(Placement{part_id, nt.decompose()});
+            remaps.emplace_back(pik, new_pk);
         }
         prob.change_strip_width(new_width);
-        ct = OverlapTracker(prob.layout);
-        for (auto& w : workers)
-            w = RelaxWorker{instance, prob, ct, Rng(rng.next_u64()), config.sample_config};
+        // Incremental tracker rebuild: only shifted parts + wall-straddlers are re-queried;
+        // unshifted pair/hole losses are bit-unchanged (see rebuild_after_width_change).
+        ct.rebuild_after_width_change(prob.layout, remaps);
+#if defined(VERIFY_INCREMENTAL)
+        {
+            OverlapTracker fresh(prob.layout);
+            std::vector<PartKey> pks;
+            prob.layout.placed_parts.for_each([&](PartKey pk, const PlacedPart&) { pks.push_back(pk); });
+            for (usize a = 0; a < pks.size(); ++a) {
+                f32 ci = ct.get_container_loss(pks[a]), cf = fresh.get_container_loss(pks[a]);
+                if (std::fabs(ci - cf) > 1e-4f * max_f(1.0f, cf))
+                    std::fprintf(stderr, "[VERIFY] container loss mismatch part %zu: inc=%g fresh=%g\n", a, ci, cf);
+                for (usize b = a + 1; b < pks.size(); ++b) {
+                    f32 pi_ = ct.get_pair_loss(pks[a], pks[b]), pf = fresh.get_pair_loss(pks[a], pks[b]);
+                    if (std::fabs(pi_ - pf) > 1e-4f * max_f(1.0f, pf))
+                        std::fprintf(stderr, "[VERIFY] pair loss mismatch (%zu,%zu): inc=%g fresh=%g\n", a, b, pi_, pf);
+                }
+            }
+        }
+#endif
+        // Worker refresh. At workers==1 the relax_round fast path move-OVERWRITES the worker's
+        // prob/ct before reading them (write-before-read), so the deep copy here (Layout + quadtree
+        // + O(N^2) tracker) is dead work — reseed only the RNG, consuming rng.next_u64() exactly as
+        // the full refresh would (keeps the deterministic seed stream byte-identical).
+        for (auto& w : workers) {
+            if (workers.size() == 1) w.rng = Rng(rng.next_u64());
+            else w = RelaxWorker{instance, prob, ct, Rng(rng.next_u64()), config.sample_config};
+        }
     }
 };
 

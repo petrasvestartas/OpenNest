@@ -44,6 +44,7 @@ namespace nest_lib
             var pvc = new List<int>();
             var pxy = new List<double>();
             var pqty = new List<int>();
+            var prot = new List<int>();   // per-part rotation-count override (0 = inherit)
             var phc = new List<int>();
             var phvc = new List<int>();
             var phxy = new List<double>();
@@ -53,6 +54,7 @@ namespace nest_lib
                 pvc.Add(rep.Points.Length);
                 foreach (var p in rep.Points) { pxy.Add(p.x); pxy.Add(p.y); }
                 pqty.Add(instancesBySource[s].Count);
+                prot.Add(Math.Max(0, rep.rotationCount));
                 int nh = rep.children != null ? rep.children.Count : 0;
                 phc.Add(nh);
                 if (rep.children != null)
@@ -138,7 +140,7 @@ namespace nest_lib
 
             NfpNestWrapper.nfp_cancel_reset();
 
-            int[] pvcA = pvc.ToArray(), pqtyA = pqty.ToArray(), phcA = phc.ToArray(), phvcA = phvc.ToArray();
+            int[] pvcA = pvc.ToArray(), pqtyA = pqty.ToArray(), protA = prot.ToArray(), phcA = phc.ToArray(), phvcA = phvc.ToArray();
             double[] pxyA = pxy.ToArray(), phxyA = phxy.ToArray();
             int[] svcA = svc.ToArray(), shcA = shc.ToArray(), shvcA = shvc.ToArray();
             double[] sxyA = sxy.ToArray(), shxyA = shxy.ToArray();
@@ -146,7 +148,7 @@ namespace nest_lib
             var solveTask = Task.Run(() =>
             {
                 placed = NfpNestWrapper.nfp_nest(
-                    G, pvcA, pxyA, pqtyA, phcA, phvcA, phxyA,
+                    G, pvcA, pxyA, pqtyA, protA, phcA, phvcA, phxyA,
                     S, svcA, sxyA, shcA, shvcA, shxyA,
                     ref pr, tx, ty, ang, sid, pidx, out nSheets, out fitness);
             });

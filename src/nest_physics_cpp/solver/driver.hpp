@@ -53,12 +53,14 @@ inline ShapeModifyConfig part_modify() {
     ShapeModifyConfig m; m.simplify_tolerance = 0.001f; m.narrow_concavity_cutoff = std::make_pair(0.01f, 0.01f); return m;
 }
 
-// Build a Part from a raw polyline (FREE continuous rotation). nullopt if degenerate.
+// Build a Part from a raw polyline. Default = FREE continuous rotation; rotation_count > 0
+// restricts the part to N DISCRETE orientations (2π/N step; 1 = fixed at 0 rad — e.g. grain
+// direction). nullopt if degenerate.
 // If `input_centroid` is non-null it receives the centroid of the ORIGINAL (un-shifted) input;
 // translate(-input_centroid) is exactly the part->internal pre-transform (used by the C ABI to
 // report a single rigid transform mapping the host's original geometry to its placed pose).
 inline std::optional<Part> build_part(usize id, std::vector<Point> pts, Point* input_centroid = nullptr,
-                                      const ShapeModifyConfig* mc = nullptr) {
+                                      const ShapeModifyConfig* mc = nullptr, int rotation_count = 0) {
     f32 mnx = F32_MAX, mny = F32_MAX;
     for (auto& p : pts) { mnx = min_f(mnx, p.x); mny = min_f(mny, p.y); }
     for (auto& p : pts) { p.x -= mnx; p.y -= mny; }
@@ -77,7 +79,15 @@ inline std::optional<Part> build_part(usize id, std::vector<Point> pts, Point* i
         os.pre_transform = RigidTransform(0.0f, -c.x, -c.y); // center at origin (matches nest import)
         os.modify_mode = ShapeModifyMode::Inflate;
         os.modify_config = mc ? *mc : part_modify(); // exe passes nullptr -> identical default
-        return Part::make(id, std::move(os), RotationRange::continuous(), std::nullopt, surrogate_config());
+        RotationRange rr = RotationRange::continuous();
+        if (rotation_count > 0) {
+            std::vector<f32> angles;
+            angles.reserve(static_cast<usize>(rotation_count));
+            const f32 step = (2.0f * PI_F) / static_cast<f32>(rotation_count);
+            for (int k = 0; k < rotation_count; ++k) angles.push_back(static_cast<f32>(k) * step);
+            rr = RotationRange::discrete_of(std::move(angles));
+        }
+        return Part::make(id, std::move(os), std::move(rr), std::nullopt, surrogate_config());
     } catch (const std::exception& e) {
         std::fprintf(stderr, "  skip part %zu: %s\n", id, e.what());
         return std::nullopt;

@@ -358,6 +358,7 @@ extern "C" NP_EXPORT int np_nest(
     int           part_count,
     const int*    part_vertex_counts,
     const double* part_xy,
+    const int*    part_rotations,
     int           sheet_count,
     const int*    sheet_outer_vertex_counts,
     const double* sheet_outer_xy,
@@ -424,9 +425,11 @@ extern "C" NP_EXPORT int np_nest(
         g_pole_max  = preview ? 12u : (P.pole_max > 0 ? (unsigned)P.pole_max : 0u);
         if (const char* e = std::getenv("NP_POLES")) { int p = std::atoi(e); if (p > 0) g_pole_max = (unsigned)p; }
 
-        // spacing -> inflate each part by spacing/2 so two neighbours keep `spacing` apart.
+        // NOTE: part spacing/offset is applied UPSTREAM by the host (Grasshopper offsets parts &
+        // sheets with their dedicated components and passes the already-offset outline here). The
+        // solver does NOT offset: ShapeModifyConfig::offset stays unset so the unported offset_shape
+        // stub is never reached. P.spacing is accepted for ABI stability but intentionally ignored.
         ShapeModifyConfig mc = part_modify();
-        if (P.spacing > 0.0) mc.offset = (f32)(P.spacing * 0.5);
         if (P.simplify_tolerance > 0.0) mc.simplify_tolerance = (f32)P.simplify_tolerance;
 
         // Build parts. Degenerate parts are skipped and stay unplaced (sheet id -1). `craw`/`orig_index`
@@ -456,7 +459,10 @@ extern "C" NP_EXPORT int np_nest(
                 }
             }
             Point cc;
-            auto p = build_part(parts.size(), std::move(pts), &cc, &mc);
+            // Per-part rotation override: N>0 restricts this part to N discrete orientations
+            // (RotationRange::discrete_of); 0/NULL keeps free continuous rotation as before.
+            int rot_n = (part_rotations && part_rotations[i] > 0) ? part_rotations[i] : 0;
+            auto p = build_part(parts.size(), std::move(pts), &cc, &mc, rot_n);
             if (p) {
                 parts.emplace_back(std::move(*p), 1); craw.push_back(cc); orig_index.push_back(i);
                 // Centered part-holes (input hole - input centroid) kept in a SIDE-TABLE parallel to
