@@ -50,5 +50,11 @@ namespace opennest_gh2
     {
         public OpenNestGh2RhinoPlugin() { Instance = this; }
         public static OpenNestGh2RhinoPlugin Instance { get; private set; }
+
+        // Do NOT load at Rhino startup. At startup Grasshopper 2 hasn't loaded Grasshopper2.dll yet, so
+        // Rhino enumerating this assembly's (GH2-derived) types throws -> "application initialization failed".
+        // Loading WhenNeeded defers it until Grasshopper 2 pulls it in (via its RhinoPluginInclude list), by
+        // which point Grasshopper2.dll is loaded and the GH2 types resolve cleanly.
+        public override PlugInLoadTime LoadTime => PlugInLoadTime.WhenNeeded;
     }
 }
