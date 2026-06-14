@@ -133,3 +133,22 @@ a[href*="ko-fi.com"] img:hover {
 [data-md-color-scheme="slate"] .md-typeset a:focus {
   color: #f06292;
 }
+
+/* ---- One-line header: section tabs inline with logo / title / search (overrides/partials/header.html) ---- */
+@media screen and (min-width: 76.25em) {
+  .md-header__title { flex: 0 1 auto; min-width: 0; }            /* title takes only its width */
+  .md-header__inner > .md-tabs {                                 /* tabs now live in the flex header row */
+    position: static;
+    margin: 0 auto 0 .8rem;                                      /* gap after title; auto-right pushes search to the edge */
+    width: auto;
+    background: transparent;
+    box-shadow: none;
+    overflow: visible;
+  }
+  .md-header__inner > .md-tabs .md-grid { margin: 0; padding: 0; max-width: none; }
+  .md-header__inner > .md-tabs .md-tabs__list { margin: 0; padding: 0; height: auto; white-space: nowrap; }
+  .md-header__inner > .md-tabs .md-tabs__item { height: auto; padding-top: 0; padding-bottom: 0; }
+  .md-header__inner > .md-tabs .md-tabs__link { margin: 0; padding: .2rem .1rem; font-size: .72rem; opacity: .82; }
+  .md-header__inner > .md-tabs .md-tabs__link:hover,
+  .md-header__inner > .md-tabs .md-tabs__link--active { opacity: 1; }
+}
