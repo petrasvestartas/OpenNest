@@ -24,7 +24,7 @@ namespace opennest_gh2.components
 
         // First 7 inputs are FIXED (mirror GH1); +/- only adds/removes extra Attributes ports after them.
         private const int FIXED_INPUTS = 7;
-        private const int ROTATIONS_INPUT = 6;   // fixed integer port, not an attribute tree
+        private const int ROTATIONS_INPUT = 5;   // fixed integer port (before Attributes), not an attribute tree
 
         protected override void AddInputs(InputAdder inputs)
         {
@@ -37,13 +37,13 @@ namespace opennest_gh2.components
             inputs.AddBoolean("Hull", "H", "Replace each part's NESTING boundary with its convex hull.", Access.Tree, Requirement.MayBeMissing).Set(false);
             inputs.AddInteger("Copies", "C", "Copies per part (one value, or one per part).", Access.Tree, Requirement.MayBeMissing).Set(1);
             inputs.AddNumber("Offset", "O", "Nesting clearance (model units; 0 = off). Outer grows / holes shrink so placed parts keep this gap — the ORIGINAL curves are still what get placed/output.", Access.Tree, Requirement.MayBeMissing).Set(0.0);
-            inputs.AddGeneric("Attributes", "A", "Extra geometry carried with each part (data-tree: one branch per part; flat list: applied to every part). Use the +/- on the component to add more Attributes inputs.", Access.Tree, Requirement.MayBeMissing);
             inputs.AddInteger("Rotations", "R",
                 "OPTIONAL per-part rotation constraint (one value, or one per part, repeats like Copies).\n" +
                 "Empty / 0 = part inherits the solver's global Rotations setting (default).\n" +
                 "N > 0 = THIS part may only use N orientations (360/N degree steps); 1 = fixed, no rotation.\n" +
                 "Lets rectangular parts stay at 4 orientations while freeform parts rotate freely in ONE nest.",
                 Access.Tree, Requirement.MayBeMissing).Set(0);
+            inputs.AddGeneric("Attributes", "A", "Extra geometry carried with each part (data-tree: one branch per part; flat list: applied to every part). Use the +/- on the component to add more Attributes inputs.", Access.Tree, Requirement.MayBeMissing);
         }
 
         protected override void AddOutputs(OutputAdder outputs)
@@ -77,7 +77,8 @@ namespace opennest_gh2.components
             access.GetTree(ROTATIONS_INPUT, out Tree<int> rotT);
             var rotVals = NestGh2Util.AllOr(rotT, 0);
 
-            // Every Attributes port (base index 5 + any +/- variable ports) as a tree of geometry, by branch.
+            // Every Attributes port (base "Attributes" at index 6 + any +/- variable ports at 7+) as a tree of
+            // geometry, by branch. Scan from index 5 and skip the scalar Rotations port (now at index 5).
             var attrTrees = new List<GeometryBase[][]>();
             for (int ai = 5; ai < Parameters.InputCount; ai++)
             {

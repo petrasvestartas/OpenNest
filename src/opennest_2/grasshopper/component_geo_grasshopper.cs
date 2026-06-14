@@ -68,7 +68,6 @@ namespace opennest_2
             pManager.AddBooleanParameter("Hull", "Hull", "Replace each outline with its convex hull", GH_ParamAccess.item, false );
             pManager.AddIntegerParameter("Copies", "Copies", "Number of copies per part", GH_ParamAccess.list);
             pManager.AddNumberParameter("Offset", "Offset", "Clearance offset for NESTING only (model units; 0 = OFF, fast).\nParts: outer grows / holes shrink so placed parts keep this gap.\nThe ORIGINAL curves are still what get placed/output.", GH_ParamAccess.item, 0);
-            pManager.AddGeometryParameter("Attributes", "Attributes", "Additional geometry: points, lines, surfaces, meshes... \nUse data-tree, one list of additional geometry per branch..", GH_ParamAccess.tree);
             pManager.AddIntegerParameter("Rotations", "Rotations",
                 "OPTIONAL per-part rotation constraint (one value per part, repeats like Copies).\n" +
                 "Empty / 0 = part inherits the solver's global Rotations setting (default).\n" +
@@ -76,6 +75,7 @@ namespace opennest_2
                 "1 = fixed, no rotation (e.g. grain direction).\n" +
                 "Lets rectangular parts stay at 4 orientations while freeform parts rotate freely in ONE nest.",
                 GH_ParamAccess.list);
+            pManager.AddGeometryParameter("Attributes", "Attributes", "Additional geometry: points, lines, surfaces, meshes... \nUse data-tree, one list of additional geometry per branch..", GH_ParamAccess.tree);
 
             pManager[1].Optional = true;
             pManager[2].Optional = true;
@@ -196,9 +196,11 @@ namespace opennest_2
             var geo_current = new GH_Structure<IGH_GeometricGoo>();
             bool result = DA.GetDataTree<IGH_GeometricGoo>(0, out geo_current);
 
-            // Read the base "Attributes" tree (input 5) PLUS every extra "Attributes N" port added via
-            // the component's +/- zoom (inputs 6..N). Each port is an independent attribute source; a
-            // part collects from ALL of them (by path + sub-branches).
+            // Read the base "Attributes" tree PLUS every extra "Attributes N" port added via the
+            // component's +/- zoom. Each port is an independent attribute source; a part collects from
+            // ALL of them (by path + sub-branches). Scan from the first fixed attribute slot (index 5)
+            // and skip the scalar "Rotations" port by name, so this is order-independent (Rotations may
+            // sit before or after the base Attributes port depending on when the instance was saved).
             var attrTrees = new List<GH_Structure<IGH_GeometricGoo>>();
             for (int ai = 5; ai < Params.Input.Count; ai++)
             {
@@ -380,15 +382,21 @@ namespace opennest_2
 
         //////////////////////////////////////////////////////////////////////////////////////////ZoomableComponent
 
-        // The fixed inputs (Outlines, Simplify, Hull, Copies, Offset, Attributes [, Rotations]) are
-        // locked; +/- only ever adds/removes EXTRA attribute ports AFTER them. The boundary is found
-        // BY NAME so component instances saved BEFORE the Rotations input existed (their param list
-        // ends at Attributes) keep their extra ports working at the old indices.
+        // The fixed inputs (Outlines, Simplify, Hull, Copies, Offset, Rotations, Attributes) are locked;
+        // +/- only ever adds/removes EXTRA attribute ports AFTER them. Extras always follow the BASE
+        // "Attributes" port, found BY NAME so this is robust to component instances saved by older builds:
+        //   - before Rotations existed        -> ...Offset, Attributes(5), extras(6+)
+        //   - Rotations AFTER Attributes       -> ...Attributes(5), Rotations(6), extras(7+)
+        //   - current: Rotations BEFORE Attrs  -> ...Rotations(5), Attributes(6), extras(7+)
         private int FirstExtraIndex()
         {
+            int baseAttr = -1;
             for (int i = 0; i < Params.Input.Count; i++)
-                if (Params.Input[i].Name == "Rotations") return i + 1;
-            return 6;   // legacy layout: extras start right after Attributes (index 5)
+                if (Params.Input[i].Name == "Attributes") { baseAttr = i; break; }
+            if (baseAttr < 0) return Params.Input.Count;          // no base port (shouldn't happen)
+            int j = baseAttr + 1;
+            if (j < Params.Input.Count && Params.Input[j].Name == "Rotations") j++;   // legacy: Rotations sits after Attributes
+            return j;
         }
 
         // + is only offered at the end (index >= first extra), so inserting can't shift fixed inputs.
