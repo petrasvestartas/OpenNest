@@ -8,6 +8,9 @@ GitHub Releases. Each entry describes what the release actually changed.
 > the previous tag), so a clear commit subject per push becomes the changelog line — refine an entry
 > here anytime if you want more detail.
 
+## [2.82.0.0] - 2026-06-14
+- docs(home): nicer coffee-cup icon + thicker pink outline on the ko-fi pill
+
 ## [2.80.0.0] - 2026-06-14
 - docs(home): subtle pink ko-fi pill (black text) instead of the badge image
 
