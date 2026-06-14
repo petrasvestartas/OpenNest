@@ -8,6 +8,11 @@ GitHub Releases. Each entry describes what the release actually changed.
 > the previous tag), so a clear commit subject per push becomes the changelog line — refine an entry
 > here anytime if you want more detail.
 
+## [2.74.0.0] - 2026-06-14
+- docs
+- docs(grasshopper2): swap deleted gh2_1/2/3 screenshots for opennest2 + opennest_collsions
+- docs(grasshopper2): Rhino 9 WIP manual-install walkthrough + screenshots
+
 ## [2.73.0.0] - 2026-06-14
 - Improvements of solvers, options component, unify api across python, cpp, csharp, rotations options, run two solver in parallel
 - docs/api/python: restructure into the same 8-example layout as the C++ and C# pages (split the monolithic python.md into an Overview + one page per example: 01 collision, 02 nfp+ga, 03 live animation, 04 clearance offset, 05 attributes, 06 pack array, 07 pack distance, 08 text). Mirrors the compas_nest examples; keeps the hero image and the full Rhino 8 Script Editor context (# r: compas_nest install, Scene drawing, install paths, API reference). mkdocs nav + landing-page links updated
