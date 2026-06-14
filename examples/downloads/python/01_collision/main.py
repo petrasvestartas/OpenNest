@@ -1,13 +1,3 @@
-# 01 · Collision
-
-Nest a mix of parts — bars, a square with a hole, strips, triangles and an L — onto a sheet with a hole, with the
-physics (collision) engine. Sheet outlines are drawn black, the placed parts blue.
-
-Project: [Download `01_collision.zip`](downloads/01_collision.zip) — standalone (Windows `run.bat`, macOS/Linux `./run.command`; the run scripts `pip install` compas_nest). Or paste straight into the Rhino 8 Script Editor:
-
-Paste into the Rhino 8 **Script Editor** (Python 3); `# r: compas_nest` installs the package on first **Run**. [compas_nest source](https://github.com/petrasvestartas/compas_nest/blob/main/examples/01_collision_viewer.py)
-
-```python
 #! python3
 # r: compas_nest
 
@@ -51,4 +41,3 @@ for group in result.placed_polylines():
         for hole in part["holes"]:
             scene.add(hole, color=BLUE)
 scene.draw()
-```

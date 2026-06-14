@@ -1,13 +1,3 @@
-# 05 · Attributes
-
-Several parts, each carrying a centroid `Point` as an **attribute**; it's transformed with the part and drawn in
-red. Any COMPAS geometry can ride along this way. Sheet outlines (with the hole) are drawn black.
-
-Project: [Download `05_attributes.zip`](downloads/05_attributes.zip) — standalone (Windows `run.bat`, macOS/Linux `./run.command`; the run scripts `pip install` compas_nest). Or paste straight into the Rhino 8 Script Editor:
-
-Paste into the Rhino 8 **Script Editor** (Python 3); `# r: compas_nest` installs the package on first **Run**. [compas_nest source](https://github.com/petrasvestartas/compas_nest/blob/main/examples/05_attributes.py)
-
-```python
 #! python3
 # r: compas_nest
 
@@ -58,4 +48,3 @@ for group in result.placed_polylines():
         for attribute in part["attributes"]:
             scene.add(attribute, color=RED)
 scene.draw()
-```
