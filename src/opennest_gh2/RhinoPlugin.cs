@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -7,54 +8,69 @@ using Rhino.PlugIns;
 
 namespace opennest_gh2
 {
-    // This assembly is a Grasshopper 2 component library, but it ships inside a Yak package, so Rhino's
-    // plug-in manager scans its .rhp at startup and tries to load it as a Rhino plug-in. Two things are
-    // needed so that load succeeds silently (no "initialization failed" popup), while Grasshopper 2 still
-    // loads the components normally:
-    //
-    //   1) A Rhino.PlugIns.PlugIn subclass (below) — Rhino requires one in any .rhp it loads.
-    //   2) A module initializer that can resolve Grasshopper2 / GrasshopperIO. Rhino enumerates this
-    //      assembly's types (Assembly.GetTypes()) to find the PlugIn; that loads the base type of the GH2
-    //      Plugin/components (Grasshopper2.Framework.*). At Rhino's plug-in-load time Grasshopper2.dll is
-    //      not in the AppDomain yet (it loads with the Grasshopper2 plug-in), so without help GetTypes throws
-    //      and Rhino reports init failure. The resolver finds the assemblies in Rhino's own GH2 folder.
+    // OpenNest is a Grasshopper 2 component library shipped in a Yak package, so Rhino's plug-in manager
+    // loads its .rhp in a load context that — unlike GH2's own Components folder — does not have Rhino's UI
+    // assemblies (Eto, Grasshopper2, GrasshopperIO, RhinoCommon) on its probing path. Enumerating this
+    // assembly's types then fails to resolve e.g. Eto 2.11.0.0 -> Rhino reports "application initialization
+    // failed". The module initializer below installs an assembly resolver (BEFORE the type enumeration that
+    // needs them) that finds those host assemblies in the running Rhino's own folders. It also writes a boot
+    // log so load failures are diagnosable.
     internal static class Gh2AssemblyResolver
     {
+        static readonly string Log = Path.Combine(Path.GetTempPath(), "opennest_gh2_boot.log");
+        static void W(string m) { try { File.AppendAllText(Log, DateTime.Now.ToString("HH:mm:ss.fff") + "  " + m + "\n"); } catch { } }
+
         [ModuleInitializer]
         internal static void Init()
         {
+            W("module init");
+            string root = null;
+            try { root = Path.GetDirectoryName(Path.GetDirectoryName(System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName)); } catch { }
+            // Fallback: derive the Rhino root from a loaded RhinoCommon, if present.
+            if (root == null) {
+                var rc = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(a => a.GetName().Name == "RhinoCommon");
+                if (rc != null) { try { root = Path.GetDirectoryName(Path.GetDirectoryName(rc.Location)); } catch { } }
+            }
+            W("rhino root = " + (root ?? "<null>"));
+
+            // This plug-in's own folder (the package / Components folder) holds opennest_2.gha + the native
+            // DLLs; Rhino's folders hold the host assemblies (Eto, Grasshopper2, GrasshopperIO, RhinoCommon).
+            string self = null;
+            try { self = Path.GetDirectoryName(typeof(Gh2AssemblyResolver).Assembly.Location); } catch { }
+            string[] dirs = (new[] {
+                self,
+                root == null ? null : Path.Combine(root, "Plug-ins", "Grasshopper2", "net8.0"),
+                root == null ? null : Path.Combine(root, "System", "netcore"),
+                root == null ? null : Path.Combine(root, "System"),
+            }).Where(x => !string.IsNullOrEmpty(x)).ToArray();
+
             AppDomain.CurrentDomain.AssemblyResolve += (sender, args) =>
             {
                 string name = new AssemblyName(args.Name).Name;
-                if (name != "Grasshopper2" && name != "GrasshopperIO") return null;
-                try
-                {
-                    // <Rhino install>\System\Rhino.exe -> <Rhino install>\Plug-ins\Grasshopper2\<tfm>\<name>.dll
-                    string exe = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
-                    string root = Path.GetDirectoryName(Path.GetDirectoryName(exe));
-                    if (root == null) return null;
-                    foreach (string tfm in new[] { "net8.0", "net7.0", "net48" })
+                if (name.EndsWith(".resources", StringComparison.OrdinalIgnoreCase)) return null; // satellite probes: expected to miss
+                foreach (var d in dirs)
+                    foreach (var ext in new[] { ".dll", ".gha", ".rhp" })
                     {
-                        string p = Path.Combine(root, "Plug-ins", "Grasshopper2", tfm, name + ".dll");
-                        if (File.Exists(p)) return Assembly.LoadFrom(p);
+                        var p = Path.Combine(d, name + ext);
+                        if (File.Exists(p)) { W("resolved " + name + " <- " + p); try { return Assembly.LoadFrom(p); } catch (Exception e) { W("  load failed: " + e.Message); return null; } }
                     }
-                }
-                catch { }
+                W("UNRESOLVED " + name);
                 return null;
             };
+            W("resolver installed; dirs: " + string.Join(" | ", dirs));
         }
     }
 
     [Guid("c1d2e3f4-5a6b-4c7d-8e9f-0a1b2c3d4e5f")]
     public sealed class OpenNestGh2RhinoPlugin : PlugIn
     {
-        public OpenNestGh2RhinoPlugin() { Instance = this; }
+        public OpenNestGh2RhinoPlugin()
+        {
+            Instance = this;
+            try { File.AppendAllText(Path.Combine(Path.GetTempPath(), "opennest_gh2_boot.log"),
+                  DateTime.Now.ToString("HH:mm:ss.fff") + "  PlugIn ctor\n"); } catch { }
+        }
         public static OpenNestGh2RhinoPlugin Instance { get; private set; }
-
-        // Do NOT load at Rhino startup. At startup Grasshopper 2 hasn't loaded Grasshopper2.dll yet, so
-        // Rhino enumerating this assembly's (GH2-derived) types throws -> "application initialization failed".
-        // Loading WhenNeeded defers it until Grasshopper 2 pulls it in (via its RhinoPluginInclude list), by
-        // which point Grasshopper2.dll is loaded and the GH2 types resolve cleanly.
         public override PlugInLoadTime LoadTime => PlugInLoadTime.WhenNeeded;
     }
 }
