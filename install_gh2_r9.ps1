@@ -21,7 +21,7 @@ if (-not $admin) {
 }
 
 $repo = $PSScriptRoot
-$gh2  = Join-Path $repo "src\opennest_gh2\bin\Release\net8.0-windows"
+$gh2  = Join-Path $repo "src\opennest_gh2\bin\Release\net8.0"   # portable net8.0 (no WindowsDesktop.App framework demand)
 $gh1  = Join-Path $repo "src\opennest_2\bin\Release\net7.0-windows"
 
 # Locate the Rhino 9 (WIP or release) net8 Grasshopper 2 Components folder.

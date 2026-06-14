@@ -225,8 +225,11 @@ jobs:
       - name: Build Windows OpenNest_GH2 Yak package (rh9)
         shell: pwsh
         run: |
-          $gh2 = "src/opennest_gh2/bin/Release/net8.0-windows"
-          if (-not (Test-Path "$gh2/opennest_gh2.rhp")) { Write-Host "opennest_gh2.rhp (win) not found - skipping OpenNest_GH2 (win)."; exit 0 }
+          # Portable net8.0 (NOT net8.0-windows): its runtimeconfig requires only Microsoft.NETCore.App.
+          # The net8.0-windows flavor demands Microsoft.WindowsDesktop.App, which fails the GH2 plug-in's
+          # load init on Rhino 9 ("application initialization failed") before any code runs.
+          $gh2 = "src/opennest_gh2/bin/Release/net8.0"
+          if (-not (Test-Path "$gh2/opennest_gh2.rhp")) { Write-Host "opennest_gh2.rhp not found - skipping OpenNest_GH2 (win)."; exit 0 }
           $stage = "yak_gh2_win"
           New-Item -ItemType Directory -Force $stage | Out-Null
           Copy-Item "src/opennest_2/bin/Release/net7.0-windows/*" $stage -Recurse -Force
