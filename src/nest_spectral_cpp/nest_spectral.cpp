@@ -8,8 +8,43 @@
 #include <chrono>
 #include "spectral/grid.hpp"
 #include "spectral/packer.hpp"
+#include "spectral/voxelize.hpp"
 
 using namespace nsp;
+
+// An axis-aligned box mesh [0,a]x[0,b]x[0,c] as 8 verts + 12 triangles (winding-agnostic voxelizer).
+static void make_box_mesh(double a, double b, double c, std::vector<double>& V, std::vector<int>& T) {
+    V = {0,0,0, a,0,0, a,b,0, 0,b,0, 0,0,c, a,0,c, a,b,c, 0,b,c};
+    T = {0,1,2, 0,2,3,  4,6,5, 4,7,6,  0,4,5, 0,5,1,
+         3,2,6, 3,6,7,  0,3,7, 0,7,4,  1,5,6, 1,6,2};
+}
+
+static int mesh_test() {
+    std::vector<double> V; std::vector<int> T;
+    make_box_mesh(10, 10, 10, V, T);
+    VoxelizeResult r = voxelize_mesh(V.data(), (int)V.size() / 3, T.data(), (int)T.size() / 3, 1.0);
+    long long occ = r.grid.occupied();
+    long long expect = (long long)r.grid.nx * r.grid.ny * r.grid.nz;
+    std::cout << "meshtest: 10^3 cube @ pitch 1 -> grid " << r.grid.nx << "x" << r.grid.ny << "x" << r.grid.nz
+              << "  occupied=" << occ << "/" << expect
+              << (occ == expect ? "  OK (solid fill)\n" : "  FILL ERROR\n");
+    // Pack a few voxelized boxes of different sizes to exercise the mesh->pack path.
+    std::vector<Grid> items;
+    const double bx[][3] = {{10,8,6}, {6,6,12}, {14,4,4}, {8,8,8}};
+    for (int n = 0; n < 8; n++) {
+        const double* s = bx[n % 4];
+        make_box_mesh(s[0], s[1], s[2], V, T);
+        items.push_back(voxelize_mesh(V.data(), (int)V.size()/3, T.data(), (int)T.size()/3, 1.0).grid);
+    }
+    SpectralParams p; p.num_orientations = 6; p.nthreads = 4;
+    Grid tray;
+    auto places = pack(items, 30, 30, 30, p, tray);
+    long long np = 0, pv = 0;
+    for (auto& pl : places) if (pl.placed) { np++; pv += items[pl.item_index].occupied(); }
+    std::cout << "meshtest pack: placed " << np << "/8  density " << (int)(100*packing_density(tray)+0.5)
+              << "%  integrity " << (tray.occupied()==pv ? "OK" : "FAIL") << "\n";
+    return (occ == expect && tray.occupied() == pv) ? 0 : 1;
+}
 
 static Grid make_box(int a, int b, int c) {
     Grid g(a, b, c);
@@ -39,6 +74,7 @@ int main(int argc, char** argv) {
         else if (a == "--orient")  orient  = next(orient);
         else if (a == "--items")   nitems  = next(nitems);
         else if (a == "--threads") threads = (size_t)next((int)threads);
+        else if (a == "--meshtest") return mesh_test();
     }
 
     // Deterministic synthetic item set: cycle through a few box/L sizes.
