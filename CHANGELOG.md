@@ -8,6 +8,9 @@ GitHub Releases. Each entry describes what the release actually changed.
 > the previous tag), so a clear commit subject per push becomes the changelog line — refine an entry
 > here anytime if you want more detail.
 
+## [2.79.0.0] - 2026-06-14
+- docs(home): add the OpenNest logo above the intro paragraph
+
 ## [2.78.0.0] - 2026-06-14
 - docs: inline header tabs (one-line header) + rewrite Build & Publish
 
