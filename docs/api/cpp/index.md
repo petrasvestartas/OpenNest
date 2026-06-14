@@ -1,4 +1,4 @@
-# C++ API
+# C++ Examples
 
 Two native engines through a plain **C ABI**. You give part + sheet polygons; you get back, per
 part, *move by (tx, ty)*, *rotate by an angle*, and *which sheet*. Angle is **degrees** for
