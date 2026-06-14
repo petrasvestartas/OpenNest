@@ -157,26 +157,31 @@ a[href*="ko-fi.com"] img:hover {
 .home-logo { display: inline-block; margin: .4rem 0 .8rem; }
 [data-md-color-scheme="slate"] .home-logo { filter: invert(1); }
 
-/* Buy-me-a-coffee: a subtle pink pill with black text (☕ = the clickable "logo"). */
+/* Buy-me-a-coffee: an OUTLINE-ONLY pink pill — very subtle (☕ = the clickable "logo"). */
 .md-typeset a.kofi-btn {
   display: inline-flex;
   align-items: center;
   gap: .35rem;
-  padding: .28rem .8rem;
+  padding: .2rem .7rem;
   border-radius: 999px;
-  background: #ffb3c7;                 /* soft pink */
-  color: #000;                          /* black letters */
-  font-size: .72rem;
-  font-weight: 700;
+  background: transparent;
+  border: 1px solid #efa9bf;            /* thin pink outline */
+  color: #000;                           /* black letters */
+  font-size: .68rem;
+  font-weight: 600;
   letter-spacing: .01em;
   text-decoration: none;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, .14);
-  transition: background .15s ease, transform .15s ease, box-shadow .15s ease;
+  opacity: .85;
+  transition: opacity .15s ease, background .15s ease, border-color .15s ease;
 }
 .md-typeset a.kofi-btn:hover,
 .md-typeset a.kofi-btn:focus {
-  background: #ff96b3;                  /* a touch deeper on hover */
+  background: rgba(216, 27, 96, .06);    /* barely-there pink wash */
+  border-color: #d81b60;
   color: #000;
-  transform: translateY(-1px);
-  box-shadow: 0 3px 9px rgba(0, 0, 0, .2);
+  opacity: 1;
 }
+/* dark mode: keep the text readable (black would vanish), pink outline stays */
+[data-md-color-scheme="slate"] .md-typeset a.kofi-btn { color: #fff; border-color: #f48fb1; }
+[data-md-color-scheme="slate"] .md-typeset a.kofi-btn:hover,
+[data-md-color-scheme="slate"] .md-typeset a.kofi-btn:focus { color: #fff; }
