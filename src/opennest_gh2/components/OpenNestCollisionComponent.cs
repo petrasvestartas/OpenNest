@@ -38,20 +38,11 @@ namespace opennest_gh2.components
         // ESC / input-change / Stop -> ask the native solver to stop at the next round (keeps best-so-far).
         protected override void RequestCancel() { try { NestPhysics.NestPhysicsWrapper.np_cancel(); } catch { } }
 
-        // Read the standard "Run" boolean input (port 3) that drives the solve (replaces the on-canvas button).
-        protected override bool ReadRunInput(IDataAccess access) { access.GetItem(3, out bool run); return run; }
+        // Read the standard "Run" boolean input (port 4) that drives the solve (replaces the on-canvas button).
+        protected override bool ReadRunInput(IDataAccess access) { access.GetItem(4, out bool run); return run; }
 
-        private static List<NestOption> BuildCollisionOptions() => new List<NestOption>
-        {
-            NestOption.Number("num_of_rotations", "Rotations", 3600, 1, 3600, 0, "Orientations each part may try; more = tighter, slower."),
-            NestOption.Number("seed", "Seed", 100, 0, 100000, 0, "Random seed; change it if a run spills to a 2nd sheet."),
-            NestOption.Number("starts", "Starts", 1, 1, 64, 0, "Multi-start seeds; keeps densest, stops at first single-sheet."),
-            NestOption.Choice("element_holes", "Element Holes", new[] { "Off", "Fill", "Fill First" }, new[] { "0", "1", "2" }, 1, "Nest small ELEMENTS into larger elements' holes. Fill = after the nest; Fill First = pre-pack into holes before nesting. (Sheet holes are always kept out automatically.)"),
-            NestOption.Number("poles", "Poles", 48, 4, 64, 0, "Inscribed circles per part for collision tests; more = more accurate (cleaner pack), fewer = faster but can pack worse."),
-            NestOption.Choice("compact", "Compact", new[] { "Off", "Bottom-Left", "Multi" }, new[] { "0", "1", "2" }, 1, "Post-pack tightening slide."),
-            NestOption.Choice("fit", "Fit", new[] { "One sheet (max fill)", "All parts (fewest sheets)" }, new[] { "1", "0" }, 0, "One sheet = fill a SINGLE sheet as full as possible; parts that don't fit are placed OUTSIDE. All parts = use as many sheets as needed so nothing is left off."),
-            NestOption.Text("font", "Sheet Font", "MecSoft_Font-1 1", "Sheet-number label: font name + text size."),
-        };
+        // Exact GH1 option set — defined once in NestOptionCatalog (shared with GH1 and Nest Options).
+        private static List<NestOption> BuildCollisionOptions() => NestOptionCatalog.Collision();
 
         private int OptInt(string key, int def)
         { foreach (var o in _options) if (o.Key == key) return (int)Math.Round(o.Value); return def; }
@@ -69,6 +60,9 @@ namespace opennest_gh2.components
             inputs.AddGeneric("Sheets", "Sheets", "From OpenNest tab, use component Sheets.");
             inputs.AddGeneric("Geometry", "Geometry", "From OpenNest tab, use component Geometry.");
             inputs.AddInteger("Iterations", "Iterations", "Relaxation rounds; higher packs tighter but is slower. ~4000 = the tight all-on-one-sheet pack; lower for a quick rough preview.", Access.Item, Requirement.MayBeMissing).Set(4000);
+            // Optional wired options ("key value" strings, e.g. from the Nest Options component); they
+            // override the matching on-canvas option rows. MayBeMissing keeps pre-v2.73 files loading.
+            inputs.AddText("Options", "Options", NestOptionCatalog.OptionsInputDescription, Access.Twig, Requirement.MayBeMissing);
             inputs.AddBoolean("Run", "Run", "Wire a Boolean Toggle. TRUE = nest now; FALSE = hold the last result (toggle off then on to re-run after an input change). ESC also stops a running solve, keeping the best so far. (Options are still edited on the component body.)", Access.Item, Requirement.MayBeMissing).Set(false);
         }
 

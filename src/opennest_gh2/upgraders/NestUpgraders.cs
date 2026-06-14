@@ -23,8 +23,10 @@ namespace opennest_gh2.upgraders
                             if (d.Key == o.Key) { d.SelectedIndex = o.SelectedIndex; d.Value = o.Value; d.TextValue = o.TextValue; }
             }
             catch { }
-            // GH1 inputs Sheets/Geometry/Iterations -> GH2 0/1/2; 7 outputs 1:1.
-            Safe(() => component.TransferInputs(c, new[] { (0, 0), (1, 1), (2, 2) }));
+            // GH1 inputs map 1:1 (the GH1 component's own Read fixup always presents the 5-input layout
+            // Sheets/Geometry/Iterations/Options/Run, matching GH2); 7 outputs 1:1. Safe() tolerates older
+            // in-memory layouts where the trailing inputs don't exist.
+            Safe(() => component.TransferInputs(c, new[] { (0, 0), (1, 1), (2, 2), (3, 3), (4, 4) }));
             Safe(() => component.TransferOutputs(c, new[] { (0, 0), (1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6) }));
             Safe(() => component.TransferInstanceId(c));
             return c;
@@ -46,7 +48,8 @@ namespace opennest_gh2.upgraders
                             if (d.Key == o.Key) { d.SelectedIndex = o.SelectedIndex; d.Value = o.Value; d.TextValue = o.TextValue; }
             }
             catch { }
-            Safe(() => component.TransferInputs(c, new[] { (0, 0), (1, 1), (2, 2) }));
+            // Inputs map 1:1 (see OpenNestCollisionUpgrader: the GH1 Read fixup presents the 5-input layout).
+            Safe(() => component.TransferInputs(c, new[] { (0, 0), (1, 1), (2, 2), (3, 3), (4, 4) }));
             Safe(() => component.TransferOutputs(c, new[] { (0, 0), (1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6) }));
             Safe(() => component.TransferInstanceId(c));
             return c;

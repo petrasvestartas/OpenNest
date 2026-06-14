@@ -161,7 +161,7 @@ namespace opennest_gh2.components
         // ---- variable +/- Attributes input ports (same as the main Geometry component) ----
         public override bool CanCreateParameter(Side side, int index) => side == Side.Input && index >= FIXED_INPUTS;
         public override bool CanRemoveParameter(Side side, int index) => side == Side.Input && index >= FIXED_INPUTS;
-        public override void DoCreateParameter(Side side, int index)
+        public override void DoCreateParameter(Side side, int index, Grasshopper2.Undo.ActionList undo)
         {
             if (side != Side.Input) return;
             var p = new Grasshopper2.Parameters.Standard.GenericParameter(

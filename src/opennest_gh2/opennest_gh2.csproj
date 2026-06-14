@@ -1,16 +1,17 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- OpenNest for Grasshopper 2. The active GH2 (packages\8.0\Grasshopper2\manifest.txt) is
-       2.0.9231-wip.35834 and Rhino 8 loads its .NET 7 variant, so this targets net7.0-windows and compiles
-       against McNeel's official "Grasshopper2" reference-assembly NuGet (closest published version to the
-       installed 9231). Using the NuGet avoids the version skew (Eto/RhinoCommon) that HintPath references hit.
-       Reuses the existing nesting logic in opennest_2 via a ProjectReference (re-enabled after the spike loads). -->
+  <!-- OpenNest for Grasshopper 2 on RHINO 9. GH2 only really ships (and works) inside Rhino 9, so this
+       compiles against McNeel's official Rhino-9 "Grasshopper2" reference-assembly NuGet (9.0.x-wip), which
+       transitively pins the matching RhinoCommon 9.x. That RhinoCommon 9 reference is also what makes
+       `yak build` tag the OpenNest_GH2 package rh9 — so the Package Manager only offers it on Rhino 9+.
+       (The old Rhino-8 GH2 SDK, Grasshopper2 2.0.x-wip, is a vestigial dead end; see publish.yml.)
+       Reuses the existing nesting logic in opennest_2 via a ProjectReference. -->
 
   <PropertyGroup>
-    <!-- net7.0-windows for the Windows Yak package; net7.0 (portable) for the macOS package. The plugin uses
-         only cross-platform APIs (Eto, Rhino.Geometry, GH2), so the net7.0 build is cross-built on the Windows
-         CI runner — mirroring opennest_2 / opennest_commands. -->
-    <TargetFrameworks>net7.0-windows;net7.0</TargetFrameworks>
+    <!-- net8.0-windows for the Windows Yak package; net8.0 (portable) for the macOS package — Rhino 9 loads
+         the net8 flavor of GH2. The plugin uses only cross-platform APIs (Eto, Rhino.Geometry, GH2), so the
+         net8.0 build is cross-built on the Windows CI runner, mirroring opennest_2 / opennest_commands. -->
+    <TargetFrameworks>net8.0-windows;net8.0</TargetFrameworks>
     <TargetExt>.rhp</TargetExt>
     <EnableDynamicLoading>true</EnableDynamicLoading>
     <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
@@ -21,11 +22,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Self-consistent GH2 reference assemblies (Grasshopper2 + GrasshopperIO + matching RhinoCommon/Eto).
-         ExcludeAssets=runtime: the installed GH2 + Rhino supply these at load time. -->
-    <!-- The Grasshopper2 reference-assembly NuGet (closest published version to the installed 9231).
-         It transitively brings the matching RhinoCommon compile assets, so no explicit RhinoCommon ref. -->
-    <PackageReference Include="Grasshopper2" Version="2.0.9225-wip.14825" />
+    <!-- Self-consistent Rhino-9 GH2 reference assemblies (Grasshopper2 + GrasshopperIO + the pinned matching
+         RhinoCommon/Eto compile assets — no explicit RhinoCommon ref needed). The installed Rhino 9 supplies
+         all of these at load time. -->
+    <PackageReference Include="Grasshopper2" Version="9.0.26160.12305-wip" />
   </ItemGroup>
 
   <ItemGroup>
@@ -36,8 +36,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Reuse nest_geo/nest_sheets/NpRun/rhino_example/wrappers from the GH1 assembly (net7.0-windows build).
-         Private=false: opennest_2.gha + native DLLs are bundled next to the .rhp and resolved by an
+    <!-- Reuse nest_geo/nest_sheets/NpRun/rhino_example/wrappers from the GH1 assembly (net8 may reference
+         net7). Private=false: opennest_2.gha + native DLLs are bundled next to the .rhp and resolved by an
          AssemblyResolve hook in the plugin (so we don't depend on GH1 having loaded them). -->
     <ProjectReference Include="..\opennest_2\opennest_2.csproj" Private="false" />
   </ItemGroup>

@@ -145,8 +145,28 @@ namespace opennest_gh2.components
         protected abstract void RequestCancel();               // np_cancel / StopRequested
         protected abstract bool ReadRunInput(IDataAccess access);   // read the standard "Run" boolean input port
 
+        // Wired "Options" tokens (input 3, before Run; same "key value" format the on-canvas rows emit —
+        // see NestOptionCatalog) override the matching option rows, so the panel shows the values actually
+        // used. No data wired -> the panel values rule, exactly as before.
+        private void ApplyWiredOptions(IDataAccess access)
+        {
+            try
+            {
+                if (!access.GetTree(3, out Grasshopper2.Data.Tree<string> tree) || tree == null || tree.LeafCount == 0) return;
+                var tokens = new List<string>();
+                foreach (var s in tree.NonNullItems) tokens.Add(s);
+                if (tokens.Count == 0) return;
+                foreach (var bad in NestOptionCatalog.ApplyTokens(Options, tokens))
+                    access.AddWarning("Unknown option", "Unknown option line ignored: \"" + bad + "\"");
+            }
+            catch { }
+        }
+
         protected override void Process(IDataAccess access)
         {
+            // Wired options (if any) override the on-canvas rows BEFORE the launch below snapshots them.
+            ApplyWiredOptions(access);
+
             // Run is a standard input port now (was the on-canvas Run/Stop button). Edge-drive the async machine:
             // a rising edge (while Idle) launches a solve; a falling edge (while Computing) cancels it but keeps
             // the best-so-far. Using the INPUT's previous value (not the phase) means an ESC-stop isn't relaunched
