@@ -8,6 +8,9 @@ GitHub Releases. Each entry describes what the release actually changed.
 > the previous tag), so a clear commit subject per push becomes the changelog line — refine an entry
 > here anytime if you want more detail.
 
+## [2.76.0.0] - 2026-06-14
+- docs: professional left nav — drop toc.integrate, add section tabs + instant nav
+
 ## [2.75.0.0] - 2026-06-14
 - docs: tighten Python example download wording + nav "API"->"Examples"
 - docs: rename the three API nav sections + index titles to 'C++ Examples', 'C# Examples', 'Python Examples' (they are example galleries, not API references); landing-page links + the doc generator updated to match
