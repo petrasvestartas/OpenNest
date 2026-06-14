@@ -152,3 +152,7 @@ a[href*="ko-fi.com"] img:hover {
   .md-header__inner > .md-tabs .md-tabs__link:hover,
   .md-header__inner > .md-tabs .md-tabs__link--active { opacity: 1; }
 }
+
+/* Home-page logo: the SVG is near-black, so invert it in dark mode to keep it visible. */
+.home-logo { display: inline-block; margin: .4rem 0 .8rem; }
+[data-md-color-scheme="slate"] .home-logo { filter: invert(1); }
