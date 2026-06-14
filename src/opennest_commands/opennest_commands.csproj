@@ -3,31 +3,40 @@
   <!-- Rhino COMMAND plug-in (.rhp) for the OpenNest command-line workflow. A Grasshopper .gha cannot
        expose Rhino commands (McNeel: commands must live in a .rhp), so the OpenNest2 / OpenNestCollision
        commands live here and REUSE the nesting code compiled into opennest_2 via a ProjectReference
-       (NpRun, nest_geo/nest_sheets, rhino_example, the P/Invoke wrappers). Both assemblies output to the
-       same install folder, so one Yak package installs the Grasshopper components AND the Rhino commands
-       together. TFMs mirror opennest_2 so the project reference resolves on every Rhino 7/8 target. -->
+       (NpRun, nest_geo/nest_sheets, rhino_example, the P/Invoke wrappers).
+       MULTI-SDK: a .rhp's load is gated by Rhino on the RhinoCommon SDK it was built against (unlike a .gha,
+       which loads cross-version), so we build BOTH:
+         - net48 / net7  -> RhinoCommon 8  -> ships in the "OpenNest" package (Rhino 7/8)
+         - net8          -> RhinoCommon 9  -> ships in the "OpenNest_GH2" package (Rhino 9)
+       A net7/RC8 .rhp throws "cannot load .rhp" on Rhino 9, which is why R9 needs its own build. -->
 
   <PropertyGroup>
-    <TargetFrameworks>net7.0-windows;net7.0;net48</TargetFrameworks>
+    <TargetFrameworks>net8.0-windows;net8.0;net7.0-windows;net7.0;net48</TargetFrameworks>
     <EnableDynamicLoading>true</EnableDynamicLoading>
     <TargetExt>.rhp</TargetExt>
     <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
-    <NoWarn>NU1701;NETSDK1086;CA1416;CS0618</NoWarn>
+    <NoWarn>NU1701;NU1603;NETSDK1086;CA1416;CS0618</NoWarn>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <Version>2.59.0</Version>
     <Title>OpenNest Commands</Title>
   </PropertyGroup>
 
-  <ItemGroup>
-    <!-- RhinoCommon (Rhino.Commands.Command / Rhino.PlugIns.PlugIn) ships in the Grasshopper package;
-         reference the SAME version as opennest_2, runtime excluded (Rhino provides it at load time). -->
+  <!-- Rhino 9 build (net8): RhinoCommon 9 directly (command plug-ins only need RhinoCommon, not Grasshopper);
+       this is what makes the .rhp loadable on Rhino 9 + makes yak tag the R9 package rh9. -->
+  <ItemGroup Condition="$(TargetFramework.StartsWith('net8'))">
+    <PackageReference Include="RhinoCommon" Version="9.0.26160.12305-wip" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+  <!-- Rhino 7/8 build (net48/net7): RhinoCommon 8 (via the Grasshopper package, same version as opennest_2). -->
+  <ItemGroup Condition="!$(TargetFramework.StartsWith('net8'))">
     <PackageReference Include="Grasshopper" Version="8.0.23304.9001" ExcludeAssets="runtime" />
   </ItemGroup>
 
   <ItemGroup>
     <!-- Reuse opennest_2's public nesting types. Private=false: do NOT copy opennest_2.gha into this
-         .rhp's output — Yak installs both files into one folder and the .gha is loaded by Grasshopper. -->
+         .rhp's output — Yak installs both files into one folder and the .gha is loaded by Grasshopper.
+         (net8 referencing opennest_2's net7 build is fine — same as opennest_gh2.) -->
     <ProjectReference Include="..\opennest_2\opennest_2.csproj" Private="false" />
   </ItemGroup>
 
