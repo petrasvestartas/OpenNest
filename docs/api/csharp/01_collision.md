@@ -1,6 +1,6 @@
 # 01 · Collision
 
-Nest parts into a sheet with the physics (collision) engine.
+Nest parts (one with a hole) into a sheet (with a hole) with the physics (collision) engine.
 
 Project: [Windows](downloads/01_collision_win.zip) · [macOS](downloads/01_collision_mac.zip)
 

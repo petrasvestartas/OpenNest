@@ -25,10 +25,14 @@
 // `placement.angle` is normalized to RADIANS for BOTH engines (the underlying C ABI returns degrees for
 // NFP and radians for physics; this header hides that difference). See docs/api/cpp.md for the raw ABI.
 
+#include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #if defined(_WIN32)
@@ -46,13 +50,18 @@ struct Polygon { Ring outer; std::vector<Ring> holes; };
 // ---- input: parts & sheets -----------------------------------------------------------------------
 class nest_geo {
 public:
-    // outline = outer ring; holes = interior rings; copies = how many of this part to nest.
-    void add_part(const Ring& outline, const std::vector<Ring>& holes = {}, int copies = 1) {
+    // outline = outer ring; holes = interior rings; copies = how many of this part to nest;
+    // attributes = extra geometry (rings/polylines) carried with the part and transformed to the
+    // placed pose (Python: add_part(..., attributes=[...])). A point is just a 1-vertex ring.
+    void add_part(const Ring& outline, const std::vector<Ring>& holes = {}, int copies = 1,
+                  const std::vector<Ring>& attributes = {}) {
         parts.push_back({outline, holes});
         quantities.push_back(copies < 1 ? 1 : copies);
+        attrs.push_back(attributes);
     }
-    std::vector<Polygon> parts;
-    std::vector<int>     quantities;
+    std::vector<Polygon>           parts;
+    std::vector<int>               quantities;
+    std::vector<std::vector<Ring>> attrs;       // per-part carried geometry (index-aligned with parts)
 };
 
 class nest_sheets {
@@ -80,8 +89,10 @@ struct Placement {
     double angle = 0;         // rotation in RADIANS
     bool placed() const { return sheet_id >= 0; }
 };
-struct PlacedPart  { int part_index; Polygon shape; };   // outline + holes already transformed
+struct PlacedPart  { int part_index; Polygon shape; std::vector<Ring> attributes; };  // already transformed
 struct PlacedGroup { int sheet_id;   std::vector<PlacedPart> parts; };
+
+class live_handle;   // background NFP solve (defined after the engines)
 
 class nest_result {
 public:
@@ -110,6 +121,8 @@ public:
             PlacedPart pp; pp.part_index = p.part_index;
             pp.shape.outer = xform(src.outer, p);
             for (const auto& h : src.holes) pp.shape.holes.push_back(xform(h, p));
+            if (p.part_index < (int)geo->attrs.size())
+                for (const auto& a : geo->attrs[p.part_index]) pp.attributes.push_back(xform(a, p));
             group_for(p.sheet_id).parts.push_back(std::move(pp));
         }
         return groups;
@@ -152,6 +165,14 @@ using np_nest_fn  = int (*)(int, const int*, const double*, const int* /*part_ro
                             int, const int*, const double*,
                             const int*, const int*, const double*, const int*, const int*, const double*,
                             const NpParams*, double*, double*, double*, int*, int*);
+using nfp_pack_fn = int (*)(int, const int*, const double*, const int*,
+                            int, double, double, double, double*, double*, double*, int*);
+using nfp_offset_fn = int (*)(int, const double*, double, double, int, double*);
+using nfp_text_fn = int (*)(const char*, double, int, double, int, int*, int, double*, int*);
+using nfp_progress_fn = long long (*)();
+using nfp_fitness_fn  = double (*)();
+using nfp_poll_fn   = int (*)(int, double*, double*, double*, int*, int*, int*);
+using nfp_cancel_fn = void (*)();
 
 inline void* load_symbol(const char* const* lib_names, const char* symbol) {
     for (const char* const* n = lib_names; *n; ++n) {
@@ -181,6 +202,12 @@ inline np_nest_fn np_nest() {
     static auto fn = (np_nest_fn)load_symbol(names, "np_nest");
     return fn;
 }
+inline const char* const* nfp_libs() {
+    static const char* names[] = {"nfp_nest.dll", "./nfp_nest.dylib", "nfp_nest.dylib",
+                                  "./nfp_nest.so", "nfp_nest.so", nullptr};
+    return names;
+}
+template <class F> inline F nfp_sym(const char* s) { return (F)load_symbol(nfp_libs(), s); }
 
 // Append one polygon set (parts or sheets) into the flat (counts, xy, hole-counts, ...) arrays.
 struct FlatPolys {
@@ -264,6 +291,9 @@ struct opennest_nfp {
     double clipper_scale = 1e7;
     double curve_tolerance = 0.3;
 
+    // Run on a background thread; poll the evolving layout (Python: .start()).
+    std::unique_ptr<live_handle> start(const nest_geo& geo, const nest_sheets& sheets) const;
+
     nest_result solve(const nest_geo& geo, const nest_sheets& sheets) const {
         using namespace detail;
         FlatPolys parts;
@@ -296,5 +326,147 @@ struct opennest_nfp {
         return r;
     }
 };
+
+// ---- pack: deterministic grid layout (no nesting) — Python: pack() -------------------------------
+// array mode (max_width <= 0): wrap every `columns` items.
+// distance mode (max_width  > 0): wrap when the next part would exceed `max_width`.
+inline nest_result pack(const nest_geo& geo, int columns = 10, double gap_x = 10.0,
+                        double gap_y = 10.0, double max_width = 0.0) {
+    using namespace detail;
+    FlatPolys parts; std::vector<int> qty;
+    for (size_t i = 0; i < geo.parts.size(); ++i) { push_poly(parts, geo.parts[i]); qty.push_back(geo.quantities[i]); }
+    int instances = 0; for (int q : qty) instances += q;
+    std::vector<double> tx(instances), ty(instances), ang(instances); std::vector<int> sid(instances);
+    auto fn = nfp_sym<nfp_pack_fn>("nfp_pack");
+    int n = fn((int)geo.parts.size(), ip(parts.vcount), dp(parts.xy), qty.data(),
+               columns, gap_x, gap_y, max_width, tx.data(), ty.data(), ang.data(), sid.data());
+    // nfp_pack emits instances in expansion order; recover each instance's source part index.
+    nest_result r; r.geo = &geo; r.n_sheets = (n > 0 ? 1 : 0);
+    int k = 0;
+    for (size_t i = 0; i < geo.parts.size(); ++i)
+        for (int c = 0; c < qty[i] && k < n; ++c, ++k)
+            r.placements.push_back({(int)i, sid[k], tx[k], ty[k], ang[k]});
+    return r;
+}
+
+// ---- offset: grow (+) / shrink (-) one ring by `delta` — Python: offset_polyline() ---------------
+inline Ring offset_polygon(const Ring& ring, double delta, double miter_limit = 2.0) {
+    using namespace detail;
+    std::vector<double> xy; for (auto& p : ring) { xy.push_back(p.x); xy.push_back(p.y); }
+    auto fn = nfp_sym<nfp_offset_fn>("nfp_offset_polygon");
+    int cap = (int)ring.size() * 4 + 16;
+    std::vector<double> out(cap * 2);
+    int n = fn((int)ring.size(), xy.data(), delta, miter_limit, cap, out.data());
+    if (n < 0) { out.assign(-n * 2, 0.0); n = fn((int)ring.size(), xy.data(), delta, miter_limit, -n, out.data()); }
+    Ring res; for (int i = 0; i < n; ++i) res.push_back({out[2*i], out[2*i+1]});
+    return res;
+}
+// Offset every part's outer ring outward (and holes inward) for clearance — Python: offset_geo().
+inline nest_geo offset_geo(const nest_geo& geo, double clearance) {
+    nest_geo g;
+    for (size_t i = 0; i < geo.parts.size(); ++i) {
+        std::vector<Ring> holes;
+        for (auto& h : geo.parts[i].holes) holes.push_back(offset_polygon(h, -clearance));
+        g.add_part(offset_polygon(geo.parts[i].outer, clearance), holes, geo.quantities[i],
+                   i < geo.attrs.size() ? geo.attrs[i] : std::vector<Ring>{});
+    }
+    return g;
+}
+// Shrink every sheet inward for clearance — Python: offset_sheets().
+inline nest_sheets offset_sheets(const nest_sheets& sheets, double clearance) {
+    nest_sheets s;
+    for (auto& it : sheets.items) {
+        std::vector<Ring> holes;
+        for (auto& h : it.holes) holes.push_back(offset_polygon(h, clearance));
+        s.add_sheet(offset_polygon(it.outer, -clearance), holes);
+    }
+    return s;
+}
+
+// ---- text: single-stroke engraving polylines — Python: text_to_polylines() -----------------------
+// font: 0 = regular, 1 = bold. spacing <0 => 0.1 em default. Returns one Ring per stroke.
+inline std::vector<Ring> text_to_polylines(const std::string& text, double height = 1.0,
+                                           int font = 0, double spacing = -1.0) {
+    using namespace detail;
+    auto fn = nfp_sym<nfp_text_fn>("nfp_text_to_polylines");
+    int total = 0;
+    int nstrokes = fn(text.c_str(), height, font, spacing, 0, nullptr, 0, nullptr, &total);
+    std::vector<int> vc(nstrokes); std::vector<double> xy(total * 2);
+    fn(text.c_str(), height, font, spacing, nstrokes, vc.data(), total, xy.data(), &total);
+    std::vector<Ring> strokes; int k = 0;
+    for (int s = 0; s < nstrokes; ++s) {
+        Ring r; for (int j = 0; j < vc[s]; ++j, ++k) r.push_back({xy[2*k], xy[2*k+1]});
+        strokes.push_back(std::move(r));
+    }
+    return strokes;
+}
+
+// ---- live: run the NFP engine on a background thread, poll the evolving best layout --------------
+// Python: opennest(...).start(geo, sheets) -> handle, then animate(handle, ...).
+class live_handle {
+public:
+    // Built by opennest_nfp::start(); `run` performs the (blocking) native solve.
+    live_handle(const nest_geo* g, int instances, std::function<void()> run)
+        : geo_(g), instances_(instances), worker_([this, run]{ run(); done_.store(true); }) {}
+    live_handle(const live_handle&) = delete;
+    live_handle& operator=(const live_handle&) = delete;
+    ~live_handle() { join(); }
+
+    long long progress() const { return detail::nfp_sym<detail::nfp_progress_fn>("nfp_progress")(); }
+    double    fitness()  const { return detail::nfp_sym<detail::nfp_fitness_fn>("nfp_fitness")(); }
+    bool      running()  const { return !done_.load(); }
+    void      cancel()         { detail::nfp_sym<detail::nfp_cancel_fn>("nfp_cancel")(); }
+    void      join()           { if (worker_.joinable()) worker_.join(); }
+
+    // Snapshot the current best layout into a nest_result (placed instances so far).
+    nest_result poll() const {
+        std::vector<double> tx(instances_), ty(instances_), ang(instances_);
+        std::vector<int> sid(instances_), pidx(instances_); int ns = 0;
+        detail::nfp_sym<detail::nfp_poll_fn>("nfp_poll_layout")(
+            instances_, tx.data(), ty.data(), ang.data(), sid.data(), pidx.data(), &ns);
+        nest_result r; r.geo = geo_; r.n_sheets = ns;
+        const double deg2rad = 3.14159265358979323846 / 180.0;
+        for (int i = 0; i < instances_; ++i)
+            r.placements.push_back({pidx[i], sid[i], tx[i], ty[i], ang[i] * deg2rad});
+        return r;
+    }
+
+private:
+    const nest_geo*  geo_;
+    int              instances_;
+    std::atomic<bool> done_{false};
+    std::thread      worker_;
+};
+
+// opennest_nfp::start — launch the NFP solve on a background thread (Python: .start()).
+inline std::unique_ptr<live_handle> opennest_nfp::start(const nest_geo& geo, const nest_sheets& sheets) const {
+    using namespace detail;
+    auto parts = std::make_shared<FlatPolys>();
+    auto qty   = std::make_shared<std::vector<int>>();
+    for (size_t i = 0; i < geo.parts.size(); ++i) { push_poly(*parts, geo.parts[i]); qty->push_back(geo.quantities[i]); }
+    auto sh = std::make_shared<FlatPolys>();
+    for (const auto& s : sheets.items) push_poly(*sh, s);
+    const int sheet_count = (int)sheets.items.size();
+    const int part_count  = (int)geo.parts.size();
+    int instances = 0; for (int q : *qty) instances += q;
+
+    auto p = std::make_shared<NfpParams>();
+    *p = NfpParams{}; p->placementType = 1; p->rotations = rotations; p->mutationRate = 10; p->populationSize = 10;
+    p->seed = seed; p->curveTolerance = curve_tolerance; p->clipperScale = clipper_scale; p->spacing = spacing;
+    p->rotationLimit = 360.0; p->useHoles = use_holes ? 1 : 0; p->mode = mode; p->generations = generations;
+    p->numSeeds = 4; p->useParallel = 1; p->tryAllRotations = try_all_rotations ? 1 : 0; p->exactNfp = exact_nfp ? 1 : 0;
+
+    auto out = std::make_shared<std::vector<double>>();   // scratch the native call writes into
+    return std::make_unique<live_handle>(&geo, instances, [=]() {
+        std::vector<double> tx(instances), ty(instances), ang(instances);
+        std::vector<int> sid(instances), pidx(instances); int n_sheets = 0; double fitness = 0;
+        nfp_sym<nfp_cancel_fn>("nfp_cancel_reset")();
+        nfp_nest()(part_count, ip(parts->vcount), dp(parts->xy), qty->data(), nullptr,
+                   ip(parts->hole_count), ip(parts->hole_vcount), dp(parts->hole_xy),
+                   sheet_count, ip(sh->vcount), dp(sh->xy), ip(sh->hole_count), ip(sh->hole_vcount), dp(sh->hole_xy),
+                   p.get(), tx.data(), ty.data(), ang.data(), sid.data(), pidx.data(), &n_sheets, &fitness);
+        (void)out;
+    });
+}
 
 } // namespace opennest

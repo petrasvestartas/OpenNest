@@ -430,6 +430,73 @@ NFP_API int nfp_offset_polygon(
     return n;
 }
 
+// ---- engraving font (single-stroke text) -----------------------------------
+#include "engraving_font.inc"
+
+namespace {
+// Find a glyph index for a Unicode code point, or -1.
+int eng_glyph_index(const EngFont& f, int code) {
+    for (int i = 0; i < f.n_glyphs; i++) if (f.g_code[i] == code) return i;
+    return -1;
+}
+} // namespace
+
+NFP_API int nfp_text_to_polylines(
+    const char* text, double height, int font, double spacing,
+    int max_strokes, int* out_stroke_vertex_counts,
+    int max_points, double* out_xy, int* out_total_points)
+{
+    if (out_total_points) *out_total_points = 0;
+    if (!text) return 0;
+    const EngFont& f = (font == 1) ? eng_bold_font : eng_regular_font;
+    const double H_SPACING = (spacing < 0) ? 0.1 : spacing;
+    const double V_SPACING = 1.4;
+    const int nul = eng_glyph_index(f, 0);   // fallback glyph (NULL box)
+
+    // First pass: lay everything out into temp strokes (so we can size + then fill).
+    std::vector<std::vector<std::pair<double, double>>> strokes;
+    double x = 0, y = 0;
+    for (const char* p = text; ; ++p) {
+        const char ch = *p;
+        if (ch == '\0') break;
+        if (ch == '\n') { x = 0; y -= V_SPACING * height; continue; }
+        int gi = eng_glyph_index(f, static_cast<unsigned char>(ch));
+        if (gi < 0) gi = nul;
+        if (gi < 0) { x += (0.5 + H_SPACING) * height; continue; }
+        x -= f.g_start[gi] * height;   // left bearing
+        const int s0 = f.g_s0[gi], ns = f.g_ns[gi];
+        for (int s = 0; s < ns; ++s) {
+            const int off = f.stroke_off[s0 + s], np = f.stroke_n[s0 + s];
+            std::vector<std::pair<double, double>> poly;
+            poly.reserve(np);
+            for (int k = 0; k < np; ++k)
+                poly.emplace_back(x + f.pts[2 * (off + k)] * height,
+                                  y + f.pts[2 * (off + k) + 1] * height);
+            strokes.push_back(std::move(poly));
+        }
+        x += f.g_end[gi] * height + H_SPACING * height;
+    }
+
+    int total_points = 0;
+    for (auto& s : strokes) total_points += static_cast<int>(s.size());
+    if (out_total_points) *out_total_points = total_points;
+
+    // Fill caller buffers with whatever fits (the example sizes them generously).
+    int written_xy = 0;
+    for (size_t s = 0; s < strokes.size(); ++s) {
+        if (static_cast<int>(s) < max_strokes && out_stroke_vertex_counts)
+            out_stroke_vertex_counts[s] = static_cast<int>(strokes[s].size());
+        for (auto& pt : strokes[s]) {
+            if (written_xy < max_points && out_xy) {
+                out_xy[2 * written_xy] = pt.first;
+                out_xy[2 * written_xy + 1] = pt.second;
+            }
+            ++written_xy;
+        }
+    }
+    return static_cast<int>(strokes.size());
+}
+
 NFP_API void nfp_cancel(void)        { g_cancel = true; }
 NFP_API void nfp_cancel_reset(void)  { g_cancel = false; }
 NFP_API long long nfp_progress(void) { return g_progress.load(); }

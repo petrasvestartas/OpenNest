@@ -1,6 +1,6 @@
-# 02 · NFP
+# 02 · NFP + GA
 
-Nest parts into a sheet with the NFP + genetic-algorithm engine.
+Nest parts into a sheet with the NFP + genetic-algorithm engine (handles concave parts + holes).
 
 Project: [Windows](downloads/02_nfp_win.zip) · [macOS](downloads/02_nfp_mac.zip)
 
@@ -23,9 +23,11 @@ int main(void) {
     p.placementType = 1; p.rotations = 4; p.populationSize = 10; p.mutationRate = 10;
     p.seed = 1; p.clipperScale = 1e7; p.curveTolerance = 0.3; p.mode = 1; p.generations = 10; p.useParallel = 1;
 
+    int    part_holes[4]  = {0,0,0,0};                   // no part holes
+    int    sheet_holes[1] = {0};                         // no sheet holes
     double tx[12], ty[12], ang[12]; int sid[12], pidx[12]; int n_sheets; double fitness;
-    int placed = nfp_nest(4, pvc, pxy, pqty, NULL, (int[]){0,0,0,0}, NULL, NULL,
-                          1, svc, sxy, (int[]){0}, NULL, NULL,
+    int placed = nfp_nest(4, pvc, pxy, pqty, NULL, part_holes, NULL, NULL,
+                          1, svc, sxy, sheet_holes, NULL, NULL,
                           &p, tx, ty, ang, sid, pidx, &n_sheets, &fitness);
 
     printf("placed %d/12 on %d sheet(s), fitness %.3f\n", placed, n_sheets, fitness);

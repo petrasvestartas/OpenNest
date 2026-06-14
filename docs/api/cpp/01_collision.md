@@ -1,6 +1,6 @@
 # 01 · Collision
 
-Nest parts into a sheet with the physics (collision) engine.
+Nest parts (one with a hole) into a sheet (with a hole) with the physics (collision) engine.
 
 Project: [Windows](downloads/01_collision_win.zip) · [macOS](downloads/01_collision_mac.zip)
 
@@ -17,6 +17,8 @@ int main(void) {
                      0,0, 24,0, 0,24 };
     int    svc[] = { 4 };                                // one 150x150 sheet
     double sxy[] = { 0,0, 150,0, 150,150, 0,150 };
+    int    sheet_holes[1] = {0};                         // no sheet holes
+    int    part_holes[4]  = {0,0,0,0};                   // no part holes
 
     NpParams q = {0};
     q.num_rotations = 16; q.seed = 1; q.iter_mode = 0; q.time_budget_secs = 2.0;
@@ -24,8 +26,8 @@ int main(void) {
 
     double tx[4], ty[4], ang[4]; int sid[4]; int n_sheets;
     int rc = np_nest(4, pvc, pxy, NULL,
-                     1, svc, sxy, (int[]){0}, NULL, NULL,    // sheet outers + (no) sheet holes
-                     (int[]){0,0,0,0}, NULL, NULL,           // part holes (parts can nest INTO these)
+                     1, svc, sxy, sheet_holes, NULL, NULL,   // sheet outers + (no) sheet holes
+                     part_holes, NULL, NULL,                 // part holes (parts can nest INTO these)
                      &q, tx, ty, ang, sid, &n_sheets);
 
     printf("np_nest rc=%d, %d sheet(s)\n", rc, n_sheets);

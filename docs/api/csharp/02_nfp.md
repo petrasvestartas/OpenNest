@@ -1,6 +1,6 @@
-# 02 · NFP
+# 02 · NFP + GA
 
-Nest parts into a sheet with the NFP + genetic-algorithm engine.
+Nest parts into a sheet with the NFP + genetic-algorithm engine (handles concave parts + holes).
 
 Project: [Windows](downloads/02_nfp_win.zip) · [macOS](downloads/02_nfp_mac.zip)
 

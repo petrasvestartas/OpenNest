@@ -11,7 +11,9 @@ endif()
 
 add_executable(nest_demo main.cpp)
 
-# Runtime dynamic loading needs libdl on Linux (no-op elsewhere).
+# Runtime dynamic loading needs libdl on Linux; std::thread (live-animation demo) needs pthread.
+find_package(Threads REQUIRED)
+target_link_libraries(nest_demo Threads::Threads)
 if(UNIX AND NOT APPLE)
     target_link_libraries(nest_demo ${CMAKE_DL_LIBS})
 endif()

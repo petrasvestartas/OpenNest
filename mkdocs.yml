@@ -71,17 +71,23 @@ nav:
       - "C++ API":
           - "Overview": api/cpp/index.md
           - "01 Collision": api/cpp/01_collision.md
-          - "02 NFP": api/cpp/02_nfp.md
-          - "03 Pack array": api/cpp/03_pack_array.md
-          - "04 Pack distance": api/cpp/04_pack_distance.md
-          - "05 Offset": api/cpp/05_offset.md
+          - "02 NFP + GA": api/cpp/02_nfp.md
+          - "03 Live animation": api/cpp/03_live.md
+          - "04 Clearance offset": api/cpp/04_offset.md
+          - "05 Attributes": api/cpp/05_attributes.md
+          - "06 Pack array": api/cpp/06_pack_array.md
+          - "07 Pack distance": api/cpp/07_pack_distance.md
+          - "08 Text": api/cpp/08_text.md
       - "C# API":
           - "Overview": api/csharp/index.md
           - "01 Collision": api/csharp/01_collision.md
-          - "02 NFP": api/csharp/02_nfp.md
-          - "03 Pack array": api/csharp/03_pack_array.md
-          - "04 Pack distance": api/csharp/04_pack_distance.md
-          - "05 Offset": api/csharp/05_offset.md
+          - "02 NFP + GA": api/csharp/02_nfp.md
+          - "03 Live animation": api/csharp/03_live.md
+          - "04 Clearance offset": api/csharp/04_offset.md
+          - "05 Attributes": api/csharp/05_attributes.md
+          - "06 Pack array": api/csharp/06_pack_array.md
+          - "07 Pack distance": api/csharp/07_pack_distance.md
+          - "08 Text": api/csharp/08_text.md
       - "Python API": api/python.md
   - Build & Publish: developing.md
   - Credits: references.md

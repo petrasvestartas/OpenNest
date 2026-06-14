@@ -16,11 +16,13 @@ if(NOT opennest_POPULATED)
     add_subdirectory(${opennest_SOURCE_DIR}/src/nest_physics_cpp ${CMAKE_BINARY_DIR}/np_engine)
 endif()
 
+find_package(Threads REQUIRED)   # std::thread (the live-animation example) needs pthread on Linux
+
 add_executable(example main.cpp)
 target_include_directories(example PRIVATE
     ${opennest_SOURCE_DIR}/src/opennest_cpp/src
     ${opennest_SOURCE_DIR}/src/nest_physics_cpp)
-target_link_libraries(example PRIVATE nfp_nest nest_physics)
+target_link_libraries(example PRIVATE nfp_nest nest_physics Threads::Threads)
 
 # Put the engine .dll/.dylib/.so next to the executable so it runs in place.
 add_custom_command(TARGET example POST_BUILD

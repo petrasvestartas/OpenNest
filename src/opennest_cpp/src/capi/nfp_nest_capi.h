@@ -114,6 +114,29 @@ NFP_API int nfp_offset_polygon(
     int           max_out_vertices,
     double*       out_xy);                   // [max_out_vertices*2]
 
+// Render `text` to single-stroke ENGRAVING polylines using the bundled OpenNest VDA font
+// (the same single-line font compas_nest ships). Glyph arcs are pre-sampled to segments.
+// Layout: line 0's baseline-left at the origin, glyphs scaled to cap-height `height`, laid
+// out left-to-right; '\n' starts a new line 1.4*height lower. `font`: 0 = regular, 1 = bold.
+// `spacing` = extra gap between glyphs in em (compas_nest default 0.1; pass <0 for the default).
+//
+// Output is a list of strokes (polylines): out_stroke_vertex_counts[k] = points in stroke k,
+// and out_xy holds every point x,y concatenated stroke-by-stroke. Returns the TOTAL stroke
+// count (>=0). *out_total_points (if non-NULL) receives the total point count across all
+// strokes — call once with max_strokes=0 / max_points=0 to size the buffers, then again to
+// fill them. If the return value > max_strokes OR *out_total_points > max_points, enlarge and
+// call again (nothing partial is relied upon).
+NFP_API int nfp_text_to_polylines(
+    const char*   text,
+    double        height,
+    int           font,                      // 0 = regular, 1 = bold
+    double        spacing,                   // em gap between glyphs (<0 => 0.1 default)
+    int           max_strokes,
+    int*          out_stroke_vertex_counts,  // [max_strokes]
+    int           max_points,
+    double*       out_xy,                    // [max_points*2]
+    int*          out_total_points);         // single (may be NULL)
+
 // Cooperative cancel + live-preview support for running nfp_nest on a background
 // thread (same role as np_cancel/np_progress/np_poll_layout).
 NFP_API void      nfp_cancel(void);
