@@ -27,9 +27,12 @@
 
   <ItemGroup>
     <!-- Self-consistent Rhino-9 GH2 reference assemblies (Grasshopper2 + GrasshopperIO + the pinned matching
-         RhinoCommon/Eto compile assets — no explicit RhinoCommon ref needed). The installed Rhino 9 supplies
-         all of these at load time. -->
-    <PackageReference Include="Grasshopper2" Version="9.0.26160.12305-wip" />
+         RhinoCommon/Eto compile assets — no explicit RhinoCommon ref needed). ExcludeAssets="runtime" is
+         ESSENTIAL: these are supplied by the running Rhino 9 / Grasshopper 2 host. Without it they are listed
+         as runtime dependencies in opennest_gh2.deps.json, and Rhino's plug-in loader then tries to resolve
+         them from the package folder / NuGet cache (absent on the user's machine) -> GetTypes throws ->
+         "No PlugIn subclass found". Excluding runtime makes the loader defer to the host's loaded copies. -->
+    <PackageReference Include="Grasshopper2" Version="9.0.26160.12305-wip" ExcludeAssets="runtime" />
   </ItemGroup>
 
   <ItemGroup>
