@@ -29,6 +29,6 @@ Rhino 9). The Grasshopper 2 plug-in ships in the package's `grasshopper2/` subfo
 
 ## Example files
 
-[Download the Grasshopper 2 examples (.zip)](files/opennest_examples_gh2.zip){ .md-button .md-button--primary }
+[Download the Grasshopper 2 examples (.zip)](files/opennestexamplesgh2.zip){ .md-button .md-button--primary }
 
 Unzip and open the example definitions in Grasshopper 2 (Rhino 9 WIP).

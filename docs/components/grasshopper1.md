@@ -11,6 +11,6 @@ outputs and behaviour.
 
 ## Example files
 
-[Download the Grasshopper 1 examples (.zip)](files/opennest_examples_gh1.zip){ .md-button .md-button--primary }
+[Download the Grasshopper 1 examples (.zip)](files/opennestexamplesgh1.zip){ .md-button .md-button--primary }
 
 Unzip and open the example definitions in Grasshopper.
