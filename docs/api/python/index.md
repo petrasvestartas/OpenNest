@@ -1,4 +1,4 @@
-# Python API
+# Python Examples
 
 **[compas_nest](https://petrasvestartas.github.io/compas_nest/)** is the COMPAS plugin for 2D nesting — the
 Python route into the same OpenNest engines. The examples here are written for **Rhino 8 users**: paste any one
@@ -22,6 +22,10 @@ The same 8 examples as the [C++](../cpp/index.md) and [C#](../csharp/index.md) p
 | 06 | [Pack (array)](06_pack_array.md) — deterministic grid, columns per row |
 | 07 | [Pack (distance)](07_pack_distance.md) — grid, wrap at a max width |
 | 08 | [Text (font)](08_text.md) — single-stroke engraving polylines |
+
+Each example page also offers a **standalone download** — a zip with `run.bat` (Windows) / `run.command`
+(macOS/Linux) that `pip install`s `compas_nest` and runs `main.py` outside Rhino (a `compas_viewer` window
+shows the result). Same script either way: paste it into the Rhino Script Editor, or download and run it.
 
 ## Run it in the Rhino 8 Script Editor
 

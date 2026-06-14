@@ -1,14 +1,3 @@
-# 04 · Clearance offset
-
-Add a clearance gap before solving: `offset_geo` grows every part outline (and shrinks its holes) and
-`offset_sheets` shrinks the sheet outlines. The solve runs on the offset geometry; you draw the **original** parts
-at the solved poses, so the real clearance gaps show.
-
-Project: [Download `04_offset.zip`](downloads/04_offset.zip) — standalone (Windows `run.bat`, macOS/Linux `./run.command`; the run scripts `pip install` compas_nest). Or paste straight into the Rhino 8 Script Editor:
-
-Paste into the Rhino 8 **Script Editor** (Python 3); `# r: compas_nest` installs the package on first **Run**. [compas_nest source](https://github.com/petrasvestartas/compas_nest/blob/main/examples/04_collision_dataset.py)
-
-```python
 #! python3
 # r: compas_nest
 
@@ -45,4 +34,3 @@ for group in result.placed_polylines(geo):    # pass the original geo for un-off
     for part in group["parts"]:
         scene.add(part["outline"], color=BLUE)
 scene.draw()
-```

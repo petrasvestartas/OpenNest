@@ -17,6 +17,8 @@ SLUGS = ["01_collision", "02_nfp", "03_live", "04_offset", "05_attributes",
 LANGS = {
     "cpp":    ("main.cpp",   ["CMakeLists.txt", "README.md", "run.bat", "run.command"]),
     "csharp": ("Program.cs", ["example.csproj", "README.md", "run.bat", "run.command"]),
+    # Python: no compile — the run scripts pip-install compas_nest (the engines on PyPI) and run main.py.
+    "python": ("main.py",    ["requirements.txt", "README.md", "run.bat", "run.command"]),
 }
 
 
