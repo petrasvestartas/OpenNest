@@ -3,9 +3,7 @@
 Lay parts out in a simple grid with `pack` — a fixed number of elements per row, wrapping to the next row.
 Deterministic, no nesting; it returns a `nest_result`, so `placed_polylines()` works as usual.
 
-Project: [Download `06_pack_array.zip`](downloads/06_pack_array.zip) — standalone (Windows `run.bat`, macOS/Linux `./run.command`; the run scripts `pip install` compas_nest). Or paste straight into the Rhino 8 Script Editor:
-
-Paste into the Rhino 8 **Script Editor** (Python 3); `# r: compas_nest` installs the package on first **Run**. [compas_nest source](https://github.com/petrasvestartas/compas_nest/blob/main/examples/06_pack_array.py)
+Project: [Download `06_pack_array.zip`](downloads/06_pack_array.zip) — standalone (`run.bat` / `run.command` `pip install` compas_nest and run it). Or paste into the Rhino 8 **Script Editor** (Python 3) — `# r: compas_nest` installs it on first **Run**. [compas_nest source](https://github.com/petrasvestartas/compas_nest/blob/main/examples/06_pack_array.py)
 
 ```python
 #! python3

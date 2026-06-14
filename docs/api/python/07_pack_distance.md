@@ -3,9 +3,7 @@
 Pack parts by row width with `pack(..., max_width=...)`: a row fills up to the given distance, then the next
 element wraps to a new row (`columns` is ignored in this mode).
 
-Project: [Download `07_pack_distance.zip`](downloads/07_pack_distance.zip) — standalone (Windows `run.bat`, macOS/Linux `./run.command`; the run scripts `pip install` compas_nest). Or paste straight into the Rhino 8 Script Editor:
-
-Paste into the Rhino 8 **Script Editor** (Python 3); `# r: compas_nest` installs the package on first **Run**. [compas_nest source](https://github.com/petrasvestartas/compas_nest/blob/main/examples/07_pack_distance.py)
+Project: [Download `07_pack_distance.zip`](downloads/07_pack_distance.zip) — standalone (`run.bat` / `run.command` `pip install` compas_nest and run it). Or paste into the Rhino 8 **Script Editor** (Python 3) — `# r: compas_nest` installs it on first **Run**. [compas_nest source](https://github.com/petrasvestartas/compas_nest/blob/main/examples/07_pack_distance.py)
 
 ```python
 #! python3

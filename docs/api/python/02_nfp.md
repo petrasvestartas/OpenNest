@@ -3,9 +3,7 @@
 The same richer mix of parts, but constructed with **`opennest`** (NFP + genetic algorithm) instead. Sheets drawn
 black, parts blue.
 
-Project: [Download `02_nfp.zip`](downloads/02_nfp.zip) — standalone (Windows `run.bat`, macOS/Linux `./run.command`; the run scripts `pip install` compas_nest). Or paste straight into the Rhino 8 Script Editor:
-
-Paste into the Rhino 8 **Script Editor** (Python 3); `# r: compas_nest` installs the package on first **Run**. [compas_nest source](https://github.com/petrasvestartas/compas_nest/blob/main/examples/02_nfp_viewer.py)
+Project: [Download `02_nfp.zip`](downloads/02_nfp.zip) — standalone (`run.bat` / `run.command` `pip install` compas_nest and run it). Or paste into the Rhino 8 **Script Editor** (Python 3) — `# r: compas_nest` installs it on first **Run**. [compas_nest source](https://github.com/petrasvestartas/compas_nest/blob/main/examples/02_nfp_viewer.py)
 
 ```python
 #! python3

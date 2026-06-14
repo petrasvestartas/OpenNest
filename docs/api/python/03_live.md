@@ -4,9 +4,7 @@ Run the NFP engine on a **background thread** with `.start()` instead of `.solve
 (generation, fitness, current poses), then draw the final result. Standalone scripts can drive a live
 `compas_viewer` window with `compas_nest.viewer.animate`; inside Rhino, poll the handle and draw with a `Scene`.
 
-Project: [Download `03_live.zip`](downloads/03_live.zip) — standalone (Windows `run.bat`, macOS/Linux `./run.command`; the run scripts `pip install` compas_nest). Or paste straight into the Rhino 8 Script Editor:
-
-Paste into the Rhino 8 **Script Editor** (Python 3); `# r: compas_nest` installs the package on first **Run**. [compas_nest source](https://github.com/petrasvestartas/compas_nest/blob/main/examples/03_nfp_animated.py)
+Project: [Download `03_live.zip`](downloads/03_live.zip) — standalone (`run.bat` / `run.command` `pip install` compas_nest and run it). Or paste into the Rhino 8 **Script Editor** (Python 3) — `# r: compas_nest` installs it on first **Run**. [compas_nest source](https://github.com/petrasvestartas/compas_nest/blob/main/examples/03_nfp_animated.py)
 
 ```python
 #! python3

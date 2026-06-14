@@ -3,9 +3,7 @@
 Render text to single-stroke polylines with `text_to_polylines`, using the OpenNest XML engraving font (e.g. for
 sheet-number labels). Arcs are sampled to polyline segments (adaptive, fabrication-friendly).
 
-Project: [Download `08_text.zip`](downloads/08_text.zip) — standalone (Windows `run.bat`, macOS/Linux `./run.command`; the run scripts `pip install` compas_nest). Or paste straight into the Rhino 8 Script Editor:
-
-Paste into the Rhino 8 **Script Editor** (Python 3); `# r: compas_nest` installs the package on first **Run**. [compas_nest source](https://github.com/petrasvestartas/compas_nest/blob/main/examples/08_text.py)
+Project: [Download `08_text.zip`](downloads/08_text.zip) — standalone (`run.bat` / `run.command` `pip install` compas_nest and run it). Or paste into the Rhino 8 **Script Editor** (Python 3) — `# r: compas_nest` installs it on first **Run**. [compas_nest source](https://github.com/petrasvestartas/compas_nest/blob/main/examples/08_text.py)
 
 ```python
 #! python3
