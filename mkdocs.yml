@@ -68,8 +68,20 @@ nav:
   - Rhino Commands:
       - "OpenNest": rhino/index.md
   - API Reference:
-      - "C++ API": api/cpp.md
-      - "C# API": api/csharp.md
+      - "C++ API":
+          - "Overview": api/cpp/index.md
+          - "nfp_nest — clean packing": api/cpp/nfp_nest.md
+          - "np_nest — physics (into holes)": api/cpp/np_nest.md
+          - "nfp_pack — row/grid layout": api/cpp/nfp_pack.md
+          - "nfp_offset_polygon — grow/shrink": api/cpp/nfp_offset_polygon.md
+          - "Run without freezing": api/cpp/progress.md
+      - "C# API":
+          - "Overview": api/csharp/index.md
+          - "Library reference (RhinoCommon)": api/csharp/library.md
+          - "nfp_nest — clean packing": api/csharp/nfp_nest.md
+          - "np_nest — physics (into holes)": api/csharp/np_nest.md
+          - "nfp_pack — row/grid layout": api/csharp/nfp_pack.md
+          - "nfp_offset_polygon — grow/shrink": api/csharp/nfp_offset_polygon.md
       - "Python API": api/python.md
   - Build & Publish: developing.md
   - Credits: references.md

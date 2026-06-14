@@ -286,7 +286,7 @@ To show results, draw straight into the Rhino document with a COMPAS **`Scene`**
 
     `opennest_collision` is the physics / overlap‑relaxation engine (`np_nest`, dependency‑free, nests parts into
     holes). `opennest` is the NFP + genetic‑algorithm engine (`nfp_nest`, bundles Clipper2; carries part attributes
-    through placement). Knob semantics line up with the native structs on the [C++ API](cpp.md) page.
+    through placement). Knob semantics line up with the native structs on the [C++ API](cpp/index.md) page.
 
 ??? info "nest_result"
 
@@ -342,6 +342,6 @@ To show results, draw straight into the Rhino document with a COMPAS **`Scene`**
 ## Where this fits
 
 OpenNest's nesting engines are native **C++** with a **C#** wrapper for Grasshopper/Rhino — see the
-[C++ API](cpp.md) and [C# API](csharp.md). **`compas_nest` is the Python/COMPAS route** over those same engines
+[C++ API](cpp/index.md) and [C# API](csharp/index.md). **`compas_nest` is the Python/COMPAS route** over those same engines
 (`np_nest` physics + `nfp_nest` NFP/GA), bound via nanobind. For the no‑code Grasshopper path, see
 [OpenNest2](../components/opennest2.md).
