@@ -165,15 +165,15 @@ a[href*="ko-fi.com"] img:hover {
   padding: .2rem .7rem;
   border-radius: 999px;
   background: transparent;
-  border: 1px solid #efa9bf;            /* thin pink outline */
+  border: 2px solid #ec6f9b;            /* thicker pink outline */
   color: #000;                           /* black letters */
   font-size: .68rem;
   font-weight: 600;
   letter-spacing: .01em;
   text-decoration: none;
-  opacity: .85;
-  transition: opacity .15s ease, background .15s ease, border-color .15s ease;
+  transition: background .15s ease, border-color .15s ease;
 }
+.md-typeset a.kofi-btn .kofi-icon { width: 1.1em; height: 1.1em; flex: none; }
 .md-typeset a.kofi-btn:hover,
 .md-typeset a.kofi-btn:focus {
   background: rgba(216, 27, 96, .06);    /* barely-there pink wash */
