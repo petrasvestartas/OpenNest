@@ -2,7 +2,7 @@
 
 Nest parts (one with a hole) into a sheet (with a hole) with the physics (collision) engine.
 
-Project: [Windows](downloads/01_collision_win.zip) · [macOS](downloads/01_collision_mac.zip)
+Project: [Download `01_collision.zip`](downloads/01_collision.zip) — Windows `run.bat`, macOS/Linux `./run.command`.
 
 ```cpp
 // 01 collision — nest parts into a sheet with the physics (collision) engine.

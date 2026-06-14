@@ -2,7 +2,7 @@
 
 Lay parts out in a deterministic grid: a fixed number of columns per row (no nesting).
 
-Project: [Windows](downloads/06_pack_array_win.zip) · [macOS](downloads/06_pack_array_mac.zip)
+Project: [Download `06_pack_array.zip`](downloads/06_pack_array.zip) — Windows `run.bat`, macOS/Linux `./run.command`.
 
 ```cpp
 // 06 pack array — lay parts out in a grid: a fixed number of columns per row.

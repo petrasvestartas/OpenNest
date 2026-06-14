@@ -2,7 +2,7 @@
 
 Grow (or shrink) a polygon by a distance with Clipper2 — the building block for nesting with clearance.
 
-Project: [Windows](downloads/04_offset_win.zip) · [macOS](downloads/04_offset_mac.zip)
+Project: [Download `04_offset.zip`](downloads/04_offset.zip) — Windows `run.bat`, macOS/Linux `./run.command`.
 
 ```csharp
 // 04 offset (clearance) — grow (or shrink) one polygon by a distance (Clipper2).

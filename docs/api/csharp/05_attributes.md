@@ -2,7 +2,7 @@
 
 Carry a point (a part's centroid) and read it at the placed pose: attributes move with the part.
 
-Project: [Windows](downloads/05_attributes_win.zip) · [macOS](downloads/05_attributes_mac.zip)
+Project: [Download `05_attributes.zip`](downloads/05_attributes.zip) — Windows `run.bat`, macOS/Linux `./run.command`.
 
 ```csharp
 // 05 attributes — carry a point (the part centroid) and read it at the placed pose.

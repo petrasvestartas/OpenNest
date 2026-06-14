@@ -2,7 +2,7 @@
 
 Run the NFP engine on a background thread and poll the evolving best layout (progress, fitness, live poses).
 
-Project: [Windows](downloads/03_live_win.zip) · [macOS](downloads/03_live_mac.zip)
+Project: [Download `03_live.zip`](downloads/03_live.zip) — Windows `run.bat`, macOS/Linux `./run.command`.
 
 ```csharp
 // 03 live — run the NFP engine on a background thread, poll the evolving best layout.

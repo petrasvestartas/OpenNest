@@ -2,7 +2,7 @@
 
 Render a label to single-stroke engraving polylines using the bundled OpenNest VDA font.
 
-Project: [Windows](downloads/08_text_win.zip) · [macOS](downloads/08_text_mac.zip)
+Project: [Download `08_text.zip`](downloads/08_text.zip) — Windows `run.bat`, macOS/Linux `./run.command`.
 
 ```csharp
 // 08 text — render a label to single-stroke engraving polylines (the OpenNest VDA font).

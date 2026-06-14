@@ -25,8 +25,9 @@ LANGS = {
 }
 
 def page(num, slug, title, desc, src_rel, fence, code):
+    # one project for every OS (CMake/.NET build natively); the zip carries both run scripts.
     return (f"# {num} · {title}\n\n{desc}\n\n"
-            f"Project: [Windows](downloads/{slug}_win.zip) · [macOS](downloads/{slug}_mac.zip)\n\n"
+            f"Project: [Download `{slug}.zip`](downloads/{slug}.zip) — Windows `run.bat`, macOS/Linux `./run.command`.\n\n"
             f"```{fence}\n{code.rstrip()}\n```\n")
 
 def index(lang_dir, lang_name, blurb):

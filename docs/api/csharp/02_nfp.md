@@ -2,7 +2,7 @@
 
 Nest parts into a sheet with the NFP + genetic-algorithm engine (handles concave parts + holes).
 
-Project: [Windows](downloads/02_nfp_win.zip) · [macOS](downloads/02_nfp_mac.zip)
+Project: [Download `02_nfp.zip`](downloads/02_nfp.zip) — Windows `run.bat`, macOS/Linux `./run.command`.
 
 ```csharp
 // 02 nfp — nest parts into a sheet with the NFP + genetic-algorithm engine.

@@ -2,7 +2,7 @@
 
 Lay parts out in a grid, wrapping to a new row once a row reaches a maximum width.
 
-Project: [Windows](downloads/07_pack_distance_win.zip) · [macOS](downloads/07_pack_distance_mac.zip)
+Project: [Download `07_pack_distance.zip`](downloads/07_pack_distance.zip) — Windows `run.bat`, macOS/Linux `./run.command`.
 
 ```csharp
 // 07 pack distance — lay parts out in a grid: wrap to a new row at a max width.
