@@ -19,7 +19,7 @@ It works **three ways**:
 - **[Rhino Commands](rhino/index.md)** — the **`OpenNest`** command nests **directly in the Rhino viewport**
   (no Grasshopper): select your sheets, select your parts, and it bakes the result into layers — carrying each
   part's markings, colours and object data along.
-- **[Python API](api/python.md)** — drive the same engines from Python, including the **Rhino 8 Script Editor**,
+- **[Python API](api/python/index.md)** — drive the same engines from Python, including the **Rhino 8 Script Editor**,
   via the [`compas_nest`](https://petrasvestartas.github.io/compas_nest/) package.
 
 The Grasshopper components (**Grasshopper 1 and Grasshopper 2**) **and** the `OpenNest` command all ship in the
@@ -36,4 +36,4 @@ Grasshopper 1 **and** Grasshopper 2 components **and** the `OpenNest` Rhino comm
 
 [Rhino Grasshopper →](components/opennest2.md){ .md-button .md-button--primary }
 [Rhino Commands →](rhino/index.md){ .md-button }
-[Python API →](api/python.md){ .md-button }
+[Python API →](api/python/index.md){ .md-button }
