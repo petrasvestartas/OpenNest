@@ -26,12 +26,18 @@ theme:
         icon: material/weather-sunny
         name: Light mode
   features:
-    - navigation.sections
-    - navigation.top
-    - navigation.footer
-    - content.code.copy
-    - toc.follow
-    - toc.integrate   # show each page's headings (e.g. every example) in the LEFT sidebar
+    - navigation.instant            # SPA-style instant page loads (snappier)
+    - navigation.instant.progress   # thin progress bar on slower loads
+    - navigation.tabs               # top-level sections become header TABS -> the left menu only shows the open section
+    - navigation.tabs.sticky        # keep the tabs visible while scrolling
+    - navigation.sections           # group nested sub-sections as headers in the left menu
+    - navigation.top                # back-to-top button
+    - navigation.footer             # previous / next page links
+    - content.code.copy             # copy button on code blocks
+    - toc.follow                    # the RIGHT-hand table of contents follows scroll
+    # NOTE: toc.integrate was REMOVED on purpose. It injected every page's own headings
+    # (Geometry / Example / Inputs / Outputs ...) into the LEFT menu. Now those headings live in the
+    # clean right-hand table of contents, and the left menu is just the page tree.
 
 extra_css:
   - stylesheets/extra.css
