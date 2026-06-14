@@ -1,0 +1,10 @@
+# build artifacts
+build/
+*.exe
+*.dll
+*.dylib
+*.so
+*.o
+*.obj
+*.txt.bak
+out/
