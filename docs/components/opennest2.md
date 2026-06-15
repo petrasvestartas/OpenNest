@@ -18,7 +18,9 @@ Nests parts onto sheets with the no-fit-polygon genetic solver, keeping each par
 | --- | --- | --- | --- |
 | **Sheets** | Generic | item | From OpenNest tab, use component Sheets. |
 | **Geometry** | Generic | item | From OpenNest tab, use component Geometry. |
+| **Options** | Text | list | Optional list of "key value" option strings — wire the **NestOptions** component here. Each line overrides the matching on-canvas option row below; unwired keys keep their on-canvas value. |
 | **Iterations** | Integer | item | GA generations to evolve. Each generation evaluates the whole population and keeps the best, so the result improves over generations. ~10-40 typical (a live orange preview tightens as it runs; press ESC to stop and keep the best). Pair with the 'population' option (default 10). _Default: 10._ |
+| **Run** | Boolean | item | Wire a Boolean Toggle. TRUE = solve now and re-solve when an input changes (background thread, live preview); FALSE = hold the last result. ESC also stops a running solve. _Default: false._ |
 
 ## Outputs
 
@@ -38,9 +40,8 @@ On-canvas settings shown on the component body (zoom in on the component to reve
 
 | Option | Type | Default | Range / Choices | Description |
 | --- | --- | --- | --- | --- |
-| **Rotations** | Number | 8 | 1 – 3600 | Orientations each part may try (360°/n). |
+| **Rotations** | Number | 4 | 1 – 3600 | Orientations each part may try (360°/n). Default 4 = faster; raise it (e.g. 8) for tighter packing. |
 | **Packing** | Choice | Gravity | Box · Gravity · Squeeze · Bottom Left | Placement strategy. **Bottom Left** packs each part into the lowest-then-leftmost feasible spot. |
-| **Spacing** | Number | 0.0 | 0 – 1000 | Gap kept between parts (model units). |
 | **Seed** | Number | 30 | 0 – 100000 | Random seed (same seed = same result). |
 | **Mutation** | Number | 10 | 0 – 100 | GA mutation rate. |
 | **Population** | Number | 10 | 1 – 100000 | GA population size — candidates evaluated per generation. |

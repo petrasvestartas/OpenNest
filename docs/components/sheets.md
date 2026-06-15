@@ -20,6 +20,7 @@ Defines the sheets to nest onto (with optional holes) from closed polylines; sup
 | **Gap** | Number | list | Gap between sheets. _Default: 0.1._ |
 | **Rows** | Number | list | Number of sheets per row before partitioning. |
 | **Copies** | Number | item | Number of copies of the same sheet. |
+| **Offset** | Number | item | Inward MARGIN for nesting (model units; 0 = OFF, fast). Parts keep this setback from the sheet edge; any sheet holes grow by it. _Default: 0._ |
 
 ## Outputs
 

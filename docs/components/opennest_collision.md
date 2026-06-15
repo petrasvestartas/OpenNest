@@ -23,7 +23,9 @@ Nests parts onto sheets with the physics collision solver - packs tightly and ca
 | --- | --- | --- | --- |
 | **Sheets** | Generic | item | From OpenNest tab, use component Sheets. |
 | **Geometry** | Generic | item | From OpenNest tab, use component Geometry. |
+| **Options** | Text | list | Optional list of "key value" option strings — wire the **NestOptions** component here. Each line overrides the matching on-canvas option row below; unwired keys keep their on-canvas value. |
 | **Iterations** | Integer | item | Relaxation rounds; higher packs tighter but is slower. ~4000 = the tight all-on-one-sheet pack; lower for a quick rough preview. _Default: 4000._ |
+| **Run** | Boolean | item | Wire a Boolean Toggle. TRUE = solve now and re-solve when an input changes (background thread, live preview); FALSE = hold the last result. ESC also stops a running solve. _Default: false._ |
 
 ## Outputs
 
@@ -49,5 +51,5 @@ On-canvas settings shown on the component body (zoom in on the component to reve
 | **Element Holes** | Choice | Fill | Off · Fill · Fill First | Nest small **parts** into larger parts' holes. **Fill** = after the main nest; **Fill First** = pre-pack into holes before nesting (sometimes tighter). Sheet holes are always kept clear automatically. |
 | **Poles** | Number | 48 | 4 – 64 | Inscribed circles per part used for collision tests. More = more accurate (cleaner pack); fewer = faster but can pack worse. |
 | **Compact** | Choice | Bottom-Left | Off · Bottom-Left · Multi | Post-pack tightening slide. **Bottom-Left** slides parts down-then-left; **Multi** slides from several directions. |
-| **Fit** | Choice | One sheet (max fill) | One sheet (max fill) · All parts (fewest sheets) | **One sheet** = fill a single sheet as full as possible; parts that don't fit are placed **outside**. **All parts** = use as many sheets as needed so nothing is left off. |
+| **Fit** | Choice | All parts (fewest sheets) | One sheet (max fill) · All parts (fewest sheets) | **All parts** = use as many sheets as needed so nothing is left off (default). **One sheet** = fill a single sheet as full as possible; parts that don't fit are placed **outside**. |
 | **Sheet Font** | Text | `MecSoft_Font-1 1` | — | Sheet-number label: font name + text size. |

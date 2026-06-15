@@ -22,10 +22,9 @@ Nests parts onto sheets with the no-fit-polygon solver (no attributes). Takes cu
 | **Placement** | Integer | item | Placement strategy index. _Default: 1._ |
 | **Tolerance** | Number | item | Curve simplification tolerance. _Default: 0.1._ |
 | **Rotations** | Integer | item | Number of rotation angles to try per part. _Default: 4._ |
-| **Iterations** | Integer | item | Number of solver iterations. _Default: 1._ |
+| **Iterations** | Integer | item | Solver generations to evolve. You watch each one tighten in the preview; higher = tighter but slower. ~4–10 typical. _Default: 6._ |
 | **Seed** | Integer | item | Random seed for reproducible results. _Default: 1._ |
-| **Tries** | Integer | item | Multi-start: run this many attempts (seed, seed+1, …) and keep the TIGHTEST layout. 1 = single run; 4–8 reliably beats run-to-run variance. The live preview shows the current try; ESC stops the sweep and keeps the best so far. _Default: 1._ |
-| **Reset** | Boolean | item | Reset the solver and clear results. _Default: true._ |
+| **Reset** | Boolean | item | Set TRUE (wire a Button) to clear the whole component instantly and drop any running solve. _Default: false._ |
 | **Run** | Boolean | item | Start the nesting solve. _Default: false._ |
 
 ## Outputs
