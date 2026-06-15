@@ -8,6 +8,9 @@ GitHub Releases. Each entry describes what the release actually changed.
 > the previous tag), so a clear commit subject per push becomes the changelog line — refine an entry
 > here anytime if you want more detail.
 
+## [2.85.0.0] - 2026-06-15
+- docs
+
 ## [2.84.0.0] - 2026-06-15
 - docs
 - docs(home): scale the Ko-fi button to 125%
