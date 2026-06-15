@@ -1,7 +1,8 @@
 # OpenNest
 
-<div style="text-align:right" markdown>
-<a href="https://ko-fi.com/petrasvestartas" target="_blank" rel="noopener" class="kofi-btn"><svg class="kofi-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M2,21V19H20V21H2M20,8V5H18V8H20M20,3A2,2 0 0,1 22,5V8A2,2 0 0,1 20,10H18V13A4,4 0 0,1 14,17H8A4,4 0 0,1 4,13V3H20M16,5H6V13A2,2 0 0,0 8,15H14A2,2 0 0,0 16,13V5Z"/></svg>Buy me a coffee</a>
+<div style="text-align:right">
+<script type='text/javascript' src='https://storage.ko-fi.com/cdn/widget/Widget_2.js'></script>
+<script type='text/javascript'>kofiwidget2.init('Support me on Ko-fi', '#ff0091', 'R5R14L13K');kofiwidget2.draw();</script>
 </div>
 
 <p style="text-align:center" markdown>

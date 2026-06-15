@@ -157,31 +157,4 @@ a[href*="ko-fi.com"] img:hover {
 .home-logo { display: inline-block; margin: .4rem 0 .8rem; }
 [data-md-color-scheme="slate"] .home-logo { filter: invert(1); }
 
-/* Buy-me-a-coffee: an OUTLINE-ONLY pink pill — very subtle (☕ = the clickable "logo"). */
-.md-typeset a.kofi-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: .35rem;
-  padding: .2rem .7rem;
-  border-radius: 999px;
-  background: transparent;
-  border: 2px solid #ec6f9b;            /* thicker pink outline */
-  color: #000;                           /* black letters */
-  font-size: .68rem;
-  font-weight: 600;
-  letter-spacing: .01em;
-  text-decoration: none;
-  transition: background .15s ease, border-color .15s ease;
-}
-.md-typeset a.kofi-btn .kofi-icon { width: 1.1em; height: 1.1em; flex: none; }
-.md-typeset a.kofi-btn:hover,
-.md-typeset a.kofi-btn:focus {
-  background: rgba(216, 27, 96, .06);    /* barely-there pink wash */
-  border-color: #d81b60;
-  color: #000;
-  opacity: 1;
-}
-/* dark mode: keep the text readable (black would vanish), pink outline stays */
-[data-md-color-scheme="slate"] .md-typeset a.kofi-btn { color: #fff; border-color: #f48fb1; }
-[data-md-color-scheme="slate"] .md-typeset a.kofi-btn:hover,
-[data-md-color-scheme="slate"] .md-typeset a.kofi-btn:focus { color: #fff; }
+/* Ko-fi support button is rendered by the official Ko-fi widget script on the home page. */
