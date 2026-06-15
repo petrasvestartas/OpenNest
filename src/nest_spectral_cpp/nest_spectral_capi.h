@@ -50,6 +50,7 @@ typedef struct NsParams {
 //   out_container_id          0 if placed in the container, -1 if it did not fit
 //   out_part_index            source part index for each instance
 //   out_n_containers          (length 1) number of containers used (0 or 1 in v1)
+//   out_used_gpu              (length 1, may be NULL) 1 if the cuFFT GPU backend ran, 0 if CPU
 //
 // Returns the number of placed instances (>=0), or a negative error code.
 NS_EXPORT int nest_spectral(
@@ -69,7 +70,8 @@ NS_EXPORT int nest_spectral(
     double*       out_rot,
     int*          out_container_id,
     int*          out_part_index,
-    int*          out_n_containers);
+    int*          out_n_containers,
+    int*          out_used_gpu);
 
 #ifdef __cplusplus
 }

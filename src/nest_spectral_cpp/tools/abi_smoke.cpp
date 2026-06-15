@@ -38,12 +38,12 @@ int main() {
     prm.sort_by_volume = 1; prm.threads = 4;
 
     std::vector<double> tx(inst), ty(inst), tz(inst), rot(9 * inst);
-    std::vector<int> cid(inst), pidx(inst); int ncont = 0;
+    std::vector<int> cid(inst), pidx(inst); int ncont = 0, used_gpu = 0;
 
     int placed = nest_spectral(NP, vcount.data(), xyz.data(), tcount.data(), tris.data(),
                                quantities.data(), CX, CY, CZ, &prm,
                                tx.data(), ty.data(), tz.data(), rot.data(),
-                               cid.data(), pidx.data(), &ncont);
+                               cid.data(), pidx.data(), &ncont, &used_gpu);
     printf("nest_spectral: placed %d/%d instances, %d container(s)\n", placed, inst, ncont);
     if (placed < 0) { printf("ERROR code %d\n", placed); return 1; }
 

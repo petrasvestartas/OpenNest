@@ -42,6 +42,7 @@ namespace opennest_3d
             double[] out_rot,
             int[] out_container_id,
             int[] out_part_index,
-            out int out_n_containers);
+            out int out_n_containers,
+            out int out_used_gpu);
     }
 }

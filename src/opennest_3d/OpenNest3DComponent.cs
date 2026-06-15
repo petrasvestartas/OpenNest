@@ -136,18 +136,27 @@ namespace opennest_3d
                 var out_rot = new double[9 * inst];
                 var out_cid = new int[inst];
                 var out_pidx = new int[inst];
-                int n_containers = 0;
+                int n_containers = 0, used_gpu = 0;
 
+                var sw = System.Diagnostics.Stopwatch.StartNew();
                 int placed = NestSpectralWrapper.nest_spectral(
                     partCount, pvc, xyzList.ToArray(), ptc, triList.ToArray(), pq,
                     cx, cy, cz, ref prm,
-                    out_tx, out_ty, out_tz, out_rot, out_cid, out_pidx, out n_containers);
+                    out_tx, out_ty, out_tz, out_rot, out_cid, out_pidx, out n_containers, out used_gpu);
+                sw.Stop();
 
                 if (placed < 0)
                 {
                     AddRuntimeMessage(GH_RuntimeMessageLevel.Error, "nest_spectral returned error code " + placed + ".");
                     return;
                 }
+
+                // Diagnostic: the actual voxel tray and which backend ran — so slow solves are easy to explain.
+                double pitch = Math.Max(cx, Math.Max(cy, cz)) / Math.Max(1, prm.voxel_resolution);
+                int gx = Math.Max(1, (int)Math.Round(cx / pitch)), gy = Math.Max(1, (int)Math.Round(cy / pitch)), gz = Math.Max(1, (int)Math.Round(cz / pitch));
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Remark,
+                    string.Format("placed {0}/{1} · {2} · tray {3}x{4}x{5} · {6} orient · {7:0} ms",
+                        placed, inst, used_gpu != 0 ? "GPU" : "CPU", gx, gy, gz, orientations, sw.Elapsed.TotalMilliseconds));
 
                 var outMeshes = new List<Mesh>(inst);
                 var outX = new List<Transform>(inst);
@@ -174,7 +183,6 @@ namespace opennest_3d
                     outI.Add(srcOrig[pi]);
                 }
 
-                AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, "Placed " + placed + " / " + inst + " instances.");
                 DA.SetDataList(0, outMeshes);
                 DA.SetDataList(1, outX);
                 DA.SetDataList(2, outC);

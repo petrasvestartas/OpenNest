@@ -12,6 +12,7 @@
 #include "grid.hpp"
 #include "fft.hpp"
 #include "distance.hpp"
+#include "correlator.hpp"
 
 namespace nsp {
 
@@ -32,34 +33,6 @@ struct ItemPlacement {
     double score      = 0.0;
 };
 
-// Best collision-free placement of `item` (tight) into `tray`, scored against precomputed field `phi`.
-inline bool search_placement(const Grid& item, const Grid& tray, const Grid& phi,
-                             double P, int pos[3], double& score, size_t nthreads) {
-    const int N = tray.nx, M = tray.ny, L = tray.nz;
-    if (item.nx > N || item.ny > M || item.nz > L) return false;
-
-    Grid item_pad = pad_to(item, N, M, L);
-    Grid collision, prox;
-    corr3(tray, item_pad, collision, nthreads);
-    corr3(phi,  item_pad, prox,      nthreads);
-
-    double best = std::numeric_limits<double>::infinity();
-    bool found = false;
-    const int maxI = N - item.nx, maxJ = M - item.ny, maxK = L - item.nz;
-    for (int i = 0; i <= maxI; i++)
-        for (int j = 0; j <= maxJ; j++)
-            for (int k = 0; k <= maxK; k++) {
-                if (collision(i, j, k) != 0) continue;            // would overlap existing voxels
-                double qz = (double)k / (double)L;
-                double s = (double)prox(i, j, k) + P * qz * qz * qz;
-                if (s < best) {
-                    best = s; found = true; score = s;
-                    pos[0] = i; pos[1] = j; pos[2] = k;
-                }
-            }
-    return found;
-}
-
 // OR an item's voxels into the tray at `pos`, tagged with `val`. Returns false on (unexpected) overlap.
 inline bool place(const Grid& item, Grid& tray, const int pos[3], int val) {
     for (int i = 0; i < item.nx; i++)
@@ -77,7 +50,7 @@ inline bool place(const Grid& item, Grid& tray, const int pos[3], int val) {
 // Greedy pack of binary voxel `items` into a TX*TY*TZ tray. Fills `tray_out` (voxels tagged 1..n_placed)
 // and returns a placement per item, indexed by original input order.
 inline std::vector<ItemPlacement> pack(const std::vector<Grid>& items, int TX, int TY, int TZ,
-                                       const SpectralParams& p, Grid& tray_out) {
+                                       const SpectralParams& p, Grid& tray_out, bool* used_gpu = nullptr) {
     const int n = (int)items.size();
     std::vector<int> order(n);
     std::iota(order.begin(), order.end(), 0);
@@ -90,12 +63,16 @@ inline std::vector<ItemPlacement> pack(const std::vector<Grid>& items, int TX, i
     for (int i = 0; i < n; i++) result[i].item_index = i;
 
     const std::vector<int> orients = orientation_indices(p.num_orientations);
+    Correlator corr(TX, TY, TZ, p.nthreads);   // one persistent plan + cached tray/phi spectra
+    if (used_gpu) *used_gpu = corr.on_gpu();
     int n_placed = 0;
 
+    Grid phi, collision, prox;
     for (int oidx = 0; oidx < n; oidx++) {
         int idx = order[oidx];
-        Grid phi;
-        distance_field(tray_out, phi);    // depends only on the tray; shared across this item's orientations
+        distance_field(tray_out, phi);     // tray changed since last placement; recompute + recache
+        corr.set_tray(tray_out);           // FFT(flip(tray)) cached once for all of this item's orientations
+        corr.set_phi(phi);                 // FFT(flip(phi))  cached once
 
         double best_score = std::numeric_limits<double>::infinity();
         bool   any = false;
@@ -109,16 +86,23 @@ inline std::vector<ItemPlacement> pack(const std::vector<Grid>& items, int TX, i
             Grid rot = rotate_by(items[idx], R, rotmin);
             if (rot.nx > TX || rot.ny > TY || rot.nz > TZ) continue;
 
-            int pos[3]; double score;
-            if (search_placement(rot, tray_out, phi, p.height_penalty, pos, score, p.nthreads)) {
-                if (score < best_score) {
-                    best_score = score; any = true;
-                    best.placed = true; best.orient = oi; best.R = R; best.score = score;
-                    best.pos[0] = pos[0]; best.pos[1] = pos[1]; best.pos[2] = pos[2];
-                    best.rotmin[0] = rotmin[0]; best.rotmin[1] = rotmin[1]; best.rotmin[2] = rotmin[2];
-                    best_rot = rot;
-                }
-            }
+            corr.correlate(rot, collision, prox);   // per orientation: just item-FFT + 2 mul + 2 inv-FFT
+
+            const int maxI = TX - rot.nx, maxJ = TY - rot.ny, maxK = TZ - rot.nz;
+            for (int i = 0; i <= maxI; i++)
+                for (int j = 0; j <= maxJ; j++)
+                    for (int k = 0; k <= maxK; k++) {
+                        if (collision(i, j, k) != 0) continue;          // would overlap existing voxels
+                        double qz = (double)k / (double)TZ;
+                        double s = (double)prox(i, j, k) + p.height_penalty * qz * qz * qz;
+                        if (s < best_score) {
+                            best_score = s; any = true;
+                            best.placed = true; best.orient = oi; best.R = R; best.score = s;
+                            best.pos[0] = i; best.pos[1] = j; best.pos[2] = k;
+                            best.rotmin[0] = rotmin[0]; best.rotmin[1] = rotmin[1]; best.rotmin[2] = rotmin[2];
+                            best_rot = rot;
+                        }
+                    }
         }
 
         if (any) {

@@ -1,8 +1,9 @@
-// nest_spectral — GPU FFT backend (cuFFT). Compiled only when NEST_SPECTRAL_CUDA=ON (the CUDA toolkit
-// is needed to BUILD this, never to RUN: cufft is delay-loaded, so the DLL still loads on machines with
-// no CUDA and the dispatcher in fft.hpp falls back to the CPU pocketfft path). conv3_cuda returns false
-// on ANY CUDA/cuFFT failure (incl. a GPU whose architecture this build wasn't compiled for) so the
-// dispatcher can fall back to the CPU path — the GPU path never silently produces a wrong result.
+// nest_spectral — GPU correlator backend (cuFFT), device-resident. One persistent cuFFT plan + device
+// buffers for a fixed tray size; FFT(flip(tray)) and FFT(flip(phi)) are uploaded+transformed once per
+// item and kept on the device, so each orientation is just: upload item -> FFT -> two multiplies with
+// the cached spectra -> two inverse FFTs. Built only when NEST_SPECTRAL_CUDA=ON; cufft is delay-loaded
+// so the DLL still loads with no CUDA (see cuda_probe.cpp). Every entry is error-checked; on failure the
+// CPU correlator (correlator.hpp) takes over.
 #include <cuda_runtime.h>
 #include <cufft.h>
 #include <vector>
@@ -12,62 +13,102 @@
 
 namespace nsp {
 
-// Complex multiply A *= B, with the 1/PV inverse-FFT normalization folded in (FFT is linear).
-__global__ void nsp_cmul_scale(cufftComplex* a, const cufftComplex* b, int n, float scale) {
+// out = (A .* B) * scale   (element-wise complex multiply with the 1/PV inverse-FFT normalization).
+__global__ void nsp_cmul(cufftComplex* out, const cufftComplex* A, const cufftComplex* B, int n, float scale) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) {
-        float re = a[i].x * b[i].x - a[i].y * b[i].y;
-        float im = a[i].x * b[i].y + a[i].y * b[i].x;
-        a[i].x = re * scale;
-        a[i].y = im * scale;
+        float re = A[i].x * B[i].x - A[i].y * B[i].y;
+        float im = A[i].x * B[i].y + A[i].y * B[i].x;
+        out[i].x = re * scale;
+        out[i].y = im * scale;
     }
 }
 
-// result(i,j,k) = sum a(u,v,w)*b(i-u,j-v,k-w), truncated to a's box. a,b share dims (item padded to tray).
-// Returns false (and frees everything) on any CUDA/cuFFT error so the caller can use the CPU backend.
-bool conv3_cuda(const Grid& a, const Grid& b, Grid& result) {
-    const int N = a.nx, M = a.ny, L = a.nz;
-    const int X = 2 * N + 1, Y = 2 * M + 1, Z = 2 * L + 1;
-    const size_t PV = (size_t)X * Y * Z;
-
-    cufftComplex *dA = nullptr, *dB = nullptr;
+struct GpuCorr {
+    int nx, ny, nz, X, Y, Z;
+    size_t PV;
     cufftHandle plan = 0;
-    auto cleanup = [&]() { if (plan) cufftDestroy(plan); if (dA) cudaFree(dA); if (dB) cudaFree(dB); };
+    cufftComplex *dTrayF = nullptr, *dPhiF = nullptr, *dItem = nullptr, *dProd = nullptr;
+    std::vector<cufftComplex> h;   // host scratch (PV)
+};
+static GpuCorr* g = nullptr;
 
-    std::vector<cufftComplex> h(PV);   // value-initialized to {0,0}
+void gpu_corr_free() {
+    if (!g) return;
+    if (g->plan) cufftDestroy(g->plan);
+    if (g->dTrayF) cudaFree(g->dTrayF);
+    if (g->dPhiF) cudaFree(g->dPhiF);
+    if (g->dItem) cudaFree(g->dItem);
+    if (g->dProd) cudaFree(g->dProd);
+    delete g;
+    g = nullptr;
+}
 
-    if (cudaMalloc(&dA, PV * sizeof(cufftComplex)) != cudaSuccess) { cleanup(); return false; }
-    if (cudaMalloc(&dB, PV * sizeof(cufftComplex)) != cudaSuccess) { cleanup(); return false; }
+bool gpu_corr_init(int nx, int ny, int nz) {
+    gpu_corr_free();
+    GpuCorr* c = new GpuCorr();
+    c->nx = nx; c->ny = ny; c->nz = nz;
+    c->X = 2 * nx + 1; c->Y = 2 * ny + 1; c->Z = 2 * nz + 1;
+    c->PV = (size_t)c->X * c->Y * c->Z;
+    c->h.resize(c->PV);
+    bool ok = cudaMalloc(&c->dTrayF, c->PV * sizeof(cufftComplex)) == cudaSuccess
+           && cudaMalloc(&c->dPhiF,  c->PV * sizeof(cufftComplex)) == cudaSuccess
+           && cudaMalloc(&c->dItem,  c->PV * sizeof(cufftComplex)) == cudaSuccess
+           && cudaMalloc(&c->dProd,  c->PV * sizeof(cufftComplex)) == cudaSuccess
+           && cufftPlan3d(&c->plan, c->X, c->Y, c->Z, CUFFT_C2C) == CUFFT_SUCCESS;
+    if (!ok) {
+        if (c->plan) cufftDestroy(c->plan);
+        if (c->dTrayF) cudaFree(c->dTrayF);
+        if (c->dPhiF) cudaFree(c->dPhiF);
+        if (c->dItem) cudaFree(c->dItem);
+        if (c->dProd) cudaFree(c->dProd);
+        delete c;
+        return false;
+    }
+    g = c;
+    return true;
+}
 
-    for (int i = 0; i < N; i++)
-        for (int j = 0; j < M; j++)
-            for (int k = 0; k < L; k++) h[((size_t)i * Y + j) * Z + k].x = (float)a(i, j, k);
-    if (cudaMemcpy(dA, h.data(), PV * sizeof(cufftComplex), cudaMemcpyHostToDevice) != cudaSuccess) { cleanup(); return false; }
+// Pack `src` (optionally flipped) into the host buffer, upload to dItem, FFT forward into `dst`.
+static bool upload_fft(const Grid& src, cufftComplex* dst, bool flip) {
+    std::fill(g->h.begin(), g->h.end(), cufftComplex{0.f, 0.f});
+    if (flip) {
+        Grid f; flip3(src, f);
+        for (int i = 0; i < g->nx; i++)
+            for (int j = 0; j < g->ny; j++)
+                for (int k = 0; k < g->nz; k++) g->h[((size_t)i * g->Y + j) * g->Z + k].x = (float)f(i, j, k);
+    } else {
+        for (int i = 0; i < src.nx; i++)
+            for (int j = 0; j < src.ny; j++)
+                for (int k = 0; k < src.nz; k++) g->h[((size_t)i * g->Y + j) * g->Z + k].x = (float)src(i, j, k);
+    }
+    if (cudaMemcpy(g->dItem, g->h.data(), g->PV * sizeof(cufftComplex), cudaMemcpyHostToDevice) != cudaSuccess) return false;
+    return cufftExecC2C(g->plan, g->dItem, dst, CUFFT_FORWARD) == CUFFT_SUCCESS;
+}
 
-    std::fill(h.begin(), h.end(), cufftComplex{0.f, 0.f});
-    for (int i = 0; i < N; i++)
-        for (int j = 0; j < M; j++)
-            for (int k = 0; k < L; k++) h[((size_t)i * Y + j) * Z + k].x = (float)b(i, j, k);
-    if (cudaMemcpy(dB, h.data(), PV * sizeof(cufftComplex), cudaMemcpyHostToDevice) != cudaSuccess) { cleanup(); return false; }
+void gpu_corr_set_tray(const Grid& tray) { upload_fft(tray, g->dTrayF, true); }
+void gpu_corr_set_phi(const Grid& phi)   { upload_fft(phi,  g->dPhiF,  true); }
 
-    if (cufftPlan3d(&plan, X, Y, Z, CUFFT_C2C) != CUFFT_SUCCESS) { cleanup(); return false; }
-    if (cufftExecC2C(plan, dA, dA, CUFFT_FORWARD) != CUFFT_SUCCESS) { cleanup(); return false; }
-    if (cufftExecC2C(plan, dB, dB, CUFFT_FORWARD) != CUFFT_SUCCESS) { cleanup(); return false; }
+// out = flip( truncate( IFFT( cached_F .* itemF ) ) ).  dItem must hold itemF (kept between the two calls).
+static bool corr_one(const cufftComplex* F, Grid& out) {
+    int threads = 256, blocks = (int)((g->PV + threads - 1) / threads);
+    nsp_cmul<<<blocks, threads>>>(g->dProd, F, g->dItem, (int)g->PV, 1.0f / (float)g->PV);
+    if (cudaGetLastError() != cudaSuccess) return false;
+    if (cufftExecC2C(g->plan, g->dProd, g->dProd, CUFFT_INVERSE) != CUFFT_SUCCESS) return false;
+    if (cudaMemcpy(g->h.data(), g->dProd, g->PV * sizeof(cufftComplex), cudaMemcpyDeviceToHost) != cudaSuccess) return false;
+    Grid conv(g->nx, g->ny, g->nz);
+    for (int i = 0; i < g->nx; i++)
+        for (int j = 0; j < g->ny; j++)
+            for (int k = 0; k < g->nz; k++)
+                conv(i, j, k) = (int)llroundf(g->h[((size_t)i * g->Y + j) * g->Z + k].x);
+    flip3(conv, out);
+    return true;
+}
 
-    int threads = 256, blocks = (int)((PV + threads - 1) / threads);
-    nsp_cmul_scale<<<blocks, threads>>>(dA, dB, (int)PV, 1.0f / (float)PV);
-    if (cudaGetLastError() != cudaSuccess) { cleanup(); return false; }   // launch error (e.g. arch mismatch)
-
-    if (cufftExecC2C(plan, dA, dA, CUFFT_INVERSE) != CUFFT_SUCCESS) { cleanup(); return false; }
-    if (cudaMemcpy(h.data(), dA, PV * sizeof(cufftComplex), cudaMemcpyDeviceToHost) != cudaSuccess) { cleanup(); return false; }
-
-    result.resize(N, M, L);
-    for (int i = 0; i < N; i++)
-        for (int j = 0; j < M; j++)
-            for (int k = 0; k < L; k++)
-                result(i, j, k) = (int)llroundf(h[((size_t)i * Y + j) * Z + k].x);
-
-    cleanup();
+bool gpu_corr_correlate(const Grid& item, Grid& collision, Grid& proximity) {
+    if (!upload_fft(item, g->dItem, false)) return false;   // itemF in dItem (in-place forward FFT)
+    if (!corr_one(g->dTrayF, collision)) return false;
+    if (!corr_one(g->dPhiF,  proximity)) return false;
     return true;
 }
 

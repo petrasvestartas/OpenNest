@@ -49,9 +49,11 @@ NS_EXPORT int nest_spectral(
     double*       out_rot,
     int*          out_container_id,
     int*          out_part_index,
-    int*          out_n_containers) {
+    int*          out_n_containers,
+    int*          out_used_gpu) {
 
     if (out_n_containers) *out_n_containers = 0;
+    if (out_used_gpu) *out_used_gpu = 0;
     if (part_count <= 0 || !part_vertex_counts || !part_xyz || !part_tri_counts || !part_tris)
         return -1;
     if (container_x <= 0 || container_y <= 0 || container_z <= 0) return -2;
@@ -102,7 +104,9 @@ NS_EXPORT int nest_spectral(
     sp.nthreads         = threads;
 
     Grid tray;
-    std::vector<ItemPlacement> places = pack(items, TX, TY, TZ, sp, tray);
+    bool used_gpu = false;
+    std::vector<ItemPlacement> places = pack(items, TX, TY, TZ, sp, tray, &used_gpu);
+    if (out_used_gpu) *out_used_gpu = used_gpu ? 1 : 0;
 
     int placed = 0;
     for (int i = 0; i < inst_count; i++) {
