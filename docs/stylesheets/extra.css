@@ -297,3 +297,16 @@ a[href*="ko-fi.com"] img:hover {
   100%  { opacity: 0; }
 }
 /* (no prefers-reduced-motion guard: the slideshow always cycles, as requested) */
+
+/* Hero CTA must stay PINK with white text in BOTH light and dark (the dark-mode global turns primary
+   buttons white otherwise -> white text on white = invisible). High specificity + !important wins. */
+.md-typeset .hero a.md-button--primary,
+[data-md-color-scheme="slate"] .md-typeset .hero a.md-button--primary {
+  background: #d81b60 !important; border-color: #d81b60 !important; color: #fff !important;
+}
+.md-typeset .hero a.md-button--primary:hover,
+.md-typeset .hero a.md-button--primary:focus,
+[data-md-color-scheme="slate"] .md-typeset .hero a.md-button--primary:hover,
+[data-md-color-scheme="slate"] .md-typeset .hero a.md-button--primary:focus {
+  background: #ad1457 !important; border-color: #ad1457 !important; color: #fff !important;
+}
