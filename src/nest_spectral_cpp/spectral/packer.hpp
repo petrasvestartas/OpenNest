@@ -33,6 +33,17 @@ struct ItemPlacement {
     double score      = 0.0;
 };
 
+// Exact voxel-overlap test of `item` placed at `pos` against the tray. Used to verify a candidate the
+// (single-precision GPU) FFT reported collision-free, since float rounding on a large tray can turn a
+// real few-voxel overlap into a metric of 0. O(item voxels); pos is guaranteed in-bounds by the caller.
+inline bool overlaps(const Grid& item, const Grid& tray, int pi, int pj, int pk) {
+    for (int i = 0; i < item.nx; i++)
+        for (int j = 0; j < item.ny; j++)
+            for (int k = 0; k < item.nz; k++)
+                if (item(i, j, k) > 0 && tray(pi + i, pj + j, pk + k) > 0) return true;
+    return false;
+}
+
 // OR an item's voxels into the tray at `pos`, tagged with `val`. Returns false on (unexpected) overlap.
 inline bool place(const Grid& item, Grid& tray, const int pos[3], int val) {
     for (int i = 0; i < item.nx; i++)
@@ -96,6 +107,7 @@ inline std::vector<ItemPlacement> pack(const std::vector<Grid>& items, int TX, i
                         double qz = (double)k / (double)TZ;
                         double s = (double)prox(i, j, k) + p.height_penalty * qz * qz * qz;
                         if (s < best_score) {
+                            if (overlaps(rot, tray_out, i, j, k)) continue;   // exact guard vs float-FFT false-free
                             best_score = s; any = true;
                             best.placed = true; best.orient = oi; best.R = R; best.score = s;
                             best.pos[0] = i; best.pos[1] = j; best.pos[2] = k;
