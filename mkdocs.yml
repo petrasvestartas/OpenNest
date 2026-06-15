@@ -10,6 +10,9 @@ theme:
   custom_dir: overrides   # overrides/partials/header.html renders the section tabs INLINE in the header bar
   logo: assets/logo.png
   favicon: assets/favicon.png
+  font:
+    text: Inter
+    code: JetBrains Mono
   # Strict black & white (see stylesheets/extra.css for the button/link overrides).
   palette:
     - media: "(prefers-color-scheme: light)"
@@ -113,10 +116,12 @@ markdown_extensions:
   - tables
   - attr_list
   - md_in_html
-  - toc:
-      permalink: true
+  - toc          # no permalink: don't show the ¶ anchor next to headings (heading URLs still work)
   - pymdownx.superfences
   - pymdownx.details
+  - pymdownx.emoji:        # enables :material-*: / :octicons-*: icons (home-page cards)
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
 
 extra:
   social:

@@ -7,13 +7,13 @@
 .md-typeset h5,
 .md-typeset h6 { font-weight: 600; }
 
-/* Black & white for header/buttons; LINKS + the selected/active nav link + text selection are BLUE (not violet). */
+/* Black header; ONE unified PINK for everything interactive — links, hover/active nav, selection, accents. */
 :root {
   --md-primary-fg-color:        #000000;
   --md-primary-fg-color--light: #1a1a1a;
   --md-primary-fg-color--dark:  #000000;
-  --md-accent-fg-color:         #1565c0;   /* hover / active nav / ::selection = blue */
-  --md-typeset-a-color:         #1565c0;   /* links + selected nav link = blue, not violet/black */
+  --md-accent-fg-color:         #d81b60;   /* hover / active nav / ::selection = pink */
+  --md-typeset-a-color:         #d81b60;   /* links + selected nav link = pink */
 }
 
 /* Buttons */
@@ -40,25 +40,24 @@
   color: #ffffff;
 }
 
-/* Code syntax highlighting: Material's defaults colour keywords/functions/constants violet-indigo.
-   Remap those tokens to blue so highlighting reads blue, not violet. */
+/* Code syntax highlighting: remap keyword/function/constant tokens to the same unified pink. */
 :root {
-  --md-code-hl-keyword-color:  #1565c0;
-  --md-code-hl-function-color: #1565c0;
-  --md-code-hl-constant-color: #1565c0;
-  --md-code-hl-special-color:  #1565c0;
+  --md-code-hl-keyword-color:  #d81b60;
+  --md-code-hl-function-color: #d81b60;
+  --md-code-hl-constant-color: #d81b60;
+  --md-code-hl-special-color:  #d81b60;
   --md-code-hl-name-color:     var(--md-code-fg-color);
 }
 
 /* Dark scheme: invert to white-on-black */
 [data-md-color-scheme="slate"] {
   --md-primary-fg-color: #ffffff;
-  --md-accent-fg-color:  #64b5f6;
-  --md-typeset-a-color:  #64b5f6;
-  --md-code-hl-keyword-color:  #64b5f6;
-  --md-code-hl-function-color: #64b5f6;
-  --md-code-hl-constant-color: #64b5f6;
-  --md-code-hl-special-color:  #64b5f6;
+  --md-accent-fg-color:  #f06292;          /* lighter pink for dark mode */
+  --md-typeset-a-color:  #f06292;
+  --md-code-hl-keyword-color:  #f48fb1;
+  --md-code-hl-function-color: #f48fb1;
+  --md-code-hl-constant-color: #f48fb1;
+  --md-code-hl-special-color:  #f48fb1;
 }
 [data-md-color-scheme="slate"] .md-typeset .md-button {
   color: #ffffff;
@@ -103,14 +102,24 @@ a[href*="ko-fi.com"] img:hover {
 .md-nav[data-md-component="toc"] .md-nav__link {
   color: #000000 !important;
 }
+/* the CURRENT page + a HOVERED entry = PINK (not black/grey) */
+.md-nav__link:hover {
+  color: #d81b60 !important;
+}
 .md-nav__link--active,
 .md-nav__item--active > .md-nav__link {
+  color: #d81b60 !important;
   font-weight: 700;
 }
 [data-md-color-scheme="slate"] .md-nav__link,
 [data-md-color-scheme="slate"] .md-nav--secondary .md-nav__link,
 [data-md-color-scheme="slate"] .md-nav[data-md-component="toc"] .md-nav__link {
   color: #ffffff !important;
+}
+[data-md-color-scheme="slate"] .md-nav__link:hover,
+[data-md-color-scheme="slate"] .md-nav__link--active,
+[data-md-color-scheme="slate"] .md-nav__item--active > .md-nav__link {
+  color: #f06292 !important;
 }
 
 /* Content links (in the page body): PINK, never violet. Browsers colour VISITED links violet by
@@ -139,7 +148,7 @@ a[href*="ko-fi.com"] img:hover {
   .md-header__title { flex: 0 1 auto; min-width: 0; }            /* title takes only its width */
   .md-header__inner > .md-tabs {                                 /* tabs now live in the flex header row */
     position: static;
-    margin: 0 auto 0 .8rem;                                      /* gap after title; auto-right pushes search to the edge */
+    margin: 0 auto 0 .35rem;                                     /* gap after title; auto-right pushes search to the edge */
     width: auto;
     background: transparent;
     box-shadow: none;
@@ -147,19 +156,144 @@ a[href*="ko-fi.com"] img:hover {
   }
   .md-header__inner > .md-tabs .md-grid { margin: 0; padding: 0; max-width: none; }
   .md-header__inner > .md-tabs .md-tabs__list { margin: 0; padding: 0; height: auto; white-space: nowrap; }
-  .md-header__inner > .md-tabs .md-tabs__item { height: auto; padding-top: 0; padding-bottom: 0; }
-  .md-header__inner > .md-tabs .md-tabs__link { margin: 0; padding: .2rem .1rem; font-size: .72rem; opacity: .82; }
+  .md-header__inner > .md-tabs .md-tabs__item { height: auto; margin: 0 .08rem; padding: 0; }
+  .md-header__inner > .md-tabs .md-tabs__link {
+    margin: 0; padding: .18rem .45rem; border-radius: 999px;
+    font-size: .7rem; opacity: .9; color: inherit;              /* white on the black header */
+    transition: background .15s ease, color .15s ease, opacity .15s ease;
+  }
+  /* highlighted (hover) OR the current section (e.g. Rhino Grasshopper) = WHITE pill, BLACK text */
   .md-header__inner > .md-tabs .md-tabs__link:hover,
-  .md-header__inner > .md-tabs .md-tabs__link--active { opacity: 1; }
+  .md-header__inner > .md-tabs .md-tabs__link--active { opacity: 1; background: #fff; color: #000; }
 }
 
 /* Home-page logo: the SVG is near-black, so invert it in dark mode to keep it visible. */
 .home-logo { display: inline-block; margin: .4rem 0 .8rem; }
 [data-md-color-scheme="slate"] .home-logo { filter: invert(1); }
 
-/* Ko-fi support button (official widget) — scale to 125%, anchored right so it stays right-aligned. */
-.kofi-button {
-  transform: scale(1.25);
-  transform-origin: right center;
-  display: inline-block;
+/* Ko-fi support button in the header bar (far right, next to the GitHub source). Ko-fi pink pill. */
+.md-header__kofi {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;            /* vertically centre in the header row */
+  gap: .25rem;
+  flex: none;
+  margin: 0 .2rem 0 .15rem;
+  padding: .24rem .55rem;
+  border-radius: 999px;
+  background: #d81b60;            /* the unified brand pink */
+  color: #fff;
+  font-size: .66rem;
+  font-weight: 700;
+  white-space: nowrap;
+  text-decoration: none;
+  transition: background .15s ease, transform .15s ease, box-shadow .15s ease;
 }
+.md-header__kofi:hover,
+.md-header__kofi:focus {
+  background: #ad1457;
+  color: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(216, 27, 96, .4);
+}
+.md-header__kofi svg { width: 1.05em; height: 1.05em; flex: none; }
+/* on narrow screens keep just the cup to save header space */
+@media screen and (max-width: 59.9375em) {
+  .md-header__kofi-text { display: none; }
+  .md-header__kofi { padding: .26rem .4rem; }
+}
+
+/* "OpenNest" home link (top-left logo + title, and the left-nav title): pink/bright on hover, never the grey dim. */
+.md-header__button.md-logo:hover,
+.md-nav__button.md-logo:hover { opacity: 1; }                       /* Material dims it to ~.7 (grey) — keep it bright */
+.md-header__title:hover .md-ellipsis,
+.md-header__topic:hover,
+.md-nav__title:hover { color: #d81b60; }
+[data-md-color-scheme="slate"] .md-header__title:hover .md-ellipsis,
+[data-md-color-scheme="slate"] .md-nav__title:hover { color: #f06292; }
+
+/* ============================================================================
+   Home-page hero + cards (index.md uses hide: navigation, toc -> full width)
+   ============================================================================ */
+.hero { text-align: center; margin: 1.2rem auto 2.2rem; max-width: 48rem; }
+.hero .hero-logo { height: 128px; width: auto; margin: 0 auto .3rem; display: inline-block; }
+[data-md-color-scheme="slate"] .hero .hero-logo { filter: invert(1); }
+.md-typeset .hero h1 {
+  font-weight: 800; font-size: 3rem; line-height: 1.05; letter-spacing: -.03em; margin: .1rem 0 .5rem;
+}
+.hero .hero-tagline {
+  font-size: .96rem; line-height: 1.7; color: var(--md-default-fg-color--light);
+  max-width: 40rem; margin: 0 auto 1.3rem;
+}
+.hero .md-button { margin: .25rem .3rem; border-radius: 6px; }
+/* Pink primary CTA on the hero (the global primary button stays black elsewhere) */
+.hero .md-button--primary { background: #d81b60; border-color: #d81b60; color: #fff; }
+.hero .md-button--primary:hover,
+.hero .md-button--primary:focus { background: #ad1457; border-color: #ad1457; color: #fff; }
+
+/* Hero screenshot / bordered images: rounded, soft shadow, centred */
+.md-typeset .hero-shot,
+.md-typeset .bordered {
+  display: block; margin: 1.2rem auto; border-radius: 12px;
+  box-shadow: 0 6px 30px rgba(0,0,0,.12);
+  border: 1px solid var(--md-default-fg-color--lightest); max-width: 100%;
+}
+
+/* Cards: rounded, lift + pink accent on hover */
+.md-typeset .grid.cards > ul > li {
+  border-radius: 12px; border: 1px solid var(--md-default-fg-color--lightest);
+  transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+}
+.md-typeset .grid.cards > ul > li:hover {
+  border-color: #d81b60; box-shadow: 0 8px 26px rgba(216, 27, 96, .12); transform: translateY(-3px);
+}
+.md-typeset .grid.cards > ul > li > hr { margin: .55rem 0; }
+.md-typeset .grid.cards .twemoji { color: #d81b60; }   /* card icons in the brand pink */
+
+/* Landing-page section headings: a touch more air */
+.md-typeset h2 { margin-top: 2.4rem; }
+
+/* Fix: the hero primary CTA text must be WHITE (the global pink link colour was bleeding in -> pink-on-pink). */
+.md-typeset .hero .md-button--primary,
+.md-typeset .hero a.md-button--primary:link,
+.md-typeset .hero a.md-button--primary:visited,
+.md-typeset .hero .md-button--primary:hover { color: #fff !important; }
+
+/* Landing page (the one with the hero): centre the section headings + their intro paragraphs. */
+.md-content:has(.hero) .md-typeset > h2,
+.md-content:has(.hero) .md-typeset > p { text-align: center; }
+
+/* Install screenshot caption */
+.md-typeset .install-figure { margin: 1.4rem auto; max-width: 40rem; text-align: center; }
+.md-typeset .install-figure figcaption { font-size: .74rem; color: var(--md-default-fg-color--light); margin-top: .5rem; }
+/* numbered-circle install icons in brand pink, a bit larger */
+.md-typeset .grid.cards .twemoji svg { vertical-align: -.18em; }
+
+/* ---- Home-page auto-fade slideshow (9 images, ~5s each, gentle crossfade) ---- */
+/* Smaller, no frame: each image shows in FULL (object-fit: contain), no black border/background. */
+.slideshow {
+  position: relative; width: 100%; max-width: 42rem; margin: 1.2rem auto 1rem;
+  aspect-ratio: 16 / 10;
+  background: transparent;
+}
+.slideshow img {
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
+  opacity: 0; animation: ssfade 45s infinite;
+}
+.slideshow img:nth-child(1) { animation-delay: 0s; }
+.slideshow img:nth-child(2) { animation-delay: 5s; }
+.slideshow img:nth-child(3) { animation-delay: 10s; }
+.slideshow img:nth-child(4) { animation-delay: 15s; }
+.slideshow img:nth-child(5) { animation-delay: 20s; }
+.slideshow img:nth-child(6) { animation-delay: 25s; }
+.slideshow img:nth-child(7) { animation-delay: 30s; }
+.slideshow img:nth-child(8) { animation-delay: 35s; }
+.slideshow img:nth-child(9) { animation-delay: 40s; }
+@keyframes ssfade {
+  0%    { opacity: 0; }
+  2%    { opacity: 1; }
+  10%   { opacity: 1; }
+  12.5% { opacity: 0; }
+  100%  { opacity: 0; }
+}
+/* (no prefers-reduced-motion guard: the slideshow always cycles, as requested) */
