@@ -14,6 +14,12 @@
 
 namespace nsp {
 
+#ifdef NSP_CUDA
+// Defined in fft_cuda.cu / cuda_probe.cpp (built only when NEST_SPECTRAL_CUDA=ON).
+bool cuda_backend_available();
+bool conv3_cuda(const Grid& a, const Grid& b, Grid& result);   // false on any GPU failure -> use CPU
+#endif
+
 using cd = std::complex<double>;
 
 // In-place 3D complex FFT of a contiguous (X,Y,Z) row-major buffer.
@@ -26,9 +32,8 @@ inline void fft3(cd* buf, int X, int Y, int Z, bool forward, double fct, size_t 
     pocketfft::c2c(shape, stride, stride, axes, forward, buf, buf, fct, nthreads);
 }
 
-// result(i,j,k) = sum_{u,v,w} a(u,v,w) * b(i-u, j-v, k-w)  (linear), truncated to a's box.
-// a and b must share dims (the caller pads the item to tray size first).
-inline void conv3(const Grid& a, const Grid& b, Grid& result, size_t nthreads = 1) {
+// CPU (pocketfft) linear convolution. The default backend and the fallback when no GPU is present.
+inline void conv3_cpu(const Grid& a, const Grid& b, Grid& result, size_t nthreads = 1) {
     const int N = a.nx, M = a.ny, L = a.nz;
     const int X = 2 * N + 1, Y = 2 * M + 1, Z = 2 * L + 1;
     const size_t PV = (size_t)X * Y * Z;
@@ -52,6 +57,18 @@ inline void conv3(const Grid& a, const Grid& b, Grid& result, size_t nthreads = 
         for (int j = 0; j < M; j++)
             for (int k = 0; k < L; k++)
                 result(i, j, k) = (int)std::llround(A[((size_t)i * Y + j) * Z + k].real());
+}
+
+// conv3 dispatcher: use the cuFFT GPU backend once, if an NVIDIA device + cuFFT are present (detected
+// lazily and cached); otherwise the CPU pocketfft path. corr3 (below) calls this, so the whole spectral
+// search runs on the GPU when available with no other change.
+inline void conv3(const Grid& a, const Grid& b, Grid& result, size_t nthreads = 1) {
+#ifdef NSP_CUDA
+    static int gpu = -1;
+    if (gpu < 0) gpu = cuda_backend_available() ? 1 : 0;
+    if (gpu == 1) { if (conv3_cuda(a, b, result)) return; gpu = 0; }   // GPU failed -> disable, use CPU
+#endif
+    conv3_cpu(a, b, result, nthreads);
 }
 
 // Cross-correlation: result(q) = sum_p a(p) * b(p - q)  ==  flip(conv(flip(a), b)).

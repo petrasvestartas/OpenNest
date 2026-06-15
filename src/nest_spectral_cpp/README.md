@@ -45,6 +45,24 @@ nest_spectral --meshtest                       # voxelizer + mesh→pack sanity
 nest_spectral --tray 32 --items 24 --orient 24 # synthetic packing + density
 ```
 
+## GPU acceleration (optional, cuFFT)
+
+The FFTs can run on an NVIDIA GPU via cuFFT. It is **opt-in at build time** and **automatic at run time**:
+
+```
+cmake -S . -B build -A x64 -DNEST_SPECTRAL_CUDA=ON
+cmake --build build --config Release
+```
+
+- Building needs the **CUDA toolkit**; running does **not**. cudart is static-linked and cufft is
+  **delay-loaded**, so the same DLL still loads on machines with no CUDA and falls back to the CPU
+  pocketfft path. At first use the engine probes for an NVIDIA device + a loadable cuFFT (resolved from
+  `CUDA_PATH` if not on `PATH`) and, if present, runs `conv3` on the GPU; `conv3_cuda` is fully
+  error-checked, so a GPU it wasn't compiled for (or any CUDA failure) cleanly reverts to the CPU.
+- Default real-arch cubins are Ampere/Ada (`86;89`); override with `-DCMAKE_CUDA_ARCHITECTURES=...`.
+- Verified on an RTX 4080: **identical packing** to the CPU path (float vs double FFT round to the same
+  integer collision/proximity fields) at a healthy speedup that grows with voxel resolution.
+
 ## C ABI
 
 One stateless entry point, `nest_spectral(...)` (see `nest_spectral_capi.h`), P/Invokable exactly like
@@ -58,9 +76,10 @@ a 3×3 rotation `R`, a translation `(tx,ty,tz)`, and a container id (`-1` = did 
   in-container on box instances (`tools/abi_smoke.cpp`).
 - **Voxel-approximate**: collisions are at voxel resolution (staircasing), like all spectral packers.
 - **Single container** in v1; parts that don't fit are reported unplaced.
-- **CPU cost**: the FFTs dominate; runtime grows with `voxel_resolution³`, part count, and orientations.
-  Future speedups: cache the tray FFT across a part's orientations (psacking's `GPUTrayContext` trick),
-  real-to-complex transforms, and parallelizing the orientation search.
+- **Cost**: the FFTs dominate; runtime grows with `voxel_resolution³`, part count, and orientations.
+  Build with `-DNEST_SPECTRAL_CUDA=ON` for the GPU path (above). Further speedups (CPU and GPU): cache
+  the tray FFT across a part's orientations (psacking's `GPUTrayContext` trick), real-to-complex
+  transforms, and parallelizing the orientation search.
 
 Provenance: algorithm from *Dense, Interlocking-Free and Scalable Spectral Packing of Generic 3D Objects*
 (Cui, Rong, Chen, Matusik; MIT/Inkbit). Reference implementation Vrroom/psacking (MIT). FFT by pocketfft
