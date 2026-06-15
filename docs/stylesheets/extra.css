@@ -157,4 +157,9 @@ a[href*="ko-fi.com"] img:hover {
 .home-logo { display: inline-block; margin: .4rem 0 .8rem; }
 [data-md-color-scheme="slate"] .home-logo { filter: invert(1); }
 
-/* Ko-fi support button is rendered by the official Ko-fi widget script on the home page. */
+/* Ko-fi support button (official widget) — scale to 125%, anchored right so it stays right-aligned. */
+.kofi-button {
+  transform: scale(1.25);
+  transform-origin: right center;
+  display: inline-block;
+}
