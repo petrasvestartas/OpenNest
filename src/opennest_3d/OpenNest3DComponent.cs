@@ -20,17 +20,17 @@ namespace opennest_3d
         {
         }
 
-        public override GH_Exposure Exposure => GH_Exposure.primary;
+        public override GH_Exposure Exposure => GH_Exposure.quinary;   // packing row, right after Sheets
 
         protected override void RegisterInputParams(GH_Component.GH_InputParamManager pManager)
         {
-            pManager.AddMeshParameter("Parts", "P", "Meshes to nest into the container.", GH_ParamAccess.list);
-            pManager.AddBoxParameter("Container", "B", "Container box (its X/Y/Z size is the build volume; Z is 'up').", GH_ParamAccess.item);
-            pManager.AddIntegerParameter("Resolution", "V", "Voxels along the container's longest axis (higher = finer + slower).", GH_ParamAccess.item, 48);
-            pManager.AddIntegerParameter("Orientations", "O", "Cube orientations tried per part: 1, 4, 6, or 24 (more = tighter + slower).", GH_ParamAccess.item, 1);
-            pManager.AddNumberParameter("HeightPenalty", "H", "Weight biasing parts toward the floor (z). <=0 uses the 1e8 default.", GH_ParamAccess.item, 1e8);
-            pManager.AddIntegerParameter("Quantities", "Q", "Optional copies per part (defaults to 1 each).", GH_ParamAccess.list);
-            pManager.AddBooleanParameter("Run", "R", "Run the solve (can take seconds). Off by default.", GH_ParamAccess.item, false);
+            pManager.AddMeshParameter("Parts", "Parts", "Meshes to nest into the container.", GH_ParamAccess.list);
+            pManager.AddBoxParameter("Container", "Container", "Container box (its X/Y/Z size is the build volume; Z is 'up').", GH_ParamAccess.item);
+            pManager.AddIntegerParameter("Resolution", "Resolution", "Voxels along the container's longest axis (higher = finer + slower).", GH_ParamAccess.item, 48);
+            pManager.AddIntegerParameter("Orientations", "Orientations", "Cube orientations tried per part: 1, 4, 6, or 24 (more = tighter + slower).", GH_ParamAccess.item, 1);
+            pManager.AddNumberParameter("Height Penalty", "Height Penalty", "Weight biasing parts toward the floor (z). <=0 uses the 1e8 default.", GH_ParamAccess.item, 1e8);
+            pManager.AddIntegerParameter("Quantities", "Quantities", "Optional copies per part (defaults to 1 each).", GH_ParamAccess.list);
+            pManager.AddBooleanParameter("Run", "Run", "Run the solve (can take seconds). Off by default.", GH_ParamAccess.item, false);
             pManager[2].Optional = true;
             pManager[3].Optional = true;
             pManager[4].Optional = true;
@@ -40,10 +40,10 @@ namespace opennest_3d
 
         protected override void RegisterOutputParams(GH_Component.GH_OutputParamManager pManager)
         {
-            pManager.AddMeshParameter("Placed", "M", "The parts moved/rotated into the container (one per instance).", GH_ParamAccess.list);
-            pManager.AddTransformParameter("Transform", "X", "Placement transform per instance (world = R*p + t).", GH_ParamAccess.list);
-            pManager.AddIntegerParameter("Container", "C", "Container id per instance (0 = placed, -1 = did not fit).", GH_ParamAccess.list);
-            pManager.AddIntegerParameter("PartIndex", "I", "Source part index (into the input list) per instance.", GH_ParamAccess.list);
+            pManager.AddMeshParameter("Placed", "Placed", "The parts moved/rotated into the container (one per instance).", GH_ParamAccess.list);
+            pManager.AddTransformParameter("Transform", "Transform", "Placement transform per instance (world = R*p + t).", GH_ParamAccess.list);
+            pManager.AddIntegerParameter("Container", "Container", "Container id per instance (0 = placed, -1 = did not fit).", GH_ParamAccess.list);
+            pManager.AddIntegerParameter("Part Index", "Part Index", "Source part index (into the input list) per instance.", GH_ParamAccess.list);
         }
 
         protected override void SolveInstance(IGH_DataAccess DA)

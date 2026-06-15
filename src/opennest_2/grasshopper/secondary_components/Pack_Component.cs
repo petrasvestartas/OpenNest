@@ -17,7 +17,7 @@ namespace opennest_2
               "Lays objects out in a row, orienting each from 3D to 2D with a chosen spacing.",
               "Params", "OpenNest2") {
         }
-        public override GH_Exposure Exposure => GH_Exposure.octonary;
+        public override GH_Exposure Exposure => GH_Exposure.quinary;   // packing row, right after Sheets
 
         protected override void RegisterInputParams(GH_Component.GH_InputParamManager pManager) {
             pManager.AddGeometryParameter("Geo", "G", "Objects to pack", GH_ParamAccess.tree);

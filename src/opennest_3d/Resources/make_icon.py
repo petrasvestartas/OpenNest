@@ -12,11 +12,11 @@ OUT = os.path.dirname(os.path.abspath(__file__))
 N = 24                 # icon is N x N user units
 SS = 24                # PNG supersample factor (render N*SS, downscale to N)
 
-TOP  = "#262626"       # extruded slab top face (OpenNest dark)
-WALL = "#C4C4C4"       # extrusion side walls (light gray -> strong depth contrast at icon size)
-INK  = "#000000"       # outline
-OUTLINE_TOP  = 1.2     # bold ink outline on the top faces (24-space units)
-OUTLINE_WALL = 0.9     # side walls
+TOP  = "#BDBDBD"       # grey top face (fill is grey)
+WALL = "#8C8C8C"       # grey side walls (a touch darker -> gentle depth shading)
+INK  = "#000000"       # black extrusion lines / outline
+OUTLINE_TOP  = 1.2     # black line weight on top edges (24-space units)
+OUTLINE_WALL = 1.0     # black line weight on the extrusion side edges
 VX, VY = 2.8, 3.2      # extrusion vector (down-right) -> chunky 3D blocks (side faces read at 24px)
 
 # The 4 black HATCH polygons of the OpenNest logo (icons/SVG/opennest.svg).

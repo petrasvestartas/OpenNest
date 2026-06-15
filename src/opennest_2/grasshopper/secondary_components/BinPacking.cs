@@ -14,7 +14,7 @@ namespace opennest_2
               "Packs 3D boxes into a container.",
               "Params", "OpenNest2") {
         }
-        public override GH_Exposure Exposure => GH_Exposure.octonary;
+        public override GH_Exposure Exposure => GH_Exposure.quinary;   // packing row, right after Sheets
 
         protected override void RegisterInputParams(GH_Component.GH_InputParamManager pManager) {
             pManager.AddGeometryParameter("Con", "C", "Container to pack into", GH_ParamAccess.list);
