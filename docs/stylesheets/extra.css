@@ -310,3 +310,51 @@ a[href*="ko-fi.com"] img:hover {
 [data-md-color-scheme="slate"] .md-typeset .hero a.md-button--primary:focus {
   background: #ad1457 !important; border-color: #ad1457 !important; color: #fff !important;
 }
+
+/* ---- "OpenNest in numbers" infographic (home page) ---- */
+/* Big-number stat strip. */
+.md-typeset .stats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 1.5rem 3rem;
+  margin: 1.6rem 0 1.2rem;
+}
+.md-typeset .stat { display: flex; flex-direction: column; align-items: center; line-height: 1; }
+.md-typeset .stat-num {
+  font-size: 2.6rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--md-default-fg-color);
+}
+.md-typeset .stat-label {
+  margin-top: .4rem;
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .09em;
+  opacity: .6;
+}
+/* Download chart: currentColor drives the SVG, so it adapts to light/dark automatically. */
+.md-typeset .dlchart-fig {
+  max-width: 760px;
+  margin: .5rem auto 2.4rem;
+  text-align: center;
+  color: var(--md-default-fg-color);
+}
+.md-typeset .dlchart { width: 100%; height: auto; display: block; }
+.md-typeset .dlchart-fig figcaption {
+  margin-top: .6rem;
+  font-size: .76rem;
+  opacity: .6;
+  text-align: center;
+}
+/* World download map (pink choropleth; pink + grey read on both light & dark). Break out WIDER than the
+   760px chart / content column so the map reads large; centered, capped to the viewport. */
+.md-typeset .worldmap-fig {
+  margin-top: 1.8rem;
+  max-width: min(1200px, 94vw);
+  width: min(1200px, 94vw);
+  margin-left: 50%;
+  transform: translateX(-50%);
+}
+.md-typeset .worldmap-img { width: 100%; height: auto; display: block; }
