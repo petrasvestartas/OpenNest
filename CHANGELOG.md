@@ -8,6 +8,9 @@ GitHub Releases. Each entry describes what the release actually changed.
 > the previous tag), so a clear commit subject per push becomes the changelog line — refine an entry
 > here anytime if you want more detail.
 
+## [2.87.0.0] - 2026-06-17
+- docs(home): add 'OpenNest in numbers' infographic (downloads-vs-users chart + world map)
+
 ## [2.86.0.0] - 2026-06-15
 - docs: sync component Input/Output tables with current components
 
