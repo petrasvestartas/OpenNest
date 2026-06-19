@@ -47,6 +47,7 @@ struct Args {
     double sheetW = 0, sheetH = 0; // 0 = dataset default
     bool dumpPlacements = false;
     bool dumpDataset = false;
+    bool packDemo = false;
     double probeRotA = -1, probeRotB = -1;
     std::string tag = "run", csv, svgDir;
 };
@@ -78,6 +79,7 @@ Args parseArgs(int argc, char** argv) {
         else if (k == "--serial") a.useParallel = 0;
         else if (k == "--dumpPlacements") a.dumpPlacements = true;
         else if (k == "--dumpDataset") a.dumpDataset = true;
+        else if (k == "--packDemo") a.packDemo = true;   // exercise nfp_pack (grid layout, no nesting)
         else if (k == "--probeNfp") { a.probeRotA = std::atof(need(i)); a.probeRotB = std::atof(need(i)); }
         else if (k == "--tag") a.tag = need(i);
         else if (k == "--csv") a.csv = need(i);
@@ -444,6 +446,41 @@ int main(int argc, char** argv) try {
             }
         std::printf("SCENARIO nearest feasible-vertex shift distance to s0: %.6f %s\n",
                     bestD, bestD < 1e-3 ? "== s0 (BUG REPRODUCED)" : "(s0 excluded, ok)");
+        return 0;
+    }
+
+    if (a.packDemo) {
+        // Exercise nfp_pack: array mode (5 columns) and distance mode (sheet width).
+        bench::BenchData d = bench::makeDataset(a.dataset, 1234);
+        std::vector<int> pvc, pqty;
+        std::vector<double> pxy;
+        int inst = 0;
+        for (auto& p : d.parts) {
+            pvc.push_back(static_cast<int>(p.xy.size() / 2));
+            pxy.insert(pxy.end(), p.xy.begin(), p.xy.end());
+            pqty.push_back(p.qty);
+            inst += p.qty;
+        }
+        std::vector<double> tx(inst), ty(inst), ang(inst);
+        std::vector<int> sid(inst);
+        int k1 = nfp_pack(static_cast<int>(d.parts.size()), pvc.data(), pxy.data(), pqty.data(),
+                          5, 10.0, 10.0, 0.0, tx.data(), ty.data(), ang.data(), sid.data());
+        std::printf("nfp_pack array(cols=5): placed=%d, first=(%.1f,%.1f) last=(%.1f,%.1f)\n",
+                    k1, tx[0], ty[0], tx[k1 - 1], ty[k1 - 1]);
+        int k2 = nfp_pack(static_cast<int>(d.parts.size()), pvc.data(), pxy.data(), pqty.data(),
+                          10, 10.0, 10.0, d.sheetW, tx.data(), ty.data(), ang.data(), sid.data());
+        std::printf("nfp_pack distance(maxW=%.0f): placed=%d, last=(%.1f,%.1f)\n",
+                    d.sheetW, k2, tx[k2 - 1], ty[k2 - 1]);
+        // offset round-trip on part 0: grow by 5 then shrink by 5 — area must come back close.
+        std::vector<double> grown(2048), back(2048);
+        int g = nfp_offset_polygon(static_cast<int>(d.parts[0].xy.size() / 2), d.parts[0].xy.data(),
+                                   5.0, 2.0, 1024, grown.data());
+        int b = g > 0 ? nfp_offset_polygon(g, grown.data(), -5.0, 2.0, 1024, back.data()) : 0;
+        std::printf("nfp_offset_polygon: grow -> %d verts, shrink-back -> %d verts (orig %zu), "
+                    "area %.1f -> %.1f -> %.1f\n",
+                    g, b, d.parts[0].xy.size() / 2, polyAreaXY(d.parts[0].xy),
+                    g > 0 ? polyAreaXY(std::vector<double>(grown.begin(), grown.begin() + 2 * g)) : 0.0,
+                    b > 0 ? polyAreaXY(std::vector<double>(back.begin(), back.begin() + 2 * b)) : 0.0);
         return 0;
     }
 
