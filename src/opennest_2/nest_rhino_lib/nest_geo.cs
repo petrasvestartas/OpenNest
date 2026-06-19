@@ -49,6 +49,14 @@ namespace nest_rhino_lib
 
         public List<GeometryBase[]> geometry_attributes;
 
+        // Parallel to geometry_attributes: source attribute-input-port index of each attribute item (base
+        // "Attributes" port = 0, "Attributes 2" = 1, ...). Lets the nest component output attributes in
+        // {part; port} sub-branches so the user can trace which input each one came from.
+        // attribute_port_count = number of attribute input ports on the source Geometry component
+        // (1 = only the base port => flat {part} output; >= 2 => {part; port} sub-branches).
+        public List<int[]> geometry_attribute_ports;
+        public int attribute_port_count = 1;
+
         public List<ObjectAttributes> attributes;
 
         public List<List<int>> geometry_sorted;
@@ -76,6 +84,7 @@ namespace nest_rhino_lib
             this.rotations = new List<int>();
             this.geometry = new List<GeometryBase>();
             this.geometry_attributes = new List<GeometryBase[]>();
+            this.geometry_attribute_ports = new List<int[]>();
             this.attributes = new List<ObjectAttributes>();
             this.geometry_sorted = new List<List<int>>();
             this.boudary_indices_non_sorted = new List<int>();
@@ -440,6 +449,12 @@ namespace nest_rhino_lib
 
 
             }
+
+            // Carry the per-attribute source-port indices (and the port count) so {part; port} output survives a duplicate.
+            nestGeo.geometry_attribute_ports = new List<int[]>();
+            for (int j = 0; j < this.geometry_attribute_ports.Count; j++)
+                nestGeo.geometry_attribute_ports.Add((int[])this.geometry_attribute_ports[j].Clone());
+            nestGeo.attribute_port_count = this.attribute_port_count;
 
 
             nestGeo.boundary_curves_non_sorted = new List<Curve>();
@@ -846,6 +861,12 @@ namespace nest_rhino_lib
                 // Add basic elements that can be directly merged
                 combined.geometry.AddRange(source.geometry);
                 combined.geometry_attributes.AddRange(source.geometry_attributes);
+                // Keep the parallel attribute-port indices aligned (default port 0 for a source that predates them).
+                if (source.geometry_attribute_ports != null && source.geometry_attribute_ports.Count == source.geometry_attributes.Count)
+                    combined.geometry_attribute_ports.AddRange(source.geometry_attribute_ports);
+                else
+                    foreach (var ga in source.geometry_attributes) combined.geometry_attribute_ports.Add(new int[ga != null ? ga.Length : 0]);
+                combined.attribute_port_count = System.Math.Max(combined.attribute_port_count, source.attribute_port_count < 1 ? 1 : source.attribute_port_count);
                 combined.attributes.AddRange(source.attributes);
                 combined.disply_texts.AddRange(source.disply_texts);
                 combined.boundary_curves_non_sorted.AddRange(source.boundary_curves_non_sorted);

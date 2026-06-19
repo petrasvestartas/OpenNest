@@ -65,7 +65,7 @@ namespace opennest_2
                 "1 = fixed, no rotation (e.g. grain direction).\n" +
                 "Lets rectangular parts stay at 4 orientations while freeform parts rotate freely in ONE nest.",
                 GH_ParamAccess.list);
-            pManager.AddGeometryParameter("Attributes", "Attributes", "Additional geometry: points, lines, surfaces, meshes... \nUse data-tree, one list of additional geometry per branch..", GH_ParamAccess.list);
+            pManager.AddGeometryParameter("Attributes", "Attributes", "Additional geometry carried with each part: points, lines, surfaces, meshes...\nData-tree: one branch per surface (branch i -> surface i). Use the +/- on the component to add more Attributes ports.", GH_ParamAccess.tree);
 
             pManager[1].Optional = true;
             pManager[2].Optional = true;
@@ -132,11 +132,22 @@ namespace opennest_2
             var geo_current = new List<Brep>();
             bool result = DA.GetDataList(0, geo_current);
 
-            var attributes = new List<IGH_GeometricGoo>();
-            int attrIdx = -1;
-            for (int pi = 0; pi < Params.Input.Count; pi++)
-                if (Params.Input[pi].Name == "Attributes") { attrIdx = pi; break; }
-            if (attrIdx >= 0) DA.GetDataList(attrIdx, attributes);
+            // Read the base "Attributes" tree PLUS every extra "Attributes N" port added via the
+            // component's +/- zoom. Each port is an independent attribute source. Pick ports by name so
+            // this is robust to the Rotations port and to legacy ports from older builds.
+            // Each attribute port gets a stable PORT INDEX by position (base "Attributes" = 0, "Attributes 2"
+            // = 1, ...), assigned even for empty ports, so the nest component can emit {part; port} sub-branches.
+            var attrTrees = new List<GH_Structure<IGH_GeometricGoo>>();
+            var attrPorts = new List<int>();
+            int attrPortCount = 0;
+            for (int ai = 5; ai < Params.Input.Count; ai++)
+            {
+                if (!Params.Input[ai].Name.StartsWith("Attributes")) continue;   // skip Rotations / legacy ports
+                int portIdx = attrPortCount++;                                    // base = 0, Attributes 2 = 1, ...
+                GH_Structure<IGH_GeometricGoo> t;
+                if (DA.GetDataTree(ai, out t) && t != null && t.DataCount > 0) { attrTrees.Add(t); attrPorts.Add(portIdx); }
+            }
+            if (attrPortCount < 1) attrPortCount = 1;
 
 
             List<Curve[]> curves = new List<Curve[]>();
@@ -169,13 +180,16 @@ namespace opennest_2
 
                 if (copies.Count == 0)
                     copies.Add(1);
-
-                var attributes_local = new GeometryBase[0];
-                attributes_geometries.Add(attributes_local);
-                if (geo_current.Count == attributes.Count)
-                    attributes_geometries[attributes_geometries.Count-1] = new GeometryBase[] { GH_Convert.ToGeometryBase(attributes[j]) };
-
             }
+
+            // Surfaces are a flat LIST, so attributes match by structure (no per-surface paths): a flat list
+            // of N attributes maps one-per-surface, an N-branch tree maps one branch per surface, and
+            // anything else is ignored with a warning (see AttributeMatch).
+            bool attr_mismatch;
+            List<int[]> attr_ports;
+            attributes_geometries = AttributeMatch.Match(geo_current.Count, null, attrTrees, attrPorts, out attr_ports, out attr_mismatch);
+            if (attr_mismatch)
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "Tree Branches don't match, attributes will be ignored.");
 
 
             for (int i = copies.Count; i< curves.Count; i++)
@@ -188,7 +202,7 @@ namespace opennest_2
 
 
             //Solution
-            nest_geo = nest_rhino_lib.nest_geo_util.geo_to_nest_geo(curves, copies, simplify_parameters, attributes_geometries, rotations: rotations);
+            nest_geo = nest_rhino_lib.nest_geo_util.geo_to_nest_geo(curves, copies, simplify_parameters, attributes_geometries, rotations: rotations, attribute_ports: attr_ports, attribute_port_count: attrPortCount);
             if (offset_distance != 0) nest_geo.offset_nesting_boundary(offset_distance);   // 0 = skip entirely (fast)
 
             //Output
@@ -251,55 +265,57 @@ namespace opennest_2
 
         //////////////////////////////////////////////////////////////////////////////////////////ZoomableComponent
 
-        bool IGH_VariableParameterComponent.CanInsertParameter(GH_ParameterSide side, int index)
+        // The fixed inputs (Surfaces, Simplify, Hull, Copies, Offset, Rotations, Attributes) are locked;
+        // +/- only ever adds/removes EXTRA attribute geometry ports AFTER the base "Attributes" port. The
+        // base port is found BY NAME so this is robust to legacy instances (Rotations may sit either side).
+        private int FirstExtraIndex()
         {
-            //We only let input parameters to be added (output number is fixed at one)
-            if (side == GH_ParameterSide.Input)
-            {
-                return true;
-            }
-            else
-            {
-                return false;
-            }
+            int baseAttr = -1;
+            for (int i = 0; i < Params.Input.Count; i++)
+                if (Params.Input[i].Name == "Attributes") { baseAttr = i; break; }
+            if (baseAttr < 0) return Params.Input.Count;          // no base port (shouldn't happen)
+            int j = baseAttr + 1;
+            if (j < Params.Input.Count && Params.Input[j].Name == "Rotations") j++;   // legacy: Rotations after Attributes
+            return j;
         }
+
+        // + / - only ever act on the extra attribute ports, never the fixed inputs.
+        bool IGH_VariableParameterComponent.CanInsertParameter(GH_ParameterSide side, int index)
+            => side == GH_ParameterSide.Input && index >= FirstExtraIndex();
 
         bool IGH_VariableParameterComponent.CanRemoveParameter(GH_ParameterSide side, int index)
-        {
-            //We can only remove from the input
-            if (side == GH_ParameterSide.Input && Params.Input.Count > 0)
-            {
-                return true;
-            }
-            else
-            {
-                return false;
-            }
-        }
+            => side == GH_ParameterSide.Input && index >= FirstExtraIndex();
 
+        // Each added port is an extra Attributes geometry tree (named in VariableParameterMaintenance),
+        // so SolveInstance reads it like the base port. (Was a useless Param_Guid "guid" that was never read.)
         IGH_Param IGH_VariableParameterComponent.CreateParameter(GH_ParameterSide side, int index)
         {
-            //Param_Plane param = new Param_Plane();
-            //Grasshopper.Kernel.Parameters.Param_String param = new Grasshopper.Kernel.Parameters.Param_String();
-            IGH_Param param = new Grasshopper.Kernel.Parameters.Param_Guid();
+            var param = new Grasshopper.Kernel.Parameters.Param_Geometry();
             param.Access = GH_ParamAccess.tree;
             param.Optional = true;
-            param.Name = "guid";
-            //param.NickName = param.Name;
-            param.Description = "guid" + (Params.Input.Count + 1);
-
+            param.Name = "Attributes";
+            param.NickName = "Attributes";
             return param;
         }
 
         bool IGH_VariableParameterComponent.DestroyParameter(GH_ParameterSide side, int index)
-        {
-            //Nothing to do here by the moment
-            return true;
-        }
+            => side == GH_ParameterSide.Input && index >= FirstExtraIndex();
 
+        // Keep the extra ports consistently named/typed: Attributes 2, Attributes 3, ... (tree, optional).
         void IGH_VariableParameterComponent.VariableParameterMaintenance()
         {
-            //Nothing to do here by the moment
+            int firstExtra = FirstExtraIndex();
+            for (int i = firstExtra; i < Params.Input.Count; i++)
+            {
+                var p = Params.Input[i];
+                int n = i - firstExtra + 2;   // first extra port = "Attributes 2"
+                p.Name = "Attributes " + n;
+                p.NickName = "Attr" + n;
+                p.Description = "Extra attribute geometry tree. Branch {i} (and its sub-branches) attaches to surface i, merged with the other Attributes ports.";
+                p.Access = GH_ParamAccess.tree;
+                p.Optional = true;
+                p.MutableNickName = false;
+            }
         }
-    }   
+    }
 }

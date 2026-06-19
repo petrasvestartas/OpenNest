@@ -49,17 +49,6 @@ namespace opennest_2
 
         public int non_changing_inputs = 0;
 
-        // True if `full` is the same path as `prefix` OR a sub-branch of it (prefix is an ancestor),
-        // e.g. {0} matches {0}, {0;0}, {0;1;2}. Lets a user park one outline's attributes across
-        // sub-branches and have them all collected for that outline.
-        private static bool PathStartsWith(Grasshopper.Kernel.Data.GH_Path full, Grasshopper.Kernel.Data.GH_Path prefix)
-        {
-            if (full == null || prefix == null || full.Length < prefix.Length) return false;
-            for (int i = 0; i < prefix.Length; i++)
-                if (full.Indices[i] != prefix.Indices[i]) return false;
-            return true;
-        }
-
         protected override void RegisterInputParams(GH_Component.GH_InputParamManager pManager)
         {
 
@@ -201,13 +190,20 @@ namespace opennest_2
             // ALL of them (by path + sub-branches). Scan from the first fixed attribute slot (index 5)
             // and skip the scalar "Rotations" port by name, so this is order-independent (Rotations may
             // sit before or after the base Attributes port depending on when the instance was saved).
+            // Each attribute port gets a stable PORT INDEX by position (base "Attributes" = 0, "Attributes 2"
+            // = 1, ...), assigned even for empty ports, so the nest component can later emit {part; port}
+            // sub-branches. attrPortCount = total attribute ports (1 = base only => flat output downstream).
             var attrTrees = new List<GH_Structure<IGH_GeometricGoo>>();
+            var attrPorts = new List<int>();
+            int attrPortCount = 0;
             for (int ai = 5; ai < Params.Input.Count; ai++)
             {
                 if (Params.Input[ai].Name == "Rotations") continue;   // integer port, not an attribute tree
+                int portIdx = attrPortCount++;                        // base = 0, Attributes 2 = 1, ...
                 GH_Structure<IGH_GeometricGoo> t;
-                if (DA.GetDataTree(ai, out t) && t != null && t.DataCount > 0) attrTrees.Add(t);
+                if (DA.GetDataTree(ai, out t) && t != null && t.DataCount > 0) { attrTrees.Add(t); attrPorts.Add(portIdx); }
             }
+            if (attrPortCount < 1) attrPortCount = 1;
 
             //Rhino.RhinoApp.WriteLine("geo_current.PathCount: " + geo_current.PathCount.ToString());
 
@@ -229,73 +225,47 @@ namespace opennest_2
 
                 if (copies.Count == 0)
                     copies.Add(1);
-
-                // Attributes: gather every attribute branch at THIS outline's path OR any SUB-branch of
-                // it ({i}, {i;0}, {i;1}, ...), so a user can organise one part's attributes across
-                // sub-branches. Fall back to POSITIONAL pairing only when NO path/sub-path matched AND
-                // the two trees have equal branch counts (keeps already-aligned trees byte-identical).
-                // NULL / unconvertible items are SKIPPED; an exact/empty matched branch is honoured (that
-                // outline gets no attributes). attributes_geometries stays index-aligned with curves.
-                attributes_geometries.Add(new GeometryBase[0]);
-                Grasshopper.Kernel.Data.GH_Path opath = geo_current.Paths[j];
-                var attrs = new List<GeometryBase>();
-                foreach (var atree in attrTrees)   // gather from every attribute port
-                {
-                    bool matchedPath = false;
-                    for (int b = 0; b < atree.PathCount; b++)
-                    {
-                        if (!PathStartsWith(atree.Paths[b], opath)) continue;     // exact path or a sub-branch of it
-                        matchedPath = true;
-                        var br = atree.Branches[b];
-                        for (int k = 0; k < br.Count; k++)
-                        {
-                            if (br[k] == null) continue;                          // skip null item
-                            var gb = GH_Convert.ToGeometryBase(br[k]);
-                            if (gb != null) attrs.Add(gb);                        // skip unconvertible item
-                        }
-                    }
-                    if (!matchedPath && geo_current.PathCount == atree.PathCount && j < atree.Branches.Count)
-                    {
-                        var br = atree.Branches[j];                              // positional fallback (equal-count, differently-pathed)
-                        for (int k = 0; k < br.Count; k++)
-                        {
-                            if (br[k] == null) continue;
-                            var gb = GH_Convert.ToGeometryBase(br[k]);
-                            if (gb != null) attrs.Add(gb);
-                        }
-                    }
-                }
-                if (attrs.Count > 0)
-                    attributes_geometries[attributes_geometries.Count - 1] = attrs.ToArray();
-
             }
 
             // If user gives a FLAT LIST of curves, each curve becomes its own item AND holes are
             // auto-detected by containment below (identify_groups pairs a big ring with the smaller
             // rings inside it => one part with a hole). A DATA-TREE input keeps each branch pre-grouped.
+            List<int[]> attr_ports;   // parallel to attributes_geometries: source port index of each attribute
             bool flatList = (curves.Count == 1);
             if (flatList)
             {
-
                 var temp_curves = new List<Curve[]>();
                 foreach (var curve in curves[0])
                     temp_curves.Add(new Curve[] { curve });
                 curves = temp_curves;
-                attributes_geometries.Clear();
-                for (int i = 0; i < curves.Count; i++)
-                {
-               
-                    var attributes_local = new List<GeometryBase>();
-                    foreach (var atree in attrTrees)                  // flatten every attribute port onto each part
-                        foreach (var attribute in atree.AllData(true))
-                        {
-                            if (attribute == null) continue;
-                            var gb = GH_Convert.ToGeometryBase(attribute);
-                            if (gb != null) attributes_local.Add(gb);   // skip null/unconvertible
-                        }
 
-                    attributes_geometries.Add(attributes_local.ToArray());
-                }
+                // Flat list = one source group exploded into N parts; per-branch correspondence is gone, so
+                // every attribute (from every port) attaches to every part (identify_groups regroups). Track
+                // each attribute's source port so the nester can still {part; port}-sub-branch them.
+                var all_attributes = new List<GeometryBase>();
+                var all_ports = new List<int>();
+                for (int t = 0; t < attrTrees.Count; t++)
+                    foreach (var attribute in attrTrees[t].AllData(true))
+                    {
+                        if (attribute == null) continue;
+                        var gb = GH_Convert.ToGeometryBase(attribute);
+                        if (gb != null) { all_attributes.Add(gb); all_ports.Add(attrPorts[t]); }   // skip null/unconvertible
+                    }
+                var allAttrArr = all_attributes.ToArray();
+                var allPortArr = all_ports.ToArray();
+                attributes_geometries.Clear();
+                attr_ports = new List<int[]>();
+                for (int i = 0; i < curves.Count; i++) { attributes_geometries.Add(allAttrArr); attr_ports.Add(allPortArr); }
+            }
+            else
+            {
+                // DATA-TREE input: match each attribute port to the parts by path (exact / sub-branch) or,
+                // failing that, by branch count; a port whose branches line up with neither is IGNORED and
+                // the user is warned (see AttributeMatch). attributes_geometries stays aligned with curves.
+                bool attr_mismatch;
+                attributes_geometries = AttributeMatch.Match(geo_current.PathCount, geo_current.Paths, attrTrees, attrPorts, out attr_ports, out attr_mismatch);
+                if (attr_mismatch)
+                    AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "Tree Branches don't match, attributes will be ignored.");
             }
 
 
@@ -318,7 +288,7 @@ namespace opennest_2
 
             //Solution. Flat list => hard_coded_input:false => identify_groups auto-pairs outer rings with
             //the smaller rings they contain (big rect + smaller rect inside = one part with a hole).
-            nest_geo = nest_rhino_lib.nest_geo_util.geo_to_nest_geo(curves, copies, simplify_parameters, attributes_geometries, !flatList, rotations);
+            nest_geo = nest_rhino_lib.nest_geo_util.geo_to_nest_geo(curves, copies, simplify_parameters, attributes_geometries, !flatList, rotations, attr_ports, attrPortCount);
             if (offset_distance != 0) nest_geo.offset_nesting_boundary(offset_distance);   // 0 = skip entirely (fast)
 
             //Output

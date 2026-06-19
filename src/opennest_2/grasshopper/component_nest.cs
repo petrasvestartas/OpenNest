@@ -439,13 +439,21 @@ namespace opennest_2
                             geo_temp.Transform(nest_geo.xforms[i][k]);
                             all_geo_groups.Append(Grasshopper.Kernel.GH_Convert.ToGeometricGoo(geo_temp), new GH_Path(i));
 
-                            if (nest_geo.geometry_attributes.Count > nest_geo.geometry_sorted[i][j])
-                                foreach (var geometry_attibute in nest_geo.geometry_attributes[nest_geo.geometry_sorted[i][j]])
+                            int gidx_attr = nest_geo.geometry_sorted[i][j];
+                            if (nest_geo.geometry_attributes.Count > gidx_attr)
+                            {
+                                var attrArr = nest_geo.geometry_attributes[gidx_attr];
+                                var portArr = (nest_geo.geometry_attribute_ports != null && gidx_attr < nest_geo.geometry_attribute_ports.Count) ? nest_geo.geometry_attribute_ports[gidx_attr] : null;
+                                bool useSub = nest_geo.attribute_port_count >= 2;   // >=2 ports => {part; port} sub-branches
+                                for (int a = 0; a < attrArr.Length; a++)
                                 {
-                                    GeometryBase geometry_attibute_temp = geometry_attibute.Duplicate();
+                                    GeometryBase geometry_attibute_temp = attrArr[a].Duplicate();
                                     geometry_attibute_temp.Transform(nest_geo.xforms[i][k]);
-                                    geometry_attributes.Append(Grasshopper.Kernel.GH_Convert.ToGeometricGoo(geometry_attibute_temp), new GH_Path(i));
+                                    int port = (portArr != null && a < portArr.Length) ? portArr[a] : 0;
+                                    GH_Path apath = useSub ? new GH_Path(i, port) : new GH_Path(i);
+                                    geometry_attributes.Append(Grasshopper.Kernel.GH_Convert.ToGeometricGoo(geometry_attibute_temp), apath);
                                 }
+                            }
 
                             //display
                             if (object_type == "Curve")

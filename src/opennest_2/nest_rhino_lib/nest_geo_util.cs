@@ -11,10 +11,14 @@ namespace nest_rhino_lib
 {
     public static class nest_geo_util
     {
-        public static nest_geo geo_to_nest_geo(List<Curve[]> curves, List<int> copies = null, List<double> simplify_parameters = null, List<GeometryBase[]> attributes_geometries=null, bool hard_coded_input=true, List<int> rotations = null)
+        public static nest_geo geo_to_nest_geo(List<Curve[]> curves, List<int> copies = null, List<double> simplify_parameters = null, List<GeometryBase[]> attributes_geometries=null, bool hard_coded_input=true, List<int> rotations = null, List<int[]> attribute_ports = null, int attribute_port_count = 1)
         {
             // Initialize the nest_geometry.
             nest_geo nestGeo = new nest_geo();
+
+            // Number of attribute input ports on the source component (1 = base only => flat {part} output in the
+            // nest component; >= 2 => {part; port} sub-branches). Stored so the nester knows how to path attributes.
+            nestGeo.attribute_port_count = attribute_port_count < 1 ? 1 : attribute_port_count;
 
             // Defensive defaults: callers should pass >=2 simplify params, but don't crash if not.
             double sp0 = (simplify_parameters != null && simplify_parameters.Count > 0) ? simplify_parameters[0] : -100;
@@ -50,9 +54,13 @@ namespace nest_rhino_lib
                     nestGeo.geometry.Add(item);
                     nestGeo.attributes.Add(objectAttribute);
                     // degrade to empty if attributes were omitted or the list is short/null (no crash)
-                    nestGeo.geometry_attributes.Add(
-                        (attributes_geometries != null && i < attributes_geometries.Count && attributes_geometries[i] != null)
-                            ? attributes_geometries[i] : new GeometryBase[0]);
+                    var attrArr = (attributes_geometries != null && i < attributes_geometries.Count && attributes_geometries[i] != null)
+                            ? attributes_geometries[i] : new GeometryBase[0];
+                    nestGeo.geometry_attributes.Add(attrArr);
+                    // parallel per-attribute source-port indices (default all port 0 when not supplied / mismatched)
+                    nestGeo.geometry_attribute_ports.Add(
+                        (attribute_ports != null && i < attribute_ports.Count && attribute_ports[i] != null && attribute_ports[i].Length == attrArr.Length)
+                            ? attribute_ports[i] : new int[attrArr.Length]);
                     nestGeo.indices.Add(counter);
                     nestGeo.copies.Add(number_of_copies[i]);
                     nestGeo.rotations.Add(System.Math.Max(0, rotation_overrides[i]));
@@ -80,7 +88,20 @@ namespace nest_rhino_lib
             if (!hard_coded_input)
                 nestGeo.identify_groups(sp0, sp1);
 
-            
+            // A part's attribute geometry is stored on EVERY one of its boundary-curve indices (outer +
+            // holes), and every consumer iterates ALL indices in a placed group -> without this, a part with
+            // K boundary curves would emit its attributes K times (one hole => the attribute is duplicated).
+            // Every index in a part-group carries the IDENTICAL attribute array, so keep them on the group's
+            // first index only; consumers then emit each part's attributes exactly once.
+            foreach (var group in nestGeo.geometry_sorted)
+                for (int k = 1; k < group.Count; k++)
+                    if (group[k] >= 0 && group[k] < nestGeo.geometry_attributes.Count)
+                    {
+                        nestGeo.geometry_attributes[group[k]] = new GeometryBase[0];
+                        if (group[k] < nestGeo.geometry_attribute_ports.Count)
+                            nestGeo.geometry_attribute_ports[group[k]] = new int[0];   // keep parallel with geometry_attributes
+                    }
+
             return nestGeo;
         }
 

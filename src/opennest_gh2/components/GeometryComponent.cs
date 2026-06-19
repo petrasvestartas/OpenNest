@@ -62,27 +62,36 @@ namespace opennest_gh2.components
             access.GetTree(4, out Tree<double> offT); double offset = NestGh2Util.First(offT, 0.0);
             access.GetTree(ROTATIONS_INPUT, out Tree<int> rotT); var rotVals = NestGh2Util.AllOr(rotT, 0);
 
-            // One List<Curve[]> entry per input BRANCH (closed curves only), mirroring GH1.
+            // One List<Curve[]> entry per input BRANCH (closed curves only), mirroring GH1. Keep each kept
+            // branch's PATH so attributes can be matched to parts by path even when some branches are dropped.
             tree.ToArrays(out Curve[][] branches);
             var curves = new List<Curve[]>();
-            foreach (var br in branches)
+            var partPaths = new List<Grasshopper2.Data.Path>();
+            for (int bi = 0; bi < branches.Length; bi++)
             {
+                var br = branches[bi];
                 if (br == null) continue;
                 var cl = new List<Curve>();
                 foreach (var c in br) if (c != null && c.IsClosed) cl.Add(c);
-                if (cl.Count > 0) curves.Add(cl.ToArray());
+                if (cl.Count > 0) { curves.Add(cl.ToArray()); partPaths.Add(tree.Paths[bi]); }
             }
             if (curves.Count == 0) { access.AddWarning("No closed parts", "Parts must be closed curves."); return; }
 
             // Every Attributes port (base "Attributes" at index 6 + any +/- variable ports at 7+) as a tree of
             // geometry. Scan from index 5 and skip the scalar Rotations port (index 5).
-            var attrTrees = new List<GeometryBase[][]>();
+            // Each attribute port gets a stable PORT INDEX by position (base "Attributes" = 0, "Attributes 2"
+            // = 1, ...), assigned even for empty ports, so the nest component can emit {part; port} sub-branches.
+            var attrTrees = new List<Tree<GeometryBase>>();
+            var attrPorts = new List<int>();
+            int attrPortCount = 0;
             for (int ai = 5; ai < Parameters.InputCount; ai++)
             {
                 if (ai == ROTATIONS_INPUT) continue;   // integer port, not an attribute tree
+                int portIdx = attrPortCount++;         // base = 0, Attributes 2 = 1, ...
                 if (access.GetTree(ai, out Tree<GeometryBase> at) && at != null && at.LeafCount > 0)
-                { at.ToArrays(out GeometryBase[][] ab); attrTrees.Add(ab); }
+                    { attrTrees.Add(at); attrPorts.Add(portIdx); }
             }
+            if (attrPortCount < 1) attrPortCount = 1;
 
             // FLAT LIST (single branch) -> explode to one curve per part so identify_groups auto-pairs each
             // outer ring with the smaller rings it contains. DATA TREE -> keep each branch pre-grouped.
@@ -94,25 +103,31 @@ namespace opennest_gh2.components
                 curves = temp;
             }
 
-            // Attributes per part: data-tree -> positional branch match (part branch i <- attribute branch i);
-            // flat list -> all attributes applied to every part (identify_groups regroups, so per-part match is
-            // undefined — mirrors GH1).
+            // Attributes per part. DATA TREE: match each port to the parts by path (exact / sub-branch) or
+            // branch count; a port lining up with neither is IGNORED and the user is warned (NestGh2Attr).
+            // FLAT LIST: one source group exploded into N parts, so every attribute attaches to every part
+            // (identify_groups regroups, so a per-part match is undefined — mirrors GH1).
             List<GeometryBase[]> attrsPerPart = null;
+            List<int[]> attrPortsPerPart = null;   // parallel: source port of each attribute, for {part; port} output
             if (attrTrees.Count > 0)
             {
-                attrsPerPart = new List<GeometryBase[]>(curves.Count);
                 if (!flatList)
-                    for (int i = 0; i < curves.Count; i++)
-                    {
-                        var l = new List<GeometryBase>();
-                        foreach (var ab in attrTrees) if (i < ab.Length && ab[i] != null) foreach (var g in ab[i]) if (g != null) l.Add(g);
-                        attrsPerPart.Add(l.ToArray());
-                    }
+                {
+                    attrsPerPart = NestGh2Attr.Match(curves.Count, partPaths, attrTrees, attrPorts, out attrPortsPerPart, out bool attrMismatch);
+                    if (attrMismatch)
+                        access.AddWarning("Attributes", "Tree Branches don't match, attributes will be ignored.");
+                }
                 else
                 {
                     var all = new List<GeometryBase>();
-                    foreach (var ab in attrTrees) foreach (var b in ab) if (b != null) foreach (var g in b) if (g != null) all.Add(g);
-                    for (int i = 0; i < curves.Count; i++) attrsPerPart.Add(all.ToArray());
+                    var allP = new List<int>();
+                    for (int t = 0; t < attrTrees.Count; t++)
+                        foreach (var g in attrTrees[t].NonNullItems) if (g != null) { all.Add(g); allP.Add(attrPorts[t]); }
+                    var allArr = all.ToArray();
+                    var allPArr = allP.ToArray();
+                    attrsPerPart = new List<GeometryBase[]>(curves.Count);
+                    attrPortsPerPart = new List<int[]>(curves.Count);
+                    for (int i = 0; i < curves.Count; i++) { attrsPerPart.Add(allArr); attrPortsPerPart.Add(allPArr); }
                 }
             }
 
@@ -124,7 +139,7 @@ namespace opennest_gh2.components
             for (int i = 0; i < curves.Count; i++) { int rv = rotVals[i % rotVals.Count]; rotationsList.Add(rv < 0 ? 0 : rv); }
             var simp = new List<double> { simplify, hull ? 1.0 : 0.0 };
 
-            var geo = nest_geo_util.geo_to_nest_geo(curves, copiesList, simp, attrsPerPart, hard_coded_input: !flatList, rotations: rotationsList);
+            var geo = nest_geo_util.geo_to_nest_geo(curves, copiesList, simp, attrsPerPart, hard_coded_input: !flatList, rotations: rotationsList, attribute_ports: attrPortsPerPart, attribute_port_count: attrPortCount);
             if (geo.boundary_sorted == null || geo.boundary_sorted.Count == 0)
             {
                 access.AddWarning("No boundaries detected", "Could not extract closed part boundaries.");

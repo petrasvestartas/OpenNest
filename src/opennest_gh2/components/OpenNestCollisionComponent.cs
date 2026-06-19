@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using Grasshopper2.Components;
+using Grasshopper2.Data;
 using Grasshopper2.Parameters;
 using Grasshopper2.UI;
 using GrasshopperIO;
@@ -74,7 +75,7 @@ namespace opennest_gh2.components
             outputs.AddTransform("Transforms", "Transforms", "Placement transforms for each part.", Access.Twig);
             outputs.AddInteger("Sheet Id", "Sheet Id", "Index of the sheet each part landed on.", Access.Twig);
             outputs.AddCurve("Sheet Txt", "Sheet Txt", "Sheet-number label curves.", Access.Twig);
-            outputs.AddGeneric("Attributes", "Attributes", "Per-part attribute geometry.", Access.Twig);
+            outputs.AddGeneric("Attributes", "Attributes", "Per-part attribute geometry. One attribute input => {part}; multiple Attributes inputs (via +) => {part; input-port} sub-branches.", Access.Tree);
         }
 
         // snapshotted solve state (set in Prepare on the UI thread, consumed by SolveCore on the worker)
@@ -145,7 +146,9 @@ namespace opennest_gh2.components
             var placed = new List<GeometryBase>();
             var xforms = new List<Transform>();
             var ids = new List<int>();
-            var attributes = new List<GeometryBase>();
+            // Attributes grouped by output path: key=(part i, port); port=-1 => flat {part} (one input), else {part;port}.
+            var attrByPath = new Dictionary<(int, int), List<GeometryBase>>();
+            bool attrUseSub = geo.attribute_port_count >= 2;
 
             int nGroups = geo.boundary_sorted.Count;
             for (int i = 0; i < nGroups; i++)
@@ -170,8 +173,18 @@ namespace opennest_gh2.components
                     {
                         var g = geo.geometry[gi].Duplicate(); g.Transform(x); placed.Add(g);
                         if (geo.geometry_attributes != null && gi < geo.geometry_attributes.Count && geo.geometry_attributes[gi] != null)
-                            foreach (var att in geo.geometry_attributes[gi])
-                            { var a = att.Duplicate(); a.Transform(x); attributes.Add(a); }
+                        {
+                            var gattr = geo.geometry_attributes[gi];
+                            var gport = (geo.geometry_attribute_ports != null && gi < geo.geometry_attribute_ports.Count) ? geo.geometry_attribute_ports[gi] : null;
+                            for (int aIdx = 0; aIdx < gattr.Length; aIdx++)
+                            {
+                                var a = gattr[aIdx].Duplicate(); a.Transform(x);
+                                int port = (gport != null && aIdx < gport.Length) ? gport[aIdx] : 0;
+                                var key = (i, attrUseSub ? port : -1);
+                                if (!attrByPath.TryGetValue(key, out var lst)) { lst = new List<GeometryBase>(); attrByPath[key] = lst; }
+                                lst.Add(a);
+                            }
+                        }
                     }
                 }
             }
@@ -181,7 +194,18 @@ namespace opennest_gh2.components
             var placedArr = placed.ToArray();
             var xformArr = xforms.ToArray();
             var idArr = ids.ToArray();
-            var attrArr = attributes.ToArray();
+            // Build the attribute output tree: {part} when one input, {part; input-port} when multiple.
+            var attrPairs = new List<KeyValuePair<Grasshopper2.Data.Path, GeometryBase[]>>(attrByPath.Count);
+            foreach (var kv in attrByPath)
+            {
+                var p = kv.Key.Item2 < 0 ? new Grasshopper2.Data.Path(new[] { kv.Key.Item1 }) : new Grasshopper2.Data.Path(new[] { kv.Key.Item1, kv.Key.Item2 });
+                attrPairs.Add(new KeyValuePair<Grasshopper2.Data.Path, GeometryBase[]>(p, kv.Value.ToArray()));
+            }
+            attrPairs.Sort((x, y) => x.Key.CompareTo(y.Key));   // FromSortedUnchecked needs sorted, unique paths
+            var attrPathArr = new Grasshopper2.Data.Path[attrPairs.Count];
+            var attrDataArr = new GeometryBase[attrPairs.Count][];
+            for (int q = 0; q < attrPairs.Count; q++) { attrPathArr[q] = attrPairs[q].Key; attrDataArr[q] = attrPairs[q].Value; }
+            ITree attrTree = Grasshopper2.Data.Garden.ITreeFromArrays(new Grasshopper2.Data.Paths(attrPathArr), attrDataArr, null, null);
             Action<IDataAccess> emit = a =>
             {
                 a.SetTwig(0, sheetArr);
@@ -190,7 +214,7 @@ namespace opennest_gh2.components
                 a.SetTwig(3, xformArr);
                 a.SetTwig(4, idArr);
                 a.SetTwig(5, new Curve[0]);          // Sheet Txt (font-rendered labels) — parity placeholder
-                a.SetTwig(6, attrArr);
+                a.SetTree(6, attrTree);
             };
             emit(access);
             CacheResult(emit);

@@ -138,25 +138,29 @@ namespace opennest_gh2.components
             if (grouped.Count == 0) return;
 
             // Every Attributes port (base "Attributes" at index 6 + any +/- ports at 7+); skip Rotations (index 5).
-            var attrTrees = new List<GeometryBase[][]>();
+            // Each gets a stable PORT INDEX by position (base = 0, "Attributes 2" = 1, ...) for {part; port} output.
+            var attrTrees = new List<Tree<GeometryBase>>();
+            var attrPorts = new List<int>();
+            int attrPortCount = 0;
             for (int ai = 5; ai < Parameters.InputCount; ai++)
             {
                 if (ai == ROTATIONS_INPUT) continue;
+                int portIdx = attrPortCount++;
                 if (access.GetTree(ai, out Tree<GeometryBase> at) && at != null && at.LeafCount > 0)
-                { at.ToArrays(out GeometryBase[][] ab); attrTrees.Add(ab); }
+                    { attrTrees.Add(at); attrPorts.Add(portIdx); }
             }
+            if (attrPortCount < 1) attrPortCount = 1;
 
-            // Attributes per part: positional branch match (part i <- attribute branch i), merged across ports.
+            // Breps are a flat LIST, so attributes match by structure (no per-part paths): a flat list of N
+            // attributes maps one-per-part, an N-branch tree maps one branch per part, anything else is
+            // ignored with a warning (see NestGh2Attr).
             List<GeometryBase[]> attrsPerPart = null;
+            List<int[]> attrPortsPerPart = null;
             if (attrTrees.Count > 0)
             {
-                attrsPerPart = new List<GeometryBase[]>(grouped.Count);
-                for (int i = 0; i < grouped.Count; i++)
-                {
-                    var l = new List<GeometryBase>();
-                    foreach (var ab in attrTrees) if (i < ab.Length && ab[i] != null) foreach (var g in ab[i]) if (g != null) l.Add(g);
-                    attrsPerPart.Add(l.ToArray());
-                }
+                attrsPerPart = NestGh2Attr.Match(grouped.Count, null, attrTrees, attrPorts, out attrPortsPerPart, out bool attrMismatch);
+                if (attrMismatch)
+                    access.AddWarning("Attributes", "Tree Branches don't match, attributes will be ignored.");
             }
 
             // Per-part copies, cycled like the main Geometry component (one value applies to all; a list maps
@@ -166,7 +170,7 @@ namespace opennest_gh2.components
             for (int i = 0; i < grouped.Count; i++) { int c = copiesVals[i % copiesVals.Count]; copiesList.Add(c < 1 ? 1 : c); }
             var rotationsList = new List<int>(grouped.Count);
             for (int i = 0; i < grouped.Count; i++) { int rv = rotVals[i % rotVals.Count]; rotationsList.Add(rv < 0 ? 0 : rv); }
-            var geo = nest_geo_util.geo_to_nest_geo(grouped, copiesList, new List<double> { simplify, hull ? 1.0 : 0.0 }, attrsPerPart, hard_coded_input: true, rotations: rotationsList);
+            var geo = nest_geo_util.geo_to_nest_geo(grouped, copiesList, new List<double> { simplify, hull ? 1.0 : 0.0 }, attrsPerPart, hard_coded_input: true, rotations: rotationsList, attribute_ports: attrPortsPerPart, attribute_port_count: attrPortCount);
             if (offset != 0) geo.offset_nesting_boundary(offset);   // outer grows / holes shrink on the NFP boundary only
             access.SetItem(0, geo);
             var borders = new List<Curve>();
