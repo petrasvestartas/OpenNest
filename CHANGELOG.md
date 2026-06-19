@@ -8,6 +8,22 @@ GitHub Releases. Each entry describes what the release actually changed.
 > the previous tag), so a clear commit subject per push becomes the changelog line — refine an entry
 > here anytime if you want more detail.
 
+## [2.88.0.0] - 2026-06-19
+- fix(attributes): robust per-part matching, fix hole duplication, add {part;port} output
+- 3d-nest: exact voxel-overlap guard before placing (fix GPU float-FFT intersections)
+- 3d-nest: Correlator (cached tray/phi FFT + persistent plan) + speed diagnostic
+- 3d-nest: optional cuFFT GPU backend for nest_spectral (GPU when available)
+- 3d-nest: full param names, quinary exposure row, grey/black icon
+- 3d-nest: OpenNest3D icon = the OpenNest logo extruded into 3D
+- 3d-nest: rename component to OpenNest3D (full names) + add SVG/PNG icon
+- 3d-nest: opennest_3d - Grasshopper plugin for the nest_spectral 3D solver
+- 3d-nest: nest_spectral C ABI + CMake DLL (Phase C) - the engine is complete
+- 3d-nest: solid mesh voxelizer (Phase B)
+- 3d-nest: CPU spectral packer core (Phase A) - cuFFT ported to pocketfft
+- 3d-nest: research the 3D mesh-mesh nesting landscape for a nest_spectral engine
+- docs: rename the three API nav sections + index titles to 'C++ Examples', 'C# Examples', 'Python Examples' (they are example galleries, not API references); landing-page links + the doc generator updated to match
+- docs: add standalone Python example downloads (zips) to the OpenNest site
+
 ## [2.87.0.0] - 2026-06-17
 - docs(home): add 'OpenNest in numbers' infographic (downloads-vs-users chart + world map)
 
