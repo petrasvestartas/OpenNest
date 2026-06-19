@@ -1,0 +1,13 @@
+# build artifacts
+build/
+build_cuda/
+cuda_cfg.txt
+cuda_build.txt
+*.exe
+*.dll
+*.dylib
+*.so
+*.o
+*.obj
+*.txt.bak
+out/
