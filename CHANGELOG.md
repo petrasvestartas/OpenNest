@@ -8,6 +8,9 @@ GitHub Releases. Each entry describes what the release actually changed.
 > the previous tag), so a clear commit subject per push becomes the changelog line — refine an entry
 > here anytime if you want more detail.
 
+## [2.89.0.0] - 2026-06-19
+- bench(nfp): add --packDemo mode exercising nfp_pack + nfp_offset_polygon
+
 ## [2.88.0.0] - 2026-06-19
 - fix(attributes): robust per-part matching, fix hole duplication, add {part;port} output
 - 3d-nest: exact voxel-overlap guard before placing (fix GPU float-FFT intersections)
