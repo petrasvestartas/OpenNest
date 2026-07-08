@@ -1,5 +1,6 @@
 #include "NestingContext.h"
 #include <iostream>
+#include <limits>
 
 namespace nest {
 
@@ -274,7 +275,9 @@ NestingContext NestingContext::RunParallelSeeds(
     const NestConfig& baseConfig,
     int numSeeds,
     int iterationsPerSeed,
-    std::function<void(int seed, int iter, const NestingContext&)> progressCallback)
+    std::function<void(int seed, int iter, const NestingContext&)> progressCallback,
+    std::function<bool()> shouldStop,
+    int stagnationGens)
 {
     // Set static Config once for offset tree helpers (all seeds share same base params)
     NestingEngine::Config = baseConfig;
@@ -334,12 +337,27 @@ NestingContext NestingContext::RunParallelSeeds(
     // Run all seeds in parallel
     std::vector<std::thread> threads;
     for (int s = 0; s < numSeeds; s++) {
-        threads.emplace_back([&contexts, s, iterationsPerSeed, &progressCallback, &progressMutex]() {
+        threads.emplace_back([&contexts, s, iterationsPerSeed, &progressCallback, &progressMutex,
+                              &shouldStop, stagnationGens]() {
+            double bestFit = std::numeric_limits<double>::infinity();
+            int stagnant = 0;
+            const int total = static_cast<int>(contexts[s]->Polygons.size());
             for (int i = 0; i < iterationsPerSeed; i++) {
+                if (shouldStop && shouldStop()) break;
                 contexts[s]->NestIterate(iterationsPerSeed);
                 if (progressCallback) {
                     std::lock_guard<std::mutex> lock(progressMutex);
                     progressCallback(s, contexts[s]->Iterations, *contexts[s]);
+                }
+                if (stagnationGens > 0) {
+                    double f = contexts[s]->HasCurrent()
+                        ? contexts[s]->Current().fitness.value_or(bestFit) : bestFit;
+                    if (f + 1e-9 < bestFit) { bestFit = f; stagnant = 0; }
+                    else ++stagnant;
+                    int placed = 0;
+                    for (const auto& p : contexts[s]->Polygons)
+                        if (p->fitted() && p->sheet) ++placed;
+                    if (stagnant >= stagnationGens && placed == total) break;
                 }
             }
         });

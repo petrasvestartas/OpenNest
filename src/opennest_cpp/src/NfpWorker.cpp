@@ -780,51 +780,73 @@ std::vector<std::shared_ptr<NFP>> NfpWorker::getInnerNfp(NFP& A, NFP& B, int typ
                     static_cast<int64_t>(std::round(scale * holeChild[j].y))));
             }
 
-            // Compute all pairwise sums: h + (-b)
-            std::vector<Clipper2Lib::Point64> pairwiseSums;
-            pairwiseSums.reserve(holePath.size() * bPath.size());
-            for (auto& h : holePath) {
-                for (auto& b : bPath) {
-                    pairwiseSums.push_back(Clipper2Lib::Point64(h.x - b.x, h.y - b.y));
+            // Forbidden zone = the Minkowski sum H (+) (-B): the reference positions where B overlaps H.
+            Clipper2Lib::Paths64 forbiddenZone;
+            if (config.exactVoids) {
+                // EXACT H (+) (-B) via Clipper2's Minkowski sum: correct for NON-CONVEX voids (stone
+                // fractures) where the convex hull below over-excludes usable material. MinkowskiSum
+                // sweeps holePath along -B and unions the quads internally (NonZero), so the result is
+                // the true, possibly non-convex, filled forbidden region.
+                Clipper2Lib::Path64 negB;
+                negB.reserve(bPath.size());
+                for (auto& b : bPath) negB.push_back(Clipper2Lib::Point64(-b.x, -b.y));
+                Clipper2Lib::Paths64 mink = Clipper2Lib::MinkowskiSum(holePath, negB, true);
+                // Keep only the OUTER (positive-area) loops. MinkowskiSum with opposite-winding
+                // inputs can emit spurious interior holes (a CW loop punched into the sum); leaving
+                // them in would open a gap in the forbidden zone and let a part drop into the void.
+                // Filling every hole is conservative-safe (only ever over-excludes) and preserves the
+                // non-convex outer boundary that hugs the void's concavities — the actual density win.
+                for (auto& loop : mink)
+                    if (Clipper2Lib::Area(loop) > 0) forbiddenZone.push_back(std::move(loop));
+                if (forbiddenZone.empty()) continue;
+            } else {
+                // Convex-hull approximation of the pairwise vertex sums {h - b}: exact for convex
+                // shapes, conservative (slightly larger) for concave ones. Fast default.
+                std::vector<Clipper2Lib::Point64> pairwiseSums;
+                pairwiseSums.reserve(holePath.size() * bPath.size());
+                for (auto& h : holePath) {
+                    for (auto& b : bPath) {
+                        pairwiseSums.push_back(Clipper2Lib::Point64(h.x - b.x, h.y - b.y));
+                    }
                 }
-            }
 
-            // Convex hull via Andrew's monotone chain
-            auto cross64 = [](const Clipper2Lib::Point64& O,
-                              const Clipper2Lib::Point64& A,
-                              const Clipper2Lib::Point64& B) -> double {
-                return static_cast<double>(A.x - O.x) * static_cast<double>(B.y - O.y)
-                     - static_cast<double>(A.y - O.y) * static_cast<double>(B.x - O.x);
-            };
+                // Convex hull via Andrew's monotone chain
+                auto cross64 = [](const Clipper2Lib::Point64& O,
+                                  const Clipper2Lib::Point64& A,
+                                  const Clipper2Lib::Point64& B) -> double {
+                    return static_cast<double>(A.x - O.x) * static_cast<double>(B.y - O.y)
+                         - static_cast<double>(A.y - O.y) * static_cast<double>(B.x - O.x);
+                };
 
-            std::sort(pairwiseSums.begin(), pairwiseSums.end(),
-                [](const Clipper2Lib::Point64& a, const Clipper2Lib::Point64& b) {
-                    return a.x < b.x || (a.x == b.x && a.y < b.y);
-                });
-            pairwiseSums.erase(
-                std::unique(pairwiseSums.begin(), pairwiseSums.end(),
+                std::sort(pairwiseSums.begin(), pairwiseSums.end(),
                     [](const Clipper2Lib::Point64& a, const Clipper2Lib::Point64& b) {
-                        return a.x == b.x && a.y == b.y;
-                    }),
-                pairwiseSums.end());
+                        return a.x < b.x || (a.x == b.x && a.y < b.y);
+                    });
+                pairwiseSums.erase(
+                    std::unique(pairwiseSums.begin(), pairwiseSums.end(),
+                        [](const Clipper2Lib::Point64& a, const Clipper2Lib::Point64& b) {
+                            return a.x == b.x && a.y == b.y;
+                        }),
+                    pairwiseSums.end());
 
-            int n = static_cast<int>(pairwiseSums.size());
-            if (n < 3) continue;
+                int n = static_cast<int>(pairwiseSums.size());
+                if (n < 3) continue;
 
-            std::vector<Clipper2Lib::Point64> hull(2 * n);
-            int k = 0;
-            for (int j = 0; j < n; j++) {
-                while (k >= 2 && cross64(hull[k-2], hull[k-1], pairwiseSums[j]) <= 0) k--;
-                hull[k++] = pairwiseSums[j];
+                std::vector<Clipper2Lib::Point64> hull(2 * n);
+                int k = 0;
+                for (int j = 0; j < n; j++) {
+                    while (k >= 2 && cross64(hull[k-2], hull[k-1], pairwiseSums[j]) <= 0) k--;
+                    hull[k++] = pairwiseSums[j];
+                }
+                int lower_size = k + 1;
+                for (int j = n - 2; j >= 0; j--) {
+                    while (k >= lower_size && cross64(hull[k-2], hull[k-1], pairwiseSums[j]) <= 0) k--;
+                    hull[k++] = pairwiseSums[j];
+                }
+                hull.resize(k - 1);
+
+                forbiddenZone = { Clipper2Lib::Path64(hull.begin(), hull.end()) };
             }
-            int lower_size = k + 1;
-            for (int j = n - 2; j >= 0; j--) {
-                while (k >= lower_size && cross64(hull[k-2], hull[k-1], pairwiseSums[j]) <= 0) k--;
-                hull[k++] = pairwiseSums[j];
-            }
-            hull.resize(k - 1);
-
-            Clipper2Lib::Paths64 forbiddenZone = { Clipper2Lib::Path64(hull.begin(), hull.end()) };
 
             // Inflate forbidden zone by spacing to compensate for the rendering
             // displacement between adjusted and original polygon reference points

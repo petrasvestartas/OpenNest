@@ -32,6 +32,10 @@ namespace NfpNest
         public int    compactionPasses; // -1 = engine default; 0 = off (fast first run)
         public int    tryAllRotations;  // bool
         public int    exactNfp;         // bool: full-res exact NFP (no gap, tightest, slower)
+        public int    stagnationGens;   // >0 => stop early after N stagnant generations (all placed);
+                                        // makes solve time the real convergence time (0 = never early-exit)
+        public int    exactVoids;       // bool: exact Minkowski void/hole exclusion (tight around
+                                        // non-convex voids); 0 = fast convex-hull default (unchanged)
     }
 
     // P/Invoke into nfp_nest.dll (the C++ Boost.Polygon NFP/SvgNest GA nester). The DLL is copied next to

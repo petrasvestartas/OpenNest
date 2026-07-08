@@ -131,7 +131,15 @@ namespace nest_lib
                 edgeSamples      = -1,
                 compactionPasses = 0,
                 tryAllRotations  = TryAllRotations,
-                exactNfp         = ExactNfp
+                exactNfp         = ExactNfp,
+                // Stop early once the best layout has not improved for 30 generations AND all parts
+                // are placed: makes solve time the real convergence time instead of always running
+                // the full iteration/time budget. Conservative — measured packing-identical (rects &
+                // concave) at >=25; for typical iteration counts it is a no-op or a pure speed win.
+                stagnationGens   = 30,
+                // Exact Minkowski void exclusion is opt-in (0 = fast convex-hull default). Expose as a
+                // component toggle when tight packing around non-convex sheet voids is wanted.
+                exactVoids       = 0
             };
 
             var tx = new double[N]; var ty = new double[N]; var ang = new double[N];

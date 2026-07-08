@@ -41,14 +41,19 @@ public:
 
     void ReorderSheets();
 
-    // Multi-seed parallel runner: runs N independent contexts, returns best
+    // Multi-seed parallel runner: runs N independent contexts, returns best.
+    // shouldStop (optional): polled inside each seed loop; when it returns true the seed stops
+    //   (used for time-budget / cooperative cancel). stagnationGens (optional, >0): a seed stops
+    //   once its best fitness has not improved for that many iterations AND all parts are placed.
     static NestingContext RunParallelSeeds(
         const std::vector<std::shared_ptr<NFP>>& polygons,
         const std::vector<std::shared_ptr<NFP>>& sheets,
         const NestConfig& baseConfig,
         int numSeeds,
         int iterationsPerSeed,
-        std::function<void(int seed, int iter, const NestingContext&)> progressCallback = nullptr);
+        std::function<void(int seed, int iter, const NestingContext&)> progressCallback = nullptr,
+        std::function<bool()> shouldStop = nullptr,
+        int stagnationGens = 0);
 
     NestConfig config;  // per-context config (different seed for multi-seed)
     NestingEngine Nest;

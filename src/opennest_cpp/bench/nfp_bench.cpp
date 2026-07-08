@@ -44,6 +44,9 @@ struct Args {
     int tryAllRotations = -1, edgeSamples = -1, compaction = -1; // -1 = engine default
     int useParallel = 1, maxSheets = 0, nSheets = 4;
     double spacing = 0.0, timeBudget = 0.0;
+    int stagnation = 0; // >0 => GA early-exit after N stagnant generations (all placed)
+    int exactVoids = 0; // 1 => exact Minkowski void exclusion (maps to NfpParams.useHoles)
+    std::string sheetVoid; // "" none, "rect" (convex) or "L" (non-convex) hole injected per sheet
     double sheetW = 0, sheetH = 0; // 0 = dataset default
     bool dumpPlacements = false;
     bool dumpDataset = false;
@@ -73,6 +76,9 @@ Args parseArgs(int argc, char** argv) {
         else if (k == "--compaction") a.compaction = std::atoi(need(i));
         else if (k == "--spacing") a.spacing = std::atof(need(i));
         else if (k == "--timeBudget") a.timeBudget = std::atof(need(i));
+        else if (k == "--stagnation") a.stagnation = std::atoi(need(i));
+        else if (k == "--exactVoids") a.exactVoids = std::atoi(need(i));
+        else if (k == "--sheetVoid") a.sheetVoid = need(i);
         else if (k == "--sheets") a.nSheets = std::atoi(need(i));
         else if (k == "--sheetW") a.sheetW = std::atof(need(i));
         else if (k == "--sheetH") a.sheetH = std::atof(need(i));
@@ -92,6 +98,22 @@ Args parseArgs(int argc, char** argv) {
 // --- geometry helpers --------------------------------------------------------
 
 constexpr double CHECK_SCALE = 1e6; // integer scale for the overlap validator
+
+// Optional sheet void (interior hole) to exercise the exact-Minkowski forbidden-zone path.
+// "rect" = convex hole; "L" = non-convex L (a concave pocket a part can nest into). Returned in
+// sheet-local coordinates, positioned in the lower-left working area near the packing origin.
+inline std::vector<double> sheetVoidXY(const std::string& mode, double /*sheetW*/, double /*sheetH*/) {
+    const double ox = 450, oy = 250;
+    if (mode == "rect") {
+        const double w = 420, h = 420;
+        return {ox, oy, ox + w, oy, ox + w, oy + h, ox, oy + h};
+    }
+    if (mode == "L") {
+        const double w = 520, h = 520, t = 260;  // outer box minus a (w-t)x(h-t) corner bite
+        return {ox, oy, ox + w, oy, ox + w, oy + t, ox + t, oy + t, ox + t, oy + h, ox, oy + h};
+    }
+    return {};
+}
 
 Clipper2Lib::Path64 toPath64(const std::vector<double>& xy, double tx, double ty,
                              double angleDeg) {
@@ -161,13 +183,20 @@ RunResult runOnce(const Args& a, int seed, const bench::BenchData& d) {
     }
     double sheetW = a.sheetW > 0 ? a.sheetW : d.sheetW;
     double sheetH = a.sheetH > 0 ? a.sheetH : d.sheetH;
-    std::vector<int> svc, shc;
-    std::vector<double> sxy;
+    std::vector<int> svc, shc, shvc;
+    std::vector<double> sxy, shxy;
+    std::vector<double> voidPoly = sheetVoidXY(a.sheetVoid, sheetW, sheetH);
     for (int s = 0; s < a.nSheets; s++) {
         svc.push_back(4);
         double r[] = {0, 0, sheetW, 0, sheetW, sheetH, 0, sheetH};
         sxy.insert(sxy.end(), r, r + 8);
-        shc.push_back(0);
+        if (!voidPoly.empty()) {
+            shc.push_back(1);
+            shvc.push_back(static_cast<int>(voidPoly.size() / 2));
+            shxy.insert(shxy.end(), voidPoly.begin(), voidPoly.end());
+        } else {
+            shc.push_back(0);
+        }
     }
 
     int instCount = 0;
@@ -194,6 +223,8 @@ RunResult runOnce(const Args& a, int seed, const bench::BenchData& d) {
     params.edgeSamples     = a.edgeSamples;
     params.compactionPasses= a.compaction;
     params.tryAllRotations = a.tryAllRotations;
+    params.stagnationGens  = a.stagnation;
+    params.exactVoids      = a.exactVoids;   // dedicated exact Minkowski void-exclusion flag
 
     std::vector<double> tx(instCount), ty(instCount), angle(instCount);
     std::vector<int> sheetId(instCount), partIndex(instCount);
@@ -205,7 +236,7 @@ RunResult runOnce(const Args& a, int seed, const bench::BenchData& d) {
         static_cast<int>(d.parts.size()), pvc.data(), pxy.data(), pqty.data(),
         prot.data(),
         phc.data(), phvc.data(), phxy.data(),
-        a.nSheets, svc.data(), sxy.data(), shc.data(), nullptr, nullptr,
+        a.nSheets, svc.data(), sxy.data(), shc.data(), shvc.data(), shxy.data(),
         &params, tx.data(), ty.data(), angle.data(), sheetId.data(),
         partIndex.data(), &nSheetsOut, &fitness);
     double wall_ms = std::chrono::duration<double, std::milli>(
@@ -256,8 +287,14 @@ RunResult runOnce(const Args& a, int seed, const bench::BenchData& d) {
     r.util_strip = stripArea > 0 ? placedArea / stripArea : 0;
     r.util_sheet = usedSheetArea > 0 ? placedArea / usedSheetArea : 0;
 
-    // overlap validator: pairwise same-sheet intersections + out-of-sheet area
+    // overlap validator: pairwise same-sheet intersections + out-of-(usable)-sheet area.
+    // Subtracting any sheet void makes a part that intrudes into the void count as out-of-sheet,
+    // so overlap>0 flags an exact/convex void-exclusion bug.
     Clipper2Lib::Paths64 sheetRect{toPath64({0, 0, sheetW, 0, sheetW, sheetH, 0, sheetH}, 0, 0, 0)};
+    if (!voidPoly.empty()) {
+        Clipper2Lib::Paths64 voidPaths{toPath64(voidPoly, 0, 0, 0)};
+        sheetRect = Clipper2Lib::Difference(sheetRect, voidPaths, Clipper2Lib::FillRule::NonZero);
+    }
     double overlap = 0;
     for (int i = 0; i < instCount; i++) {
         if (sheetId[i] < 0) continue;

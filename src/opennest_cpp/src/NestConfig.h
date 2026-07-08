@@ -30,6 +30,12 @@ struct NestConfig {
     // NFP guarantees non-collision directly -> tightest packing (parts touch, no gap), but slower.
     bool exactNfp = false;
 
+    // Exact void/hole forbidden zones: compute the inner-fit hole exclusion as the true Minkowski
+    // sum H (+) (-B) instead of the convex hull of pairwise vertex sums. The hull over-excludes
+    // usable material around NON-CONVEX voids (e.g. stone fractures); the exact sum lets parts pack
+    // tight against concave void boundaries. Identical for convex voids; slower. Default off.
+    bool exactVoids = false;
+
     // Placement improvements
     int edgeSamples = 2;         // 0=off, N=samples per edge of feasible region
     // Q5 MEASURED (10 seeds, fixed 10s budget): 4 passes >= 2 everywhere (concave +0.6pp,

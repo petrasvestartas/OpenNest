@@ -44,6 +44,14 @@ typedef struct NfpParams {
     int    compactionPasses;// post-placement compaction passes (0=off; lower=faster)
     int    tryAllRotations; // bool: evaluate every rotation per placement (slower, tighter)
     int    exactNfp;        // bool: full-resolution exact NFP (no simplify/dilate -> no gap, slower)
+    int    stagnationGens;  // >0 => stop early once the best fitness has not improved for this many
+                            //       generations AND all instances are placed (0 = never early-exit).
+                            //       Makes the reported solve time the real convergence time rather
+                            //       than always burning the whole timeBudget/generation count.
+    int    exactVoids;      // bool: exclude sheet voids / part holes with the exact Minkowski sum
+                            //       H(+)(-B) instead of the convex-hull approximation. Tight packing
+                            //       against NON-CONVEX voids; identical for convex voids; slightly
+                            //       slower. Opt-in (default 0 = fast convex-hull, unchanged behavior).
 } NfpParams;
 
 // Main solve. Output arrays are caller-allocated, length = sum(part_quantities)
