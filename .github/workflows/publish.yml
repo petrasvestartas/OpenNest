@@ -49,13 +49,16 @@ jobs:
           cmake --build src/opennest_cpp/build --target nfp_nest -j3
           cmake -S src/nest_physics_cpp -B src/nest_physics_cpp/build -DCMAKE_BUILD_TYPE=Release "$ARCH"
           cmake --build src/nest_physics_cpp/build --target nest_physics -j3
+          cmake -S src/nest_spectral_cpp -B src/nest_spectral_cpp/build -DCMAKE_BUILD_TYPE=Release "$ARCH"
+          cmake --build src/nest_spectral_cpp/build --target nest_spectral -j3
 
       - name: Stage + verify universal dylibs (must list arm64 + x86_64)
         run: |
           set -e
           mkdir -p mac_out
-          cp src/opennest_cpp/build/nfp_nest.dylib         mac_out/
-          cp src/nest_physics_cpp/build/nest_physics.dylib mac_out/
+          cp src/opennest_cpp/build/nfp_nest.dylib          mac_out/
+          cp src/nest_physics_cpp/build/nest_physics.dylib  mac_out/
+          cp src/nest_spectral_cpp/build/nest_spectral.dylib mac_out/
           for f in mac_out/*.dylib; do echo "== $f =="; lipo -archs "$f"; done
 
       - uses: actions/upload-artifact@v4
@@ -133,6 +136,11 @@ jobs:
           cmake -S src/nest_physics_cpp -B src/nest_physics_cpp/build -A x64
           cmake --build src/nest_physics_cpp/build --config Release --target nest_physics
 
+      - name: Build nest_spectral.dll
+        run: |
+          cmake -S src/nest_spectral_cpp -B src/nest_spectral_cpp/build -A x64
+          cmake --build src/nest_spectral_cpp/build --config Release --target nest_spectral
+
       # ---- 4) Build the plugin (all TFMs); PostBuild copies the Windows DLLs next to each .gha ----
       - name: Build opennest_2.gha
         run: dotnet build src/opennest_2/opennest_2.csproj -c Release
@@ -187,7 +195,7 @@ jobs:
             # and ship the universal dylibs instead.
             Copy-Item "$ghaDir/*" $stage -Recurse -Force
             if ($useDylibs) {
-              Remove-Item "$stage/nfp_nest.dll","$stage/nest_physics.dll" -Force -ErrorAction SilentlyContinue
+              Remove-Item "$stage/nfp_nest.dll","$stage/nest_physics.dll","$stage/nest_spectral.dll" -Force -ErrorAction SilentlyContinue
               Copy-Item "mac_dylibs/*.dylib" $stage -Force
             }
             # Rhino command — net7/RC8 for the rh8 package, net8/RC9 for the rh9 package (runtimeconfig.json
@@ -203,7 +211,7 @@ jobs:
               Copy-Item "src/opennest_gh2/bin/Release/net8.0/opennest_gh2.runtimeconfig.json" $g2 -Force -ErrorAction SilentlyContinue
               Copy-Item "$ghaDir/opennest_2.gha" $g2 -Force
               if ($useDylibs) { Copy-Item "mac_dylibs/*.dylib" $g2 -Force }
-              else { Copy-Item "$ghaDir/nest_physics.dll" $g2 -Force; Copy-Item "$ghaDir/nfp_nest.dll" $g2 -Force }
+              else { Copy-Item "$ghaDir/nest_physics.dll" $g2 -Force; Copy-Item "$ghaDir/nfp_nest.dll" $g2 -Force; Copy-Item "$ghaDir/nest_spectral.dll" $g2 -Force }
               Copy-Item "grasshopper_plugin/GRASSHOPPER2_INSTALL.txt" $g2 -Force -ErrorAction SilentlyContinue
             }
             Copy-Item "$manifestDir/manifest.yml" $stage -Force

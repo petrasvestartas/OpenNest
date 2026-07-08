@@ -141,5 +141,46 @@ inline Grid rotate_by(const Grid& in, const Mat3& R, int rotmin[3]) {
     return out;
 }
 
+// Morphological dilation by a Chebyshev (box) structuring element of radius r: grow the occupied set by
+// r voxels in every direction. The grid is enlarged by r on each side so nothing is clipped (the original
+// content lands at offset (r,r,r)). Separable: a max-window pass along x, then y, then z. The packer uses
+// this to add a CLEARANCE gap — a part dilated by r and placed with zero overlap keeps >= r voxels of
+// empty space from every neighbour and the container walls (and the dilation also makes the binary
+// collision test conservative, so coarse voxels can't let surfaces interpenetrate).
+inline Grid dilate_box(const Grid& in, int r) {
+    if (r <= 0) return in;
+    const int nx = in.nx + 2 * r, ny = in.ny + 2 * r, nz = in.nz + 2 * r;
+    Grid a(nx, ny, nz);
+    for (int i = 0; i < in.nx; i++)
+        for (int j = 0; j < in.ny; j++)
+            for (int k = 0; k < in.nz; k++)
+                if (in(i, j, k) > 0) a(i + r, j + r, k + r) = 1;
+    Grid b(nx, ny, nz);                                   // dilate along x
+    for (int j = 0; j < ny; j++)
+        for (int k = 0; k < nz; k++)
+            for (int i = 0; i < nx; i++) {
+                int lo = std::max(0, i - r), hi = std::min(nx - 1, i + r), v = 0;
+                for (int t = lo; t <= hi && !v; t++) v = a(t, j, k);
+                b(i, j, k) = v;
+            }
+    Grid c(nx, ny, nz);                                   // dilate along y
+    for (int i = 0; i < nx; i++)
+        for (int k = 0; k < nz; k++)
+            for (int j = 0; j < ny; j++) {
+                int lo = std::max(0, j - r), hi = std::min(ny - 1, j + r), v = 0;
+                for (int t = lo; t <= hi && !v; t++) v = b(i, t, k);
+                c(i, j, k) = v;
+            }
+    Grid d(nx, ny, nz);                                   // dilate along z
+    for (int i = 0; i < nx; i++)
+        for (int j = 0; j < ny; j++)
+            for (int k = 0; k < nz; k++) {
+                int lo = std::max(0, k - r), hi = std::min(nz - 1, k + r), v = 0;
+                for (int t = lo; t <= hi && !v; t++) v = c(i, j, t);
+                d(i, j, k) = v;
+            }
+    return d;
+}
+
 } // namespace nsp
 #endif // NSP_GRID_HPP

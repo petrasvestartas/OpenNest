@@ -27,6 +27,10 @@ typedef struct NsParams {
                                //   (z is the "up" axis). <=0 -> default 1e8.
     int    sort_by_volume;     // 1 = greedy largest-first (default); 0 = input order.
     int    threads;            // FFT worker threads per transform. <=0 -> 1.
+    double clearance;          // minimum empty gap between parts AND from the container walls, in MODEL
+                               //   units. <=0 -> off (parts may touch). Rounded UP to whole voxels
+                               //   (ceil(clearance/pitch)); also makes collision conservative at coarse
+                               //   resolution. The placed geometry is the ORIGINAL mesh (gap, not bloat).
 } NsParams;
 
 // Nest `part_count` triangle meshes into ONE axis-aligned container box (cx x cy x cz, model units;

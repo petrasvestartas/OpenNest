@@ -73,6 +73,10 @@ NS_EXPORT int nest_spectral(
     const int TY = std::max(1, (int)std::lround(container_y / pitch));
     const int TZ = std::max(1, (int)std::lround(container_z / pitch));
 
+    // Clearance (model units) -> whole voxels, rounded UP so the requested gap is always met.
+    const int clearance_voxels =
+        (params && params->clearance > 0.0) ? (int)std::ceil(params->clearance / pitch) : 0;
+
     // Voxelize every part once; remember its bbox-min origin and tight-crop offset for the pose math.
     struct PartInfo { double o[3]; int crop[3]; Grid tight; };
     std::vector<PartInfo> parts(part_count);
@@ -102,6 +106,7 @@ NS_EXPORT int nest_spectral(
     sp.height_penalty   = P;
     sp.sort_by_volume   = sortvol;
     sp.nthreads         = threads;
+    sp.clearance_voxels = clearance_voxels;
 
     Grid tray;
     bool used_gpu = false;

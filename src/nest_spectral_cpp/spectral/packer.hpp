@@ -21,6 +21,7 @@ struct SpectralParams {
     double height_penalty   = 1e8;   // P: weight on (z/L)^3, biases items toward the floor
     bool   sort_by_volume   = true;  // greedy largest-first
     size_t nthreads         = 1;     // pocketfft threads per transform
+    int    clearance_voxels = 0;     // >0 => keep this many empty voxels between parts (and from walls)
 };
 
 struct ItemPlacement {
@@ -91,26 +92,34 @@ inline std::vector<ItemPlacement> pack(const std::vector<Grid>& items, int TX, i
         ItemPlacement best;
         best.item_index = idx;
 
+        const int r = p.clearance_voxels > 0 ? p.clearance_voxels : 0;
+        Grid dil;   // holds the dilated collision footprint when r > 0 (keeps cgrid's reference alive)
         for (int oi : orients) {
             const Mat3& R = cube_rotations()[oi];
             int rotmin[3];
             Grid rot = rotate_by(items[idx], R, rotmin);
             if (rot.nx > TX || rot.ny > TY || rot.nz > TZ) continue;
 
-            corr.correlate(rot, collision, prox);   // per orientation: just item-FFT + 2 mul + 2 inv-FFT
+            // Collision footprint = the item grown by r voxels (Minkowski box). Searching for a zero-overlap
+            // cell of the DILATED footprint guarantees >= r empty voxels around the ORIGINAL part; the part
+            // itself (rot) is what we place, so clearance is a real gap, not extra material.
+            const Grid& cgrid = (r > 0) ? (dil = dilate_box(rot, r)) : rot;
+            if (cgrid.nx > TX || cgrid.ny > TY || cgrid.nz > TZ) continue;   // doesn't fit WITH clearance
 
-            const int maxI = TX - rot.nx, maxJ = TY - rot.ny, maxK = TZ - rot.nz;
+            corr.correlate(cgrid, collision, prox);   // per orientation: just item-FFT + 2 mul + 2 inv-FFT
+
+            const int maxI = TX - cgrid.nx, maxJ = TY - cgrid.ny, maxK = TZ - cgrid.nz;
             for (int i = 0; i <= maxI; i++)
                 for (int j = 0; j <= maxJ; j++)
                     for (int k = 0; k <= maxK; k++) {
-                        if (collision(i, j, k) != 0) continue;          // would overlap existing voxels
+                        if (collision(i, j, k) != 0) continue;          // would overlap existing voxels (+clearance)
                         double qz = (double)k / (double)TZ;
                         double s = (double)prox(i, j, k) + p.height_penalty * qz * qz * qz;
                         if (s < best_score) {
-                            if (overlaps(rot, tray_out, i, j, k)) continue;   // exact guard vs float-FFT false-free
+                            if (overlaps(cgrid, tray_out, i, j, k)) continue;   // exact guard vs float-FFT false-free
                             best_score = s; any = true;
                             best.placed = true; best.orient = oi; best.R = R; best.score = s;
-                            best.pos[0] = i; best.pos[1] = j; best.pos[2] = k;
+                            best.pos[0] = i + r; best.pos[1] = j + r; best.pos[2] = k + r;   // original part's min corner
                             best.rotmin[0] = rotmin[0]; best.rotmin[1] = rotmin[1]; best.rotmin[2] = rotmin[2];
                             best_rot = rot;
                         }

@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using Grasshopper.Kernel;
 using Rhino.Geometry;
 
-namespace opennest_3d
+namespace opennest_2
 {
     // OpenNest3D — 3D mesh-mesh nesting (voxel / FFT "spectral" packing). Sits beside OpenNest1 /
     // OpenNest2 / OpenNestCollision (same "OpenNest2" panel, primary exposure). Inputs: a list of Meshes
@@ -31,11 +31,13 @@ namespace opennest_3d
             pManager.AddNumberParameter("Height Penalty", "Height Penalty", "Weight biasing parts toward the floor (z). <=0 uses the 1e8 default.", GH_ParamAccess.item, 1e8);
             pManager.AddIntegerParameter("Quantities", "Quantities", "Optional copies per part (defaults to 1 each).", GH_ParamAccess.list);
             pManager.AddBooleanParameter("Run", "Run", "Run the solve (can take seconds). Off by default.", GH_ParamAccess.item, false);
+            pManager.AddNumberParameter("Clearance", "Clearance", "Minimum gap kept between parts AND from the container walls, in model units. 0 = off (parts may touch). Rounded up to whole voxels (pitch = longest container axis / Resolution); also makes collision conservative at coarse Resolution.", GH_ParamAccess.item, 0.0);
             pManager[2].Optional = true;
             pManager[3].Optional = true;
             pManager[4].Optional = true;
             pManager[5].Optional = true;
             pManager[6].Optional = true;
+            pManager[7].Optional = true;
         }
 
         protected override void RegisterOutputParams(GH_Component.GH_OutputParamManager pManager)
@@ -63,10 +65,12 @@ namespace opennest_3d
                 int resolution = 48, orientations = 1;
                 double heightPenalty = 1e8;
                 bool run = false;
+                double clearance = 0.0;
                 DA.GetData(2, ref resolution);
                 DA.GetData(3, ref orientations);
                 DA.GetData(4, ref heightPenalty);
                 DA.GetData(6, ref run);
+                DA.GetData(7, ref clearance);
                 var qty = new List<int>();
                 DA.GetDataList(5, qty);
 
@@ -128,6 +132,7 @@ namespace opennest_3d
                     height_penalty = heightPenalty,
                     sort_by_volume = 1,
                     threads = Math.Max(1, Environment.ProcessorCount - 1),
+                    clearance = Math.Max(0.0, clearance),
                 };
 
                 var out_tx = new double[inst];
@@ -154,9 +159,10 @@ namespace opennest_3d
                 // Diagnostic: the actual voxel tray and which backend ran — so slow solves are easy to explain.
                 double pitch = Math.Max(cx, Math.Max(cy, cz)) / Math.Max(1, prm.voxel_resolution);
                 int gx = Math.Max(1, (int)Math.Round(cx / pitch)), gy = Math.Max(1, (int)Math.Round(cy / pitch)), gz = Math.Max(1, (int)Math.Round(cz / pitch));
+                int rc = clearance > 0 ? (int)Math.Ceiling(clearance / pitch) : 0;
                 AddRuntimeMessage(GH_RuntimeMessageLevel.Remark,
-                    string.Format("placed {0}/{1} · {2} · tray {3}x{4}x{5} · {6} orient · {7:0} ms",
-                        placed, inst, used_gpu != 0 ? "GPU" : "CPU", gx, gy, gz, orientations, sw.Elapsed.TotalMilliseconds));
+                    string.Format("placed {0}/{1} · {2} · tray {3}x{4}x{5} · {6} orient · gap {7}vx · {8:0} ms",
+                        placed, inst, used_gpu != 0 ? "GPU" : "CPU", gx, gy, gz, orientations, rc, sw.Elapsed.TotalMilliseconds));
 
                 var outMeshes = new List<Mesh>(inst);
                 var outX = new List<Transform>(inst);

@@ -63,18 +63,20 @@ static Grid make_L(int a, int b, int c) {
 }
 
 int main(int argc, char** argv) {
-    int    tray    = 32;
-    int    orient  = 1;
-    int    nitems  = 24;
-    size_t threads = 1;
+    int    tray      = 32;
+    int    orient    = 1;
+    int    nitems    = 24;
+    size_t threads   = 1;
+    int    clearance = 0;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         auto next = [&](int def) { return (i + 1 < argc) ? std::atoi(argv[++i]) : def; };
-        if      (a == "--tray")    tray    = next(tray);
-        else if (a == "--orient")  orient  = next(orient);
-        else if (a == "--items")   nitems  = next(nitems);
-        else if (a == "--threads") threads = (size_t)next((int)threads);
-        else if (a == "--meshtest") return mesh_test();
+        if      (a == "--tray")      tray      = next(tray);
+        else if (a == "--orient")    orient    = next(orient);
+        else if (a == "--items")     nitems    = next(nitems);
+        else if (a == "--threads")   threads   = (size_t)next((int)threads);
+        else if (a == "--clearance") clearance = next(clearance);
+        else if (a == "--meshtest")  return mesh_test();
     }
 
     // Deterministic synthetic item set: cycle through a few box/L sizes.
@@ -88,6 +90,7 @@ int main(int argc, char** argv) {
     SpectralParams p;
     p.num_orientations = orient;
     p.nthreads = threads;
+    p.clearance_voxels = clearance;
 
     std::cout << "nest_spectral self-test: " << nitems << " items into a " << tray << "^3 tray, "
               << orient << " orientation(s), " << threads << " FFT thread(s)\n";
@@ -109,5 +112,27 @@ int main(int argc, char** argv) {
               << "  (" << secs << " s)\n";
     std::cout << "integrity: tray_occupied=" << tray_vol << " expected=" << placed_vol
               << (tray_vol == placed_vol ? "  OK (no overlap)\n" : "  MISMATCH!\n");
-    return (tray_vol == placed_vol) ? 0 : 1;
+
+    // With a clearance, verify the gap: no two DIFFERENT parts (distinct tray tags) may sit within
+    // `clearance` voxels (Chebyshev) of each other — matching the box dilation used by the packer.
+    bool gap_ok = true;
+    if (clearance > 0) {
+        for (int i = 0; i < trayg.nx && gap_ok; i++)
+            for (int j = 0; j < trayg.ny && gap_ok; j++)
+                for (int k = 0; k < trayg.nz && gap_ok; k++) {
+                    int t = trayg(i, j, k);
+                    if (t <= 0) continue;
+                    for (int di = -clearance; di <= clearance && gap_ok; di++)
+                        for (int dj = -clearance; dj <= clearance && gap_ok; dj++)
+                            for (int dk = -clearance; dk <= clearance && gap_ok; dk++) {
+                                int a = i + di, b = j + dj, c = k + dk;
+                                if (a < 0 || b < 0 || c < 0 || a >= trayg.nx || b >= trayg.ny || c >= trayg.nz) continue;
+                                int u = trayg(a, b, c);
+                                if (u > 0 && u != t) gap_ok = false;
+                            }
+                }
+        std::cout << "clearance " << clearance << "vx: "
+                  << (gap_ok ? "OK (parts kept >= gap apart)\n" : "VIOLATED!\n");
+    }
+    return (tray_vol == placed_vol && gap_ok) ? 0 : 1;
 }

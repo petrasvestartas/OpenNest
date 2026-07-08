@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace opennest_3d
+namespace opennest_2
 {
     // P/Invoke surface for the native nest_spectral engine (src/nest_spectral_cpp -> nest_spectral.dll).
     // Mirrors NestPhysicsWrapper exactly: bare-name DllImport (the OS resolves nest_spectral.dll from the
@@ -10,7 +10,7 @@ namespace opennest_3d
     {
         private const string LIBRARY_NAME = "nest_spectral";
 
-        // Must match NsParams in nest_spectral_capi.h field-for-field (int,int,double,int,int).
+        // Must match NsParams in nest_spectral_capi.h field-for-field (int,int,double,int,int,double).
         [StructLayout(LayoutKind.Sequential)]
         public struct NsParams
         {
@@ -19,6 +19,7 @@ namespace opennest_3d
             public double height_penalty;     // weight on (z/Lz)^3; biases parts toward the floor; <=0 -> 1e8
             public int    sort_by_volume;     // 1 = greedy largest-first
             public int    threads;            // FFT worker threads per transform; <=0 -> 1
+            public double clearance;          // min empty gap between parts and from walls, model units; <=0 -> off
         }
 
         // world = R * p + (tx,ty,tz) per instance, container-local frame. Returns placed-instance count

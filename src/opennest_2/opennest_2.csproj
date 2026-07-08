@@ -65,10 +65,18 @@
     <Copy Condition=" '$(OS)' == 'Windows_NT' AND Exists('nest_physics.dll') " SourceFiles="nest_physics.dll" DestinationFolder="$(TargetDir)" />
     <!-- Copy the nfp_nest NFP/SvgNest solver DLL (Boost.Polygon GA) next to the .gha for component_nest2 -->
     <Copy Condition=" '$(OS)' == 'Windows_NT' AND Exists('../opennest_cpp/build/Release/nfp_nest.dll') " SourceFiles="../opennest_cpp/build/Release/nfp_nest.dll" DestinationFolder="$(TargetDir)" />
+    <!-- Copy the nest_spectral 3D FFT solver DLL next to the .gha for OpenNest3DComponent -->
+    <Copy Condition=" '$(OS)' == 'Windows_NT' AND Exists('../nest_spectral_cpp/build/Release/nest_spectral.dll') " SourceFiles="../nest_spectral_cpp/build/Release/nest_spectral.dll" DestinationFolder="$(TargetDir)" />
     <!-- macOS: the universal (x86_64 + arm64) dylibs, emitted with no "lib" prefix into each engine's build/ root -->
     <Copy Condition=" '$(OS)' != 'Windows_NT' AND Exists('../opennest_cpp/build/nfp_nest.dylib') " SourceFiles="../opennest_cpp/build/nfp_nest.dylib" DestinationFolder="$(TargetDir)" />
     <Copy Condition=" '$(OS)' != 'Windows_NT' AND Exists('../nest_physics_cpp/build/nest_physics.dylib') " SourceFiles="../nest_physics_cpp/build/nest_physics.dylib" DestinationFolder="$(TargetDir)" />
+    <Copy Condition=" '$(OS)' != 'Windows_NT' AND Exists('../nest_spectral_cpp/build/nest_spectral.dylib') " SourceFiles="../nest_spectral_cpp/build/nest_spectral.dylib" DestinationFolder="$(TargetDir)" />
   </Target>
+
+  <!-- OpenNest3D component icon: embedded so OpenNest3DComponent.Icon finds it by manifest-resource suffix. -->
+  <ItemGroup>
+    <EmbeddedResource Include="grasshopper\OpenNest3D.png" />
+  </ItemGroup>
 
   <ItemGroup>
     <Reference Update="System">
