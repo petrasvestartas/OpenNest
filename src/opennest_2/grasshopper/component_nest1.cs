@@ -111,8 +111,8 @@ namespace opennest_2
 
         protected override void RegisterInputParams(GH_Component.GH_InputParamManager pManager)
         {
-            pManager.AddGeometryParameter("Sheets", "Sheets", "Sheets — closed planar surfaces (outer + holes) or closed curves. A single sheet is auto-copied so parts can overflow onto more.", GH_ParamAccess.list);
-            pManager.AddGeometryParameter("Geo", "Geo", "Parts to nest — closed curves or planar surfaces.", GH_ParamAccess.list);
+            pManager.AddGeometryParameter("Sheets", "Sheets", "Sheets — closed planar surfaces (outer + holes) or closed curves. A single sheet is auto-copied so parts can overflow onto more.", GH_ParamAccess.tree);
+            pManager.AddGeometryParameter("Geo", "Geo", "Parts to nest — closed curves or planar surfaces. Multiple data-tree branches are combined into one nest (for clustered batch nesting, use OpenNestCollision).", GH_ParamAccess.tree);
             pManager.AddNumberParameter("Spacing", "Spacing", "Gap to keep between placed parts AND from the sheet edge.\nApplied as a nesting offset directly to the parts and sheets (this component takes raw polylines, not nest_geo/nest_sheets), so it stands in for the Geometry/Sheets Offset inputs. The ORIGINAL geometry is still what gets output.", GH_ParamAccess.item, 1);
             pManager.AddIntegerParameter("Placement", "Placement", "Placement strategy index (0 Box, 1 Gravity, 2 Squeeze, 3 Bottom-Left).", GH_ParamAccess.item, 1);
             pManager.AddNumberParameter("Tolerance", "Tolerance", "Curve simplification tolerance.", GH_ParamAccess.item, 0.1);
@@ -254,6 +254,11 @@ namespace opennest_2
 
         protected override void SolveInstance(IGH_DataAccess DA)
         {
+            // Sheets + Geo are TREE inputs read whole (all branches combined) in one pass; the async state
+            // machine must advance exactly ONCE per solution. Ignore extra iterations forced by a tree on
+            // another input — also the backstop against the multi-branch infinite re-solve loop.
+            if (DA.Iteration > 0) return;
+
             bool reset = false;
             this.run = false; this.tries = 1;
             DA.GetData(8, ref reset);
@@ -480,10 +485,23 @@ namespace opennest_2
         }
 
         // ---- change signature (raw goo bounding boxes + curve samples + the scalar params + iterations/tries) ----
+        // Read a geometry TREE input flattened into one list — all branches combined (this solver has no batch
+        // mode, so branch structure is irrelevant to the result; combining them also stops the multi-branch
+        // per-iteration re-solve loop, since a tree is now consumed in a single SolveInstance pass).
+        private static List<IGH_GeometricGoo> ReadAllGoo(IGH_DataAccess DA, int index)
+        {
+            var flat = new List<IGH_GeometricGoo>();
+            if (DA.GetDataTree(index, out Grasshopper.Kernel.Data.GH_Structure<IGH_GeometricGoo> tree) && tree != null)
+                foreach (var branch in tree.Branches)
+                    if (branch != null)
+                        foreach (var g in branch) if (g != null) flat.Add(g);
+            return flat;
+        }
+
         private string ComputeSig(IGH_DataAccess DA, List<double> parameters)
         {
-            var s = new List<IGH_GeometricGoo>(); DA.GetDataList(0, s);
-            var g = new List<IGH_GeometricGoo>(); DA.GetDataList(1, g);
+            var s = ReadAllGoo(DA, 0);
+            var g = ReadAllGoo(DA, 1);
             return SigOf(s, g, this.iterations, this.tries, parameters);
         }
 
@@ -527,8 +545,7 @@ namespace opennest_2
 
         private nest_rhino_lib.nest_sheets process_sheets(IGH_DataAccess DA)
         {
-            var sheetGoo = new List<IGH_GeometricGoo>();
-            DA.GetDataList(0, sheetGoo);
+            var sheetGoo = ReadAllGoo(DA, 0);
 
             List<List<Polyline>> sheetSets = new List<List<Polyline>>();
             foreach (var goo in sheetGoo)
@@ -572,7 +589,7 @@ namespace opennest_2
                 var setBB = BoundingBox.Empty;
                 foreach (var s in sheetSets) foreach (var pl in s) setBB.Union(pl.BoundingBox);
                 double setW = (setBB.IsValid ? (setBB.Max.X - setBB.Min.X) : 0) + 0.01;
-                var partGoo = new List<IGH_GeometricGoo>(); DA.GetDataList(1, partGoo);
+                var partGoo = ReadAllGoo(DA, 1);
                 double partAreaSum = 0;
                 foreach (var pg in partGoo) { if (pg == null) continue; var b = pg.Boundingbox; if (b.IsValid) partAreaSum += (b.Max.X - b.Min.X) * (b.Max.Y - b.Min.Y); }
                 double sheetAreaSum = 0;

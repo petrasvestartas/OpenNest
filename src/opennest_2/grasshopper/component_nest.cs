@@ -168,9 +168,10 @@ namespace opennest_2
             }
             try
             {
-                long done = NestPhysicsWrapper.np_progress();
+                long done = (_pending != null) ? _pending.ProgressRounds() : NestPhysicsWrapper.np_progress();
+                string batchTag = (_pending != null && _pending.BatchMode) ? ("  · batch " + (_pending.CurBatch + 1) + "/" + _pending.BatchCount) : "";
                 this.Message = _cancelled ? ("stopping…  " + done + " rounds")
-                                          : (done + " / ~" + _totalBudget + " rounds  (ESC = stop)");
+                                          : (done + " / ~" + _totalBudget + " rounds" + batchTag + "  (ESC = stop)");
                 Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
                 {
                     try
@@ -193,8 +194,8 @@ namespace opennest_2
 
         protected override void RegisterInputParams(GH_Component.GH_InputParamManager pManager)
         {
-            pManager.AddGenericParameter("Sheets", "Sheets", "From OpenNest tab, use component Sheets.", GH_ParamAccess.item);
-            pManager.AddGenericParameter("Geometry", "Geometry", "From OpenNest tab, use component Geometry.", GH_ParamAccess.item);
+            pManager.AddGenericParameter("Sheets", "Sheets", "From OpenNest tab, use component Sheets.", GH_ParamAccess.tree);
+            pManager.AddGenericParameter("Geometry", "Geometry", "From OpenNest tab, use component Geometry. When the Batch option is ON, each data-tree BRANCH is nested as its own clustered batch (a batch is kept together as one block); a flat input is one combined nest (or split by 'Batch Size').", GH_ParamAccess.tree);
 
             // Optional wired options ("key value" strings, e.g. from the Nest Options component); they override
             // the matching on-canvas option rows. Inserted BEFORE Iterations. MakeOptionsInput is shared with the
@@ -258,6 +259,12 @@ namespace opennest_2
 
         protected override void SolveInstance(IGH_DataAccess DA)
         {
+            // Sheets + Geometry are TREE inputs read whole in one pass (GetDataTree), so the async state
+            // machine must advance exactly ONCE per solution. If any OTHER input is fed a tree it would drive
+            // extra iterations; ignore them (the single result is emitted on iteration 0). This is also the
+            // backstop against the multi-branch infinite re-solve loop.
+            if (DA.Iteration > 0) return;
+
             // Wired options (if any) override the on-canvas rows BEFORE anything reads/signatures them, so both
             // the launch below and InputsChanged see the values actually in effect.
             ApplyWiredOptions(DA);   // Options input at index 2
@@ -318,15 +325,13 @@ namespace opennest_2
                 _previewBorders = new List<Polyline>();
                 _hasResult = false;
 
-                nest_rhino_lib.nest_sheets nest_sheets = null;
-                DA.GetData(0, ref nest_sheets);
-                nest_rhino_lib.nest_geo nest_geo_in = null;
-                DA.GetData(1, ref nest_geo_in);
-                if (nest_sheets == null || nest_geo_in == null) { ReleaseEngine(); this.Message = "missing Sheets/Geometry"; return; }
-
+                // Read the Sheets + Geometry TREES (each Geometry branch is a potential batch). Everything is
+                // DUPLICATED so the shared upstream geometry is never mutated. `merged` is the combined nest_geo
+                // that PASS 2 consumes; `batchGeos` are the per-branch pieces (for the batch partition).
+                if (!ReadNestInputs(DA, out var nest_sheets, out var batchGeos, out var merged))
+                { ReleaseEngine(); this.Message = "missing Sheets/Geometry"; return; }
                 nest_sheets = nest_sheets.duplicate();        // don't mutate the upstream sheets (shared with sibling nesters)
-                var nest_geo_dup = nest_geo_in.duplicate();   // don't mutate upstream geometry
-                this.nest_geos.Add(nest_geo_dup);
+                this.nest_geos.Add(merged);
 
                 // Options now come from the on-canvas controls, not a wired string input.
                 List<string> parameters_text = BuildOptionStrings();
@@ -339,9 +344,10 @@ namespace opennest_2
                 }
                 _pendingFont = parameters_text.Count > 0 ? parameters_text[parameters_text.Count - 1] : "MecSoft_Font-1 1";
 
-                // element_holes / poles / compact: parse BY NAME (robust to dropdown order). Sheet holes are
-                // ALWAYS kept out when the sheet has them (no toggle). element_holes: 0=off, 1=fill, 2=fill-first.
+                // element_holes / poles / compact / fit / batch / batch_size: parse BY NAME (robust to dropdown
+                // order). Sheet holes are ALWAYS kept out when the sheet has them. element_holes: 0=off,1=fill,2=fill-first.
                 int partHolesMode = 1; int poles = 48; bool compact = true; int fitMode = 0;   // 0 = all parts / fewest sheets (default)
+                int batchOn = 0; int batchSize = 0;
                 foreach (var ln in parameters_text)
                 {
                     string t = (ln ?? "").Trim();
@@ -350,19 +356,31 @@ namespace opennest_2
                     if (t.StartsWith("element_holes", StringComparison.OrdinalIgnoreCase) && int.TryParse(tk[tk.Length - 1], out int em)) partHolesMode = em;
                     else if (t.StartsWith("poles", StringComparison.OrdinalIgnoreCase) && int.TryParse(tk[tk.Length - 1], out int pv)) poles = pv;
                     else if (t.StartsWith("compact", StringComparison.OrdinalIgnoreCase) && double.TryParse(tk[tk.Length - 1], out double cv)) compact = (cv != 0.0);
+                    else if (t.StartsWith("batch_size", StringComparison.OrdinalIgnoreCase) && int.TryParse(tk[tk.Length - 1], out int bs)) batchSize = bs;
+                    else if (t.StartsWith("batch", StringComparison.OrdinalIgnoreCase) && int.TryParse(tk[tk.Length - 1], out int bo)) batchOn = bo;
                     else if (t.StartsWith("fit", StringComparison.OrdinalIgnoreCase) && int.TryParse(tk[tk.Length - 1], out int fm)) fitMode = fm;
                 }
 
                 int max_iterations = 1;
                 DA.GetData(3, ref max_iterations);   // Iterations shifted to index 3 (Options inserted at 2)
 
+                // Decide the batch partition: OFF -> one combined nest; ON -> branch = batch (>=2 branches),
+                // else split the flat part list into consecutive groups of batchSize. null / <2 = combined.
+                List<List<int>> partition = BuildBatchPartition(batchOn != 0, batchGeos, merged, batchSize);
+
                 NpRun pending = new NpRun();
-                try { pending.Flatten(nest_sheets, nest_geo_dup, parameters, max_iterations, partHolesMode, poles, compact, fitMode); }
+                try
+                {
+                    if (partition != null && partition.Count >= 2)
+                        pending.SetupBatches(nest_sheets, merged, partition, parameters, max_iterations, partHolesMode, poles, compact, fitMode);
+                    else
+                        pending.Flatten(nest_sheets, merged, parameters, max_iterations, partHolesMode, poles, compact, fitMode);
+                }
                 catch (Exception ex) { Rhino.RhinoApp.WriteLine(ex.ToString()); ReleaseEngine(); this.Message = "input error"; return; }
                 if (!pending.Ready) { ReleaseEngine(); this.Message = "no geometry / sheet"; return; }
 
                 _pending = pending;
-                _pendingNestGeo = nest_geo_dup;
+                _pendingNestGeo = merged;
                 _totalBudget = pending.TotalBudget;
                 _cancelled = false;
                 _previewSheets = pending.SheetOutlines();
@@ -397,7 +415,8 @@ namespace opennest_2
                 this.simplified_borders.AddRange(nest.simplified_polygons);
                 // status: real round count + sheets; reflects an ESC-stop.
                 this.Message = (_cancelled ? ("stopped @ " + nest.rounds_done) : (nest.rounds_done + " rounds"))
-                             + "  →  " + nest.output_sheets.Count + " sheet(s)";
+                             + "  →  " + nest.output_sheets.Count + " sheet(s)"
+                             + (nest.BatchMode ? ("  · " + nest.BatchCount + " batches") : "");
 
                 ///////////////////////////////////////////////////////////////////////////////////
                 //output
@@ -618,32 +637,137 @@ namespace opennest_2
             }));
         }
 
-        // Cheap stable signature of the meaningful inputs (iterations + option tokens + every part-boundary and
-        // sheet point) so a real edit is told apart from an unrelated re-expire / our own completion re-expire.
-        private static string SigOf(nest_rhino_lib.nest_sheets sheets, nest_rhino_lib.nest_geo geo, int iters, List<string> optTokens)
+        // Unwrap a generic GH goo into a native OpenNest type (the Sheets/Geometry inputs carry these as
+        // GH_ObjectWrapper). Robust to the value arriving directly or wrapped.
+        private static T Unwrap<T>(Grasshopper.Kernel.Types.IGH_Goo goo) where T : class
+        {
+            if (goo == null) return null;
+            if (goo is T direct) return direct;
+            try { if (goo.ScriptVariable() is T sv) return sv; } catch { }
+            if (goo is Grasshopper.Kernel.Types.GH_ObjectWrapper w) return w.Value as T;
+            return null;
+        }
+
+        // Read the Sheets + Geometry TREES. Sheets = the first nest_sheets found. Geometry = one batch geo per
+        // NON-EMPTY branch (a branch's items merged), each DUPLICATED so the upstream is never mutated, plus
+        // their overall merge (what PASS 2 consumes). Returns false if a sheet or any geometry is missing.
+        private bool ReadNestInputs(IGH_DataAccess DA, out nest_rhino_lib.nest_sheets sheets,
+                                    out List<nest_rhino_lib.nest_geo> batchGeos, out nest_rhino_lib.nest_geo merged)
+        {
+            sheets = null; batchGeos = new List<nest_rhino_lib.nest_geo>(); merged = null;
+
+            if (DA.GetDataTree(0, out Grasshopper.Kernel.Data.GH_Structure<Grasshopper.Kernel.Types.IGH_Goo> stree) && stree != null)
+                foreach (var branch in stree.Branches)
+                {
+                    if (branch == null) continue;
+                    foreach (var goo in branch) { var s = Unwrap<nest_rhino_lib.nest_sheets>(goo); if (s != null) { sheets = s; break; } }
+                    if (sheets != null) break;
+                }
+
+            if (DA.GetDataTree(1, out Grasshopper.Kernel.Data.GH_Structure<Grasshopper.Kernel.Types.IGH_Goo> gtree) && gtree != null)
+                foreach (var branch in gtree.Branches)
+                {
+                    if (branch == null) continue;
+                    var items = new List<nest_rhino_lib.nest_geo>();
+                    foreach (var goo in branch) { var g = Unwrap<nest_rhino_lib.nest_geo>(goo); if (g != null) items.Add(g.duplicate()); }
+                    if (items.Count == 0) continue;
+                    batchGeos.Add(items.Count == 1 ? items[0] : nest_rhino_lib.nest_geo.Merge(items));
+                }
+
+            if (batchGeos.Count == 0 || sheets == null) return false;
+            merged = batchGeos.Count == 1 ? batchGeos[0] : nest_rhino_lib.nest_geo.Merge(batchGeos);
+            return true;
+        }
+
+        // Decide the batch partition over the MERGED geo's group indices. OFF -> null (one combined nest). ON:
+        // >=2 Geometry branches -> one batch per branch (contiguous ranges; the merge concatenates branches in
+        // order); else split the flat group list into consecutive groups of batchSize. null when < 2 batches.
+        private static List<List<int>> BuildBatchPartition(bool batchOn, List<nest_rhino_lib.nest_geo> batchGeos,
+                                                           nest_rhino_lib.nest_geo merged, int batchSize)
+        {
+            if (!batchOn || merged == null) return null;
+            int G = merged.boundary_sorted != null ? merged.boundary_sorted.Count : 0;
+            if (G <= 1) return null;
+
+            var parts = new List<List<int>>();
+            if (batchGeos != null && batchGeos.Count >= 2)
+            {
+                int off = 0;
+                foreach (var bg in batchGeos)
+                {
+                    int c = bg.boundary_sorted != null ? bg.boundary_sorted.Count : 0;
+                    if (c > 0)
+                    {
+                        var idx = new List<int>(c);
+                        for (int k = 0; k < c && off + k < G; k++) idx.Add(off + k);
+                        if (idx.Count > 0) parts.Add(idx);
+                    }
+                    off += c;
+                }
+            }
+            else if (batchSize > 0)
+            {
+                for (int s = 0; s < G; s += batchSize)
+                {
+                    var idx = new List<int>();
+                    for (int k = s; k < Math.Min(s + batchSize, G); k++) idx.Add(k);
+                    if (idx.Count > 0) parts.Add(idx);
+                }
+            }
+            else return null;
+
+            return parts.Count >= 2 ? parts : null;
+        }
+
+        // Cheap stable signature of the meaningful inputs (iterations + option tokens + branch structure + every
+        // part-boundary and sheet point) so a real edit is told apart from an unrelated / self re-expire. Reads
+        // the TREES directly (including branch counts, so re-batching is detected) — no merge in this hot path.
+        private string SigOfTrees(IGH_DataAccess DA, int iters, List<string> optTokens)
         {
             long[] h = { unchecked((long)1469598103934665603) };
             void MixI(long v) { unchecked { h[0] = (h[0] ^ v) * 1099511628211L; } }
             void MixD(double d) { MixI(BitConverter.DoubleToInt64Bits(Math.Round(d, 6))); }
+            void MixGeo(nest_rhino_lib.nest_geo g)
+            {
+                if (g == null || g.boundary_sorted == null) return;
+                foreach (var part in g.boundary_sorted)
+                    foreach (var loop in part)
+                    {
+                        var pl = loop.Item2; if (pl == null) continue;
+                        for (int k = 0; k < pl.Count; k++) { var p = pl[k]; MixD(p.X); MixD(p.Y); MixD(p.Z); }
+                    }
+            }
             MixI(iters);
             if (optTokens != null) foreach (var t in optTokens) if (t != null) foreach (char c in t) MixI(c);
             try
             {
-                if (geo != null && geo.boundary_sorted != null)
-                    foreach (var part in geo.boundary_sorted)
-                        foreach (var loop in part)
+                if (DA.GetDataTree(1, out Grasshopper.Kernel.Data.GH_Structure<Grasshopper.Kernel.Types.IGH_Goo> gtree) && gtree != null)
+                {
+                    MixI(gtree.PathCount);
+                    foreach (var branch in gtree.Branches)
+                    {
+                        MixI(branch != null ? branch.Count : 0);
+                        if (branch == null) continue;
+                        foreach (var goo in branch) MixGeo(Unwrap<nest_rhino_lib.nest_geo>(goo));
+                    }
+                }
+                if (DA.GetDataTree(0, out Grasshopper.Kernel.Data.GH_Structure<Grasshopper.Kernel.Types.IGH_Goo> stree) && stree != null)
+                    foreach (var branch in stree.Branches)
+                    {
+                        if (branch == null) continue;
+                        foreach (var goo in branch)
                         {
-                            var pl = loop.Item2; if (pl == null) continue;
-                            for (int k = 0; k < pl.Count; k++) { var p = pl[k]; MixD(p.X); MixD(p.Y); MixD(p.Z); }
+                            var s = Unwrap<nest_rhino_lib.nest_sheets>(goo);
+                            if (s == null || s.sheets == null) continue;
+                            foreach (var arr in s.sheets)
+                                if (arr != null)
+                                    foreach (var pl in arr)
+                                    {
+                                        if (pl == null) continue;
+                                        for (int k = 0; k < pl.Count; k++) { var p = pl[k]; MixD(p.X); MixD(p.Y); MixD(p.Z); }
+                                    }
                         }
-                if (sheets != null && sheets.sheets != null)
-                    foreach (var arr in sheets.sheets)
-                        if (arr != null)
-                            foreach (var pl in arr)
-                            {
-                                if (pl == null) continue;
-                                for (int k = 0; k < pl.Count; k++) { var p = pl[k]; MixD(p.X); MixD(p.Y); MixD(p.Z); }
-                            }
+                    }
             }
             catch { }
             return h[0].ToString();
@@ -651,10 +775,8 @@ namespace opennest_2
 
         private bool InputsChanged(IGH_DataAccess DA)
         {
-            nest_rhino_lib.nest_sheets s = null; DA.GetData(0, ref s);
-            nest_rhino_lib.nest_geo g = null; DA.GetData(1, ref g);
             int it = 1; DA.GetData(3, ref it);   // Iterations at index 3 (Options at 2)
-            _pendingSig = SigOf(s, g, it, BuildOptionStrings());
+            _pendingSig = SigOfTrees(DA, it, BuildOptionStrings());
             _pendingIter = it;
             return _pendingSig != _solvedSig;
         }
@@ -739,6 +861,16 @@ namespace opennest_2
         public long rounds_done = 0;      // relaxation rounds actually completed (for the status label)
         public int rc = 0;
 
+        // ---- BATCH MODE (Batch option ON): each batch is nested into its own tight block by an inner NpRun,
+        // then the blocks are shelf-tiled across the sheets so related parts stay clustered. In combined
+        // mode (_batches == null) this whole block is inert and the single-solve path below runs as before. ----
+        private List<NpRun> _batches = null;             // one inner NpRun per batch (null = combined mode)
+        private bool _batchMode = false;
+        public volatile int CurBatch = 0;                // which batch is solving now (for the progress label)
+        public int BatchCount => _batches != null ? _batches.Count : 1;
+        public long BatchRoundsDone = 0;                 // rounds completed by finished batches (cosmetic progress)
+        private int _unplacedBatchTotal = 0;             // parts that didn't fit their batch block (diagnostic)
+
         // ---- flattened inputs (built by Flatten on the UI thread; consumed by Solve/Assemble/preview) ----
         private nest_rhino_lib.nest_sheets _sheets;
         private nest_rhino_lib.nest_geo _geo;
@@ -751,24 +883,40 @@ namespace opennest_2
         private NpParams _np;
 
         public NpParams Np => _np;
-        public long TotalBudget => _np.iter_budget * Math.Max(1, _np.n_starts);
+        public long TotalBudget => _np.iter_budget * Math.Max(1, _np.n_starts) * (_batchMode ? Math.Max(1, BatchCount) : 1);
         public bool Ready => _F > 0 && _nsheet > 0;
+        public bool BatchMode => _batchMode;
+
+        // Cumulative rounds across all batches (for the progress label): finished batches + the live one.
+        public long ProgressRounds()
+        {
+            long live = 0; try { live = NestPhysicsWrapper.np_progress(); } catch { }
+            return _batchMode ? BatchRoundsDone + live : live;
+        }
 
         // Build the native input arrays + per-part transforms on the UI thread (RhinoCommon geometry).
         private int _partHolesTotal = 0;   // total interior holes sent to the solver (for the diagnostic)
         private int _sheetHolesTotal = 0;  // total sheet keep-out holes sent to the solver (for the diagnostic)
         private int _unplacedTotal = 0;    // parts that didn't fit any sheet -> laid out outside (diagnostic)
 
+        // groupSubset != null limits the flatten to those group indices of nest_geo (used for BATCH mode: the
+        // inner solve of one batch against the MERGED geo — _flatGroup then holds GLOBAL group indices, so the
+        // batch's placements slot straight back into the merged output). maxSheetsOverride/fitModeOverride let a
+        // batch pack into ONE sheet-sized block. Combined mode passes the defaults -> behaviour is unchanged.
         public void Flatten(nest_rhino_lib.nest_sheets nest_sheets, nest_rhino_lib.nest_geo nest_geo,
                             List<double> parameters, int max_iterations, int partHolesMode = 1,
-                            int poles = 0, bool compact = false, int fitMode = 0)
+                            int poles = 0, bool compact = false, int fitMode = 0,
+                            IReadOnlyList<int> groupSubset = null, int maxSheetsOverride = -1, int fitModeOverride = -1)
         {
             int nGroups = nest_geo.boundary_sorted.Count;
+            IReadOnlyList<int> groups = groupSubset ?? (IReadOnlyList<int>)System.Linq.Enumerable.Range(0, nGroups).ToList();
 
             // per-group orientation onto WorldXY (matches rhino_example.to_xy: the part's first outer
-            // vertex becomes the local frame origin).
+            // vertex becomes the local frame origin). Sized to ALL groups and indexed by group index (so it
+            // works when _flatGroup holds global indices); only the flattened subset is filled.
             Transform[] to_xy = new Transform[nGroups];
-            for (int i = 0; i < nGroups; i++)
+            for (int i = 0; i < nGroups; i++) to_xy[i] = Transform.Identity;
+            foreach (int i in groups)
             {
                 Polyline g_outer = nest_geo.boundary_sorted[i][0].Item2;
                 Plane plane = new Plane(g_outer[0], Vector3d.XAxis, Vector3d.YAxis);
@@ -786,7 +934,7 @@ namespace opennest_2
             List<int> phc = new List<int>();    // part-hole count per flat part
             List<int> phvc = new List<int>();   // vertex count per part-hole (part-major)
             List<double> phxy = new List<double>();
-            for (int i = 0; i < nGroups; i++)
+            foreach (int i in groups)
             {
                 int ncopies = 1;
                 int gi = nest_geo.geometry_sorted[i][0];
@@ -878,12 +1026,14 @@ namespace opennest_2
             // The Iterations INPUT is the sole budget, mapped 1:1 to relaxation rounds: 1 = quick rough
             // preview (~sub-second), ~4000 = the tight all-on-one-sheet pack (~2 min).
             np.iter_mode = 1; np.time_budget_secs = 0; np.iter_budget = (long)Math.Max(1, max_iterations);
-            np.max_sheets = nsheet > 0 ? nsheet : 6;
+            // BATCH mode packs each batch into ONE sheet-sized block (maxSheetsOverride=1, fitModeOverride=1);
+            // combined mode uses all sheets and the user's Fit choice.
+            np.max_sheets = maxSheetsOverride > 0 ? maxSheetsOverride : (nsheet > 0 ? nsheet : 6);
             np.n_starts = Math.Max(1, (int)GetP(2, 1));   // multi-start: run N seeds, keep the densest (positional [2] after spacing+simplify removed)
             np.part_holes_mode = partHolesMode;   // 0=off, 1=post-pass fill, 2=fill-first (from Element Holes dropdown)
             np.pole_max = poles > 0 ? poles : 0;      // surrogate poles/part (16 ≈ 2.7x faster; 0 = default 48)
             np.final_compact = compact ? 1 : 0;       // post-relaxation compaction slide (tighter pack)
-            np.fit_mode = fitMode;                    // 0 = all parts / fewest sheets; 1 = ONE sheet, max fill (overflow placed outside)
+            np.fit_mode = fitModeOverride >= 0 ? fitModeOverride : fitMode;   // 0 = all parts / fewest sheets; 1 = ONE sheet, max fill
 
             int F = flatGroup.Count;
             double[] out_tx = new double[F == 0 ? 1 : F];
@@ -914,6 +1064,180 @@ namespace opennest_2
             _sheetHolesTotal = 0; foreach (int hcount in shc) _sheetHolesTotal += hcount;
             _ptx = new double[F == 0 ? 1 : F]; _pty = new double[F == 0 ? 1 : F];
             _pang = new double[F == 0 ? 1 : F]; _psh = new int[F == 0 ? 1 : F];
+        }
+
+        // === BATCH MODE ======================================================================
+        // Build one inner NpRun per batch. `partition` is a disjoint cover of the MERGED geo's group
+        // indices (branch = batch, or count-split); each batch is nested (by its inner NpRun) into ONE
+        // sheet-sized block. Solve() then solves every batch and AssembleBatches() shelf-tiles the blocks
+        // across the sheets so a batch never spreads out. The merged output slots line up with `merged`,
+        // so component PASS 2 (which reads _pendingNestGeo = merged) is unchanged.
+        public void SetupBatches(nest_rhino_lib.nest_sheets nest_sheets, nest_rhino_lib.nest_geo merged,
+                                 List<List<int>> partition, List<double> parameters, int max_iterations,
+                                 int partHolesMode, int poles, bool compact, int fitMode)
+        {
+            _batchMode = true;
+            _sheets = nest_sheets;
+            _geo = merged;
+            _nGroups = merged.boundary_sorted.Count;
+
+            int nsheet = 0;
+            while (nsheet < nest_sheets.sheets.Length && nest_sheets.sheets[nsheet] != null && nest_sheets.sheets[nsheet].Length > 0)
+                nsheet++;
+            _nsheet = nsheet;
+            _sheetOrigin = new Point3d[nsheet == 0 ? 1 : nsheet];
+            for (int s = 0; s < nsheet; s++) _sheetOrigin[s] = nest_sheets.sheets[s][0].BoundingBox.Min;
+
+            // _np here is only for the progress budget + diagnostic; each batch carries its own solve params.
+            Func<int, double, double> GetP = (idx, def) => (idx >= 0 && idx < parameters.Count) ? parameters[idx] : def;
+            NpParams np = new NpParams();
+            np.num_rotations = Math.Max(1, (int)GetP(0, 32));
+            np.seed = (int)GetP(1, 100); if (np.seed < 0) np.seed = 0;
+            np.iter_mode = 1; np.time_budget_secs = 0; np.iter_budget = (long)Math.Max(1, max_iterations);
+            np.n_starts = Math.Max(1, (int)GetP(2, 1));
+            np.max_sheets = nsheet > 0 ? nsheet : 6;
+            np.part_holes_mode = partHolesMode; np.pole_max = poles > 0 ? poles : 0;
+            np.final_compact = compact ? 1 : 0; np.fit_mode = fitMode;
+            _np = np;
+
+            // One inner NpRun per batch: nest that batch's groups (against the merged geo) into ONE block
+            // (maxSheets=1, fit=one-sheet-max-fill), so its placements form a compact, tile-able rectangle.
+            _batches = new List<NpRun>(partition.Count);
+            _F = 0;
+            foreach (var groupIdx in partition)
+            {
+                var b = new NpRun();
+                b.Flatten(nest_sheets, merged, parameters, max_iterations, partHolesMode, poles, compact, fitMode,
+                          groupIdx, /*maxSheetsOverride*/ 1, /*fitModeOverride*/ 1);
+                _batches.Add(b);
+                _F += b._F;
+            }
+
+            for (int i = 0; i < _nGroups; i++)
+            {
+                output_transforms.Add(new List<Transform>());
+                output_polygon_sheet_ids.Add(new List<int>());
+            }
+            _pvc = new List<int>(); _flatGroup = new List<int>();   // unused in batch mode; keep non-null
+        }
+
+        // One placed (or unplaced) instance from a batch's inner solve.
+        internal struct PlacedPart { public int group; public Transform xf; public bool placed; public BoundingBox bb; }
+
+        // Inner-solve results: per flat part, its world transform (on sheet 0) and outer-loop world bbox.
+        internal List<PlacedPart> GetPlacedParts()
+        {
+            var list = new List<PlacedPart>(_F);
+            for (int f = 0; f < _F; f++)
+            {
+                int g = _flatGroup[f];
+                int sid = _out_sheet[f];
+                bool placed = sid >= 0 && sid < _nsheet;
+                Transform xf = placed ? PartTransform(f, sid, _out_tx[f], _out_ty[f], _out_angle[f]) : Transform.Identity;
+                BoundingBox bb = BoundingBox.Empty;
+                if (placed)
+                {
+                    Polyline outer = new Polyline(_geo.boundary_sorted[g][0].Item2);
+                    outer.Transform(xf);
+                    bb = outer.BoundingBox;
+                }
+                list.Add(new PlacedPart { group = g, xf = xf, placed = placed, bb = bb });
+            }
+            return list;
+        }
+
+        // Shelf-tile each batch's block across the sheets. Batches stay contiguous: a block is placed at the
+        // running cursor, wrapping to a new row when it would overrun the sheet width and to a new sheet when
+        // it would overrun the height. Parts that didn't fit their block (or batches past the last sheet) go
+        // to an overflow row outside the sheets (sheet id -1), exactly like the combined path.
+        private void AssembleBatches()
+        {
+            int nsheet = _nsheet, nb = _batches.Count;
+            double W = double.MaxValue, H = double.MaxValue;
+            if (nsheet > 0)
+            {
+                var bb0 = _sheets.sheets[0][0].BoundingBox;
+                double w = bb0.Max.X - bb0.Min.X, h = bb0.Max.Y - bb0.Min.Y;
+                if (w > 0) W = w; if (h > 0) H = h;
+            }
+
+            var placedParts = new List<List<PlacedPart>>(nb);
+            var blockBB = new BoundingBox[nb];
+            for (int b = 0; b < nb; b++)
+            {
+                var pp = _batches[b].GetPlacedParts();
+                placedParts.Add(pp);
+                BoundingBox bb = BoundingBox.Empty;
+                foreach (var p in pp) if (p.placed) bb.Union(p.bb);
+                blockBB[b] = bb;
+            }
+
+            double gap = (W < double.MaxValue && H < double.MaxValue) ? 0.02 * Math.Sqrt(W * H) : 0.0;
+            int sheetId = 0; double cx = 0, cy = 0, shelfH = 0; int maxSheetUsed = -1;
+            var tileSheet = new int[nb];
+            var tileOff = new Vector3d[nb];
+            for (int b = 0; b < nb; b++)
+            {
+                if (!blockBB[b].IsValid) { tileSheet[b] = -1; continue; }
+                double bw = blockBB[b].Max.X - blockBB[b].Min.X;
+                double bh = blockBB[b].Max.Y - blockBB[b].Min.Y;
+                if (cx > 0 && cx + bw > W + 1e-6) { cx = 0; cy += shelfH + gap; shelfH = 0; }        // new row
+                if (cy > 0 && cy + bh > H + 1e-6) { sheetId++; cx = 0; cy = 0; shelfH = 0; }          // new sheet
+                if (sheetId >= nsheet) { tileSheet[b] = -1; continue; }                                // out of sheets
+                Point3d origin = _sheetOrigin[sheetId];
+                tileOff[b] = new Vector3d(origin.X + cx - blockBB[b].Min.X, origin.Y + cy - blockBB[b].Min.Y, 0);
+                tileSheet[b] = sheetId;
+                maxSheetUsed = Math.Max(maxSheetUsed, sheetId);
+                cx += bw + gap; shelfH = Math.Max(shelfH, bh);
+            }
+
+            // overflow row (unplaced parts / batches past the last sheet) to the RIGHT of the sheets
+            BoundingBox sheetsBB = BoundingBox.Empty;
+            for (int s = 0; s < nsheet; s++)
+                if (_sheets.sheets[s] != null && _sheets.sheets[s].Length > 0) sheetsBB.Union(_sheets.sheets[s][0].BoundingBox);
+            double ovGap = sheetsBB.IsValid ? 0.03 * sheetsBB.Diagonal.Length : 1.0;
+            double ovX = sheetsBB.IsValid ? sheetsBB.Max.X + ovGap : 0.0;
+            double ovY = sheetsBB.IsValid ? sheetsBB.Min.Y : 0.0;
+            int unplaced = 0;
+
+            for (int b = 0; b < nb; b++)
+            {
+                bool batchPlaced = tileSheet[b] >= 0;
+                foreach (var p in placedParts[b])
+                {
+                    Transform full; int sid;
+                    if (p.placed && batchPlaced)
+                    {
+                        full = Transform.Translation(tileOff[b]) * p.xf;
+                        sid = tileSheet[b];
+                    }
+                    else
+                    {
+                        Polyline loc = new Polyline(_geo.boundary_sorted[p.group][0].Item2);
+                        Transform toxy = Transform.PlaneToPlane(
+                            new Plane(_geo.boundary_sorted[p.group][0].Item2[0], Vector3d.XAxis, Vector3d.YAxis), Plane.WorldXY);
+                        loc.Transform(toxy);
+                        BoundingBox lb = loc.BoundingBox;
+                        full = Transform.Translation(ovX - lb.Min.X, ovY - lb.Min.Y, 0.0) * toxy;
+                        ovX += (lb.Max.X - lb.Min.X) + ovGap;
+                        sid = -1; unplaced++;
+                    }
+                    output_transforms[p.group].Add(full);
+                    output_polygon_sheet_ids[p.group].Add(sid);
+                }
+            }
+            _unplacedBatchTotal = unplaced;
+
+            int emit = maxSheetUsed >= 0 ? maxSheetUsed + 1 : (nsheet > 0 ? 1 : 0);
+            if (emit > nsheet) emit = nsheet;
+            for (int s = 0; s < emit; s++)
+                output_sheets.Add(new List<Polyline>(_sheets.sheets[s]));
+
+            _geo.xforms = output_transforms;
+
+            Rhino.RhinoApp.WriteLine(string.Format(
+                "[nest_physics] BATCH: {0} batch(es) -> {1} sheet(s); {2} part(s) placed outside (didn't fit their batch block).",
+                nb, emit, unplaced));
         }
 
         // === Non-rectangular sheet support ===================================================
@@ -1025,7 +1349,32 @@ namespace opennest_2
         public void Solve()
         {
             if (!Ready) return;
+
+            // BATCH mode: reset the cancel flag ONCE, then solve every batch in turn (each into its own
+            // block). A per-batch reset would wipe a mid-solve ESC; instead each batch calls SolveCore (no
+            // reset), so once np_cancel fires the current batch bails and the rest return immediately.
+            if (_batchMode)
+            {
+                NestPhysicsWrapper.np_cancel_reset();
+                BatchRoundsDone = 0; rounds_done = 0;
+                for (int b = 0; b < _batches.Count; b++)
+                {
+                    CurBatch = b;
+                    _batches[b].SolveCore();
+                    long r = _batches[b].rounds_done;
+                    BatchRoundsDone += r; rounds_done += r;
+                }
+                return;
+            }
+
             NestPhysicsWrapper.np_cancel_reset();
+            SolveCore();
+        }
+
+        // The bare native solve, WITHOUT resetting the cancel flag (so a batch loop can share one reset).
+        public void SolveCore()
+        {
+            if (!Ready) return;
             rc = NestPhysicsWrapper.np_nest(
                 _F, _pvcA, _pxyA, _protA, _nsheet, _sovcA, _soxyA, _shcA, _hvcA, _hxyA,
                 _phcA, _phvcA, _phxyA,
@@ -1045,6 +1394,7 @@ namespace opennest_2
         public List<Polyline> BuildPreviewBorders()
         {
             var borders = new List<Polyline>();
+            if (_batchMode) return borders;   // batch preview would be untiled/misleading; show the sheets only
             if (!Ready) return borders;
             int placed = NestPhysicsWrapper.np_poll_layout(_F, _ptx, _pty, _pang, _psh, out int pns);
             if (placed <= 0) return borders;
@@ -1086,6 +1436,7 @@ namespace opennest_2
         // UI THREAD: build the final per-group transforms, emit sheets, print the diagnostic (after Solve).
         public void Assemble()
         {
+            if (_batchMode) { AssembleBatches(); return; }
             int F = _F, nsheet = _nsheet;
             _unplacedTotal = 0; for (int f = 0; f < F; f++) if (_out_sheet[f] < 0) _unplacedTotal++;
 

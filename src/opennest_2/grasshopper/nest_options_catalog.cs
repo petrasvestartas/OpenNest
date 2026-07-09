@@ -41,6 +41,8 @@ namespace opennest_2
             NestOption.Number("poles", "Poles", 48, 4, 64, 0, "Inscribed circles per part for collision tests; more = more accurate (cleaner pack), fewer = faster but can pack worse."),
             NestOption.Choice("compact", "Compact", new[] { "Off", "Bottom-Left", "Multi" }, new[] { "0", "1", "2" }, 1, "Post-pack tightening slide."),
             NestOption.Choice("fit", "Fit", new[] { "One sheet (max fill)", "All parts (fewest sheets)" }, new[] { "1", "0" }, 1, "One sheet = fill a SINGLE sheet as full as possible; parts that don't fit are placed OUTSIDE. All parts = use as many sheets as needed so nothing is left off."),
+            NestOption.Choice("batch", "Batch", new[] { "Off", "On" }, new[] { "0", "1" }, 0, "Keep related parts together for sorting: nest each batch into its own TIGHT BLOCK, then tile the blocks across the sheets (a batch never spreads across the sheet). A batch = one Grasshopper data-tree branch of the Geometry input, OR - if the input has no branches - every 'Batch Size' parts. Off = nest everything combined (densest)."),
+            NestOption.Number("batch_size", "Batch Size", 0, 0, 100000, 0, "Batch mode, no branches: split the flat part list into consecutive groups of this many parts (e.g. 20). 0 = batch only by tree branch. Ignored when Batch is Off or the Geometry already has branches."),
             NestOption.Text("font", "Sheet Font", "MecSoft_Font-1 1", "Sheet-number label: font name + text size."),
         };
 

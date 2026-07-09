@@ -210,8 +210,8 @@ namespace opennest_2
 
         protected override void RegisterInputParams(GH_Component.GH_InputParamManager pManager)
         {
-            pManager.AddGenericParameter("Sheets", "Sheets", "From OpenNest tab, use component Sheets.", GH_ParamAccess.item);
-            pManager.AddGenericParameter("Geometry", "Geometry", "From OpenNest tab, use component Geometry.", GH_ParamAccess.item);
+            pManager.AddGenericParameter("Sheets", "Sheets", "From OpenNest tab, use component Sheets.", GH_ParamAccess.tree);
+            pManager.AddGenericParameter("Geometry", "Geometry", "From OpenNest tab, use component Geometry. Multiple data-tree branches are combined into one nest (for clustered batch nesting, use OpenNestCollision).", GH_ParamAccess.tree);
 
             // Optional wired options ("key value" strings, e.g. from the Nest Options component); they override
             // the matching on-canvas option rows. Inserted BEFORE Iterations. MakeOptionsInput is shared with the
@@ -276,6 +276,11 @@ namespace opennest_2
 
         protected override void SolveInstance(IGH_DataAccess DA)
         {
+            // Sheets + Geometry are TREE inputs read whole in one pass; the async state machine must advance
+            // exactly ONCE per solution. Ignore any extra iterations forced by a tree on another input — this
+            // is also the backstop against the multi-branch infinite re-solve loop.
+            if (DA.Iteration > 0) return;
+
             if (nest_geos == null) nest_geos = new List<nest_rhino_lib.nest_geo>();
 
             // Wired options (if any) override the on-canvas rows BEFORE anything reads/signatures them, so both
@@ -355,19 +360,15 @@ namespace opennest_2
                 _previewSheets = new List<Polyline>();
                 _hasResult = false;
 
-                nest_rhino_lib.nest_sheets nest_sheets = null;
-                DA.GetData(0, ref nest_sheets);
-                nest_rhino_lib.nest_geo nest_geo_in = null;
-                DA.GetData(1, ref nest_geo_in);
-                if (nest_sheets == null || nest_geo_in == null)
+                // Read the Sheets + Geometry TREES; all Geometry branches are COMBINED into one nest (this
+                // solver has no batch mode). Duplicated so the shared upstream geometry is never mutated.
+                if (!ReadCombinedInputs(DA, out var nest_sheets, out var nest_geo_dup))
                 {
                     ReleaseEngine();   // release — no solve was started; wake the next queued component
                     this.Message = "missing Sheets/Geometry";
                     return;
                 }
-
                 nest_sheets = nest_sheets.duplicate();        // don't mutate the upstream sheets (shared with sibling nesters)
-                var nest_geo_dup = nest_geo_in.duplicate();   // don't mutate upstream geometry
                 this.nest_geos.Add(nest_geo_dup);
 
                 // Options now come from the on-canvas controls, not a wired string input.
@@ -709,15 +710,97 @@ namespace opennest_2
         }
 
         // Reads the inputs, computes the signature (cached into _pendingSig/_pendingIter), and reports whether
-        // it differs from the solve we last launched.
+        // it differs from the solve we last launched. Reads the TREES (all branches) so a change in any branch
+        // is caught; branches are combined so branch structure itself doesn't affect the result.
         private bool InputsChanged(IGH_DataAccess DA)
         {
-            nest_rhino_lib.nest_sheets s = null; DA.GetData(0, ref s);
-            nest_rhino_lib.nest_geo g = null; DA.GetData(1, ref g);
             int it = 10; DA.GetData(3, ref it); if (it < 1) it = 1;   // Iterations at index 3 (Options at 2)
-            _pendingSig = SigOf(s, g, it, BuildOptionStrings());
+            _pendingSig = SigOfTrees(DA, it, BuildOptionStrings());
             _pendingIter = it;
             return _pendingSig != _solvedSig;
+        }
+
+        // Unwrap a generic GH goo into a native OpenNest type (Sheets/Geometry carry these as GH_ObjectWrapper).
+        private static T Unwrap<T>(Grasshopper.Kernel.Types.IGH_Goo goo) where T : class
+        {
+            if (goo == null) return null;
+            if (goo is T direct) return direct;
+            try { if (goo.ScriptVariable() is T sv) return sv; } catch { }
+            if (goo is Grasshopper.Kernel.Types.GH_ObjectWrapper w) return w.Value as T;
+            return null;
+        }
+
+        // Read the Sheets + Geometry TREES: first nest_sheets found + all Geometry branches COMBINED into one
+        // nest_geo (each DUPLICATED so the upstream is never mutated). Returns false if a sheet/geometry missing.
+        private bool ReadCombinedInputs(IGH_DataAccess DA, out nest_rhino_lib.nest_sheets sheets, out nest_rhino_lib.nest_geo merged)
+        {
+            sheets = null; merged = null;
+            var geos = new List<nest_rhino_lib.nest_geo>();
+            if (DA.GetDataTree(0, out Grasshopper.Kernel.Data.GH_Structure<Grasshopper.Kernel.Types.IGH_Goo> stree) && stree != null)
+                foreach (var branch in stree.Branches)
+                {
+                    if (branch == null) continue;
+                    foreach (var goo in branch) { var s = Unwrap<nest_rhino_lib.nest_sheets>(goo); if (s != null) { sheets = s; break; } }
+                    if (sheets != null) break;
+                }
+            if (DA.GetDataTree(1, out Grasshopper.Kernel.Data.GH_Structure<Grasshopper.Kernel.Types.IGH_Goo> gtree) && gtree != null)
+                foreach (var branch in gtree.Branches)
+                {
+                    if (branch == null) continue;
+                    foreach (var goo in branch) { var g = Unwrap<nest_rhino_lib.nest_geo>(goo); if (g != null) geos.Add(g.duplicate()); }
+                }
+            if (geos.Count == 0 || sheets == null) return false;
+            merged = geos.Count == 1 ? geos[0] : nest_rhino_lib.nest_geo.Merge(geos);
+            return true;
+        }
+
+        // Signature over the TREES (iterations + option tokens + every part-boundary and sheet point). No merge
+        // in this hot path; branch structure is irrelevant to the combined result so it isn't mixed in.
+        private string SigOfTrees(IGH_DataAccess DA, int iters, List<string> optTokens)
+        {
+            long[] h = { unchecked((long)1469598103934665603) };
+            void MixI(long v) { unchecked { h[0] = (h[0] ^ v) * 1099511628211L; } }
+            void MixD(double d) { MixI(BitConverter.DoubleToInt64Bits(Math.Round(d, 6))); }
+            MixI(iters);
+            if (optTokens != null) foreach (var t in optTokens) if (t != null) foreach (char c in t) MixI(c);
+            try
+            {
+                if (DA.GetDataTree(1, out Grasshopper.Kernel.Data.GH_Structure<Grasshopper.Kernel.Types.IGH_Goo> gtree) && gtree != null)
+                    foreach (var branch in gtree.Branches)
+                    {
+                        if (branch == null) continue;
+                        foreach (var goo in branch)
+                        {
+                            var g = Unwrap<nest_rhino_lib.nest_geo>(goo);
+                            if (g == null || g.boundary_sorted == null) continue;
+                            foreach (var part in g.boundary_sorted)
+                                foreach (var loop in part)
+                                {
+                                    var pl = loop.Item2; if (pl == null) continue;
+                                    for (int k = 0; k < pl.Count; k++) { var p = pl[k]; MixD(p.X); MixD(p.Y); MixD(p.Z); }
+                                }
+                        }
+                    }
+                if (DA.GetDataTree(0, out Grasshopper.Kernel.Data.GH_Structure<Grasshopper.Kernel.Types.IGH_Goo> stree) && stree != null)
+                    foreach (var branch in stree.Branches)
+                    {
+                        if (branch == null) continue;
+                        foreach (var goo in branch)
+                        {
+                            var s = Unwrap<nest_rhino_lib.nest_sheets>(goo);
+                            if (s == null || s.sheets == null) continue;
+                            foreach (var arr in s.sheets)
+                                if (arr != null)
+                                    foreach (var pl in arr)
+                                    {
+                                        if (pl == null) continue;
+                                        for (int k = 0; k < pl.Count; k++) { var p = pl[k]; MixD(p.X); MixD(p.Y); MixD(p.Z); }
+                                    }
+                        }
+                    }
+            }
+            catch { }
+            return h[0].ToString();
         }
 
         // (Re-)arm the one-shot debounce. The Iterations slider gets a slightly longer wait since each tick is
