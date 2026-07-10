@@ -330,7 +330,7 @@ namespace opennest_2
                 // that PASS 2 consumes; `batchGeos` are the per-branch pieces (for the batch partition).
                 if (!ReadNestInputs(DA, out var nest_sheets, out var batchGeos, out var merged))
                 { ReleaseEngine(); this.Message = "missing Sheets/Geometry"; return; }
-                nest_sheets = nest_sheets.duplicate();        // don't mutate the upstream sheets (shared with sibling nesters)
+                // nest_sheets is already a combined duplicate (see CombineSheets); merged/batchGeos are dups too.
                 this.nest_geos.Add(merged);
 
                 // Options now come from the on-canvas controls, not a wired string input.
@@ -648,6 +648,26 @@ namespace opennest_2
             return null;
         }
 
+        // Combine several nest_sheets objects into ONE (concatenate every non-empty sheet) so wiring multiple
+        // sheet objects makes ALL their sheets available to the solver — not just the first. Each source is
+        // DUPLICATED first (the solver offsets/transforms sheets in place), so the result is safe to mutate.
+        private static nest_rhino_lib.nest_sheets CombineSheets(List<nest_rhino_lib.nest_sheets> list)
+        {
+            if (list == null || list.Count == 0) return null;
+            var dups = new List<nest_rhino_lib.nest_sheets>(list.Count);
+            foreach (var ns in list) if (ns != null) dups.Add(ns.duplicate());
+            if (dups.Count == 0) return null;
+            if (dups.Count == 1) return dups[0];
+            var all = new List<Polyline[]>();
+            foreach (var ns in dups)
+                if (ns.sheets != null)
+                    foreach (var sh in ns.sheets)
+                        if (sh != null && sh.Length > 0) all.Add(sh);
+            var combined = dups[0];
+            combined.sheets = all.ToArray();
+            return combined;
+        }
+
         // Read the Sheets + Geometry TREES. Sheets = the first nest_sheets found. Geometry = one batch geo per
         // NON-EMPTY branch (a branch's items merged), each DUPLICATED so the upstream is never mutated, plus
         // their overall merge (what PASS 2 consumes). Returns false if a sheet or any geometry is missing.
@@ -656,13 +676,16 @@ namespace opennest_2
         {
             sheets = null; batchGeos = new List<nest_rhino_lib.nest_geo>(); merged = null;
 
+            // ALL nest_sheets objects across the tree are combined into one (so wiring 2+ sheet objects makes
+            // every sheet available, not just the first). CombineSheets returns a duplicate — safe to mutate.
+            var sheetList = new List<nest_rhino_lib.nest_sheets>();
             if (DA.GetDataTree(0, out Grasshopper.Kernel.Data.GH_Structure<Grasshopper.Kernel.Types.IGH_Goo> stree) && stree != null)
                 foreach (var branch in stree.Branches)
                 {
                     if (branch == null) continue;
-                    foreach (var goo in branch) { var s = Unwrap<nest_rhino_lib.nest_sheets>(goo); if (s != null) { sheets = s; break; } }
-                    if (sheets != null) break;
+                    foreach (var goo in branch) { var s = Unwrap<nest_rhino_lib.nest_sheets>(goo); if (s != null) sheetList.Add(s); }
                 }
+            sheets = CombineSheets(sheetList);
 
             if (DA.GetDataTree(1, out Grasshopper.Kernel.Data.GH_Structure<Grasshopper.Kernel.Types.IGH_Goo> gtree) && gtree != null)
                 foreach (var branch in gtree.Branches)

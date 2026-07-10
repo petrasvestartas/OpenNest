@@ -368,7 +368,7 @@ namespace opennest_2
                     this.Message = "missing Sheets/Geometry";
                     return;
                 }
-                nest_sheets = nest_sheets.duplicate();        // don't mutate the upstream sheets (shared with sibling nesters)
+                // nest_sheets is already a combined duplicate (see CombineSheets); nest_geo_dup is a dup too.
                 this.nest_geos.Add(nest_geo_dup);
 
                 // Options now come from the on-canvas controls, not a wired string input.
@@ -736,13 +736,16 @@ namespace opennest_2
         {
             sheets = null; merged = null;
             var geos = new List<nest_rhino_lib.nest_geo>();
+            // ALL nest_sheets objects across the tree are combined into one (wiring 2+ sheet objects makes every
+            // sheet available, not just the first). CombineSheets returns a duplicate — safe to mutate.
+            var sheetList = new List<nest_rhino_lib.nest_sheets>();
             if (DA.GetDataTree(0, out Grasshopper.Kernel.Data.GH_Structure<Grasshopper.Kernel.Types.IGH_Goo> stree) && stree != null)
                 foreach (var branch in stree.Branches)
                 {
                     if (branch == null) continue;
-                    foreach (var goo in branch) { var s = Unwrap<nest_rhino_lib.nest_sheets>(goo); if (s != null) { sheets = s; break; } }
-                    if (sheets != null) break;
+                    foreach (var goo in branch) { var s = Unwrap<nest_rhino_lib.nest_sheets>(goo); if (s != null) sheetList.Add(s); }
                 }
+            sheets = CombineSheets(sheetList);
             if (DA.GetDataTree(1, out Grasshopper.Kernel.Data.GH_Structure<Grasshopper.Kernel.Types.IGH_Goo> gtree) && gtree != null)
                 foreach (var branch in gtree.Branches)
                 {
@@ -752,6 +755,26 @@ namespace opennest_2
             if (geos.Count == 0 || sheets == null) return false;
             merged = geos.Count == 1 ? geos[0] : nest_rhino_lib.nest_geo.Merge(geos);
             return true;
+        }
+
+        // Combine several nest_sheets objects into ONE (concatenate every non-empty sheet) so wiring multiple
+        // sheet objects makes ALL their sheets available — not just the first. Each source is DUPLICATED first
+        // (the solver offsets/transforms sheets in place), so the result is safe to mutate.
+        private static nest_rhino_lib.nest_sheets CombineSheets(List<nest_rhino_lib.nest_sheets> list)
+        {
+            if (list == null || list.Count == 0) return null;
+            var dups = new List<nest_rhino_lib.nest_sheets>(list.Count);
+            foreach (var ns in list) if (ns != null) dups.Add(ns.duplicate());
+            if (dups.Count == 0) return null;
+            if (dups.Count == 1) return dups[0];
+            var all = new List<Polyline[]>();
+            foreach (var ns in dups)
+                if (ns.sheets != null)
+                    foreach (var sh in ns.sheets)
+                        if (sh != null && sh.Length > 0) all.Add(sh);
+            var combined = dups[0];
+            combined.sheets = all.ToArray();
+            return combined;
         }
 
         // Signature over the TREES (iterations + option tokens + every part-boundary and sheet point). No merge

@@ -739,8 +739,7 @@ namespace opennest_2
 
         private nest_rhino_lib.nest_geo process_geometry(IGH_DataAccess DA)
         {
-            var geometry = new List<IGH_GeometricGoo>();
-            DA.GetDataList<IGH_GeometricGoo>(1, geometry);
+            var geometry = ReadAllGoo(DA, 1);   // TREE input (all branches combined)
 
             try
             {
