@@ -1169,20 +1169,24 @@ namespace opennest_2
             return list;
         }
 
-        // Shelf-tile each batch's block across the sheets. Batches stay contiguous: a block is placed at the
-        // running cursor, wrapping to a new row when it would overrun the sheet width and to a new sheet when
-        // it would overrun the height. Parts that didn't fit their block (or batches past the last sheet) go
-        // to an overflow row outside the sheets (sheet id -1), exactly like the combined path.
+        // ONE BATCH PER SHEET: batch b is assigned to sheet (b % nsheet), so with at least as many sheets as
+        // batches each batch gets its OWN sheet (branch 0 -> sheet 0, branch 1 -> sheet 1, ...). With more
+        // batches than sheets the extra ones wrap round-robin and shelf-tile onto the sheets. Each batch stays
+        // one contiguous block; parts that didn't fit their block go to an overflow row outside (sheet id -1).
         private void AssembleBatches()
         {
             int nsheet = _nsheet, nb = _batches.Count;
-            double W = double.MaxValue, H = double.MaxValue;
-            if (nsheet > 0)
+
+            // per-sheet usable size + a shelf-tiling cursor (only used when >1 batch lands on the same sheet)
+            int ns = nsheet == 0 ? 1 : nsheet;
+            var sheetW = new double[ns]; var sheetH = new double[ns];
+            var cx = new double[ns]; var cy = new double[ns]; var shelfH = new double[ns];
+            for (int s = 0; s < nsheet; s++)
             {
-                var bb0 = _sheets.sheets[0][0].BoundingBox;
-                double w = bb0.Max.X - bb0.Min.X, h = bb0.Max.Y - bb0.Min.Y;
-                if (w > 0) W = w; if (h > 0) H = h;
+                var bbs = _sheets.sheets[s][0].BoundingBox;
+                sheetW[s] = bbs.Max.X - bbs.Min.X; sheetH[s] = bbs.Max.Y - bbs.Min.Y;
             }
+            double gap = nsheet > 0 ? 0.02 * Math.Sqrt(Math.Max(1.0, sheetW[0] * sheetH[0])) : 0.0;
 
             var placedParts = new List<List<PlacedPart>>(nb);
             var blockBB = new BoundingBox[nb];
@@ -1195,23 +1199,22 @@ namespace opennest_2
                 blockBB[b] = bb;
             }
 
-            double gap = (W < double.MaxValue && H < double.MaxValue) ? 0.02 * Math.Sqrt(W * H) : 0.0;
-            int sheetId = 0; double cx = 0, cy = 0, shelfH = 0; int maxSheetUsed = -1;
+            int maxSheetUsed = -1;
             var tileSheet = new int[nb];
             var tileOff = new Vector3d[nb];
             for (int b = 0; b < nb; b++)
             {
-                if (!blockBB[b].IsValid) { tileSheet[b] = -1; continue; }
+                if (nsheet == 0 || !blockBB[b].IsValid) { tileSheet[b] = -1; continue; }
+                int s = b % nsheet;                       // one batch per sheet, wrapping round-robin
                 double bw = blockBB[b].Max.X - blockBB[b].Min.X;
                 double bh = blockBB[b].Max.Y - blockBB[b].Min.Y;
-                if (cx > 0 && cx + bw > W + 1e-6) { cx = 0; cy += shelfH + gap; shelfH = 0; }        // new row
-                if (cy > 0 && cy + bh > H + 1e-6) { sheetId++; cx = 0; cy = 0; shelfH = 0; }          // new sheet
-                if (sheetId >= nsheet) { tileSheet[b] = -1; continue; }                                // out of sheets
-                Point3d origin = _sheetOrigin[sheetId];
-                tileOff[b] = new Vector3d(origin.X + cx - blockBB[b].Min.X, origin.Y + cy - blockBB[b].Min.Y, 0);
-                tileSheet[b] = sheetId;
-                maxSheetUsed = Math.Max(maxSheetUsed, sheetId);
-                cx += bw + gap; shelfH = Math.Max(shelfH, bh);
+                // start a new row on the SAME sheet if this block would overrun the sheet width
+                if (cx[s] > 0 && cx[s] + bw > sheetW[s] + 1e-6) { cx[s] = 0; cy[s] += shelfH[s] + gap; shelfH[s] = 0; }
+                Point3d origin = _sheetOrigin[s];
+                tileOff[b] = new Vector3d(origin.X + cx[s] - blockBB[b].Min.X, origin.Y + cy[s] - blockBB[b].Min.Y, 0);
+                tileSheet[b] = s;
+                maxSheetUsed = Math.Max(maxSheetUsed, s);
+                cx[s] += bw + gap; shelfH[s] = Math.Max(shelfH[s], bh);
             }
 
             // overflow row (unplaced parts / batches past the last sheet) to the RIGHT of the sheets
@@ -1259,7 +1262,7 @@ namespace opennest_2
             _geo.xforms = output_transforms;
 
             Rhino.RhinoApp.WriteLine(string.Format(
-                "[nest_physics] BATCH: {0} batch(es) -> {1} sheet(s); {2} part(s) placed outside (didn't fit their batch block).",
+                "[nest_physics] BATCH (one batch per sheet): {0} batch(es) -> {1} sheet(s); {2} part(s) placed outside (didn't fit their batch block).",
                 nb, emit, unplaced));
         }
 
