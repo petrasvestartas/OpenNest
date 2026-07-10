@@ -364,9 +364,18 @@ namespace opennest_2
                 int max_iterations = 1;
                 DA.GetData(3, ref max_iterations);   // Iterations shifted to index 3 (Options inserted at 2)
 
-                // Decide the batch partition: OFF -> one combined nest; ON -> branch = batch (>=2 branches),
-                // else split the flat part list into consecutive groups of batchSize. null / <2 = combined.
+                // Decide the batch partition: OFF -> one combined nest; ON -> each Geometry object = batch (>=2
+                // objects), else split the flat part list into groups of batchSize. null / <2 = combined.
                 List<List<int>> partition = BuildBatchPartition(batchOn != 0, batchGeos, merged, batchSize);
+
+                // Diagnostic (Rhino command line): shows exactly what was detected, so "everything on one sheet"
+                // is easy to explain (Batch Off, or only 1 geometry object, or only 1 sheet -> combined).
+                int diagSheets = 0;
+                while (diagSheets < nest_sheets.sheets.Length && nest_sheets.sheets[diagSheets] != null && nest_sheets.sheets[diagSheets].Length > 0) diagSheets++;
+                Rhino.RhinoApp.WriteLine(string.Format(
+                    "[OpenNestCollision] Batch={0}  geometry objects={1}  sheets={2}  ->  {3}",
+                    batchOn != 0 ? "On" : "Off", batchGeos.Count, diagSheets,
+                    (partition != null && partition.Count >= 2) ? (partition.Count + " batches (one per sheet)") : "combined (single nest)"));
 
                 NpRun pending = new NpRun();
                 try
@@ -687,14 +696,13 @@ namespace opennest_2
                 }
             sheets = CombineSheets(sheetList);
 
+            // EACH nest_geo OBJECT is one batch (robust whether they arrive as separate branches or as several
+            // items on one wire). A single object -> one batch (combined, or count-split by Batch Size).
             if (DA.GetDataTree(1, out Grasshopper.Kernel.Data.GH_Structure<Grasshopper.Kernel.Types.IGH_Goo> gtree) && gtree != null)
                 foreach (var branch in gtree.Branches)
                 {
                     if (branch == null) continue;
-                    var items = new List<nest_rhino_lib.nest_geo>();
-                    foreach (var goo in branch) { var g = Unwrap<nest_rhino_lib.nest_geo>(goo); if (g != null) items.Add(g.duplicate()); }
-                    if (items.Count == 0) continue;
-                    batchGeos.Add(items.Count == 1 ? items[0] : nest_rhino_lib.nest_geo.Merge(items));
+                    foreach (var goo in branch) { var g = Unwrap<nest_rhino_lib.nest_geo>(goo); if (g != null) batchGeos.Add(g.duplicate()); }
                 }
 
             if (batchGeos.Count == 0 || sheets == null) return false;
