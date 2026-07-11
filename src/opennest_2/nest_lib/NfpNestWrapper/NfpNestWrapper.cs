@@ -32,8 +32,10 @@ namespace NfpNest
         public int    compactionPasses; // -1 = engine default; 0 = off (fast first run)
         public int    tryAllRotations;  // bool
         public int    exactNfp;         // bool: full-res exact NFP (no gap, tightest, slower)
-        public int    stagnationGens;   // >0 => stop early after N stagnant generations (all placed);
-                                        // makes solve time the real convergence time (0 = never early-exit)
+        public int    stagnationGens;   // >0 => stop early after N stagnant generations (all placed).
+                                        // 0 = AUTO: defaults to 30 whenever timeBudgetSecs > 0 (converged
+                                        // = stop), never-early-exit in fixed-generation mode. -1 = NEVER
+                                        // early-exit (legacy full-budget burn, for wall-clock baselines).
         public int    exactVoids;       // bool: exact Minkowski void/hole exclusion (tight around
                                         // non-convex voids); 0 = fast convex-hull default (unchanged)
     }

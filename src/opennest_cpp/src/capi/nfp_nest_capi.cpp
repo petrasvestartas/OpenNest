@@ -156,6 +156,11 @@ std::vector<int> buildInputs(
 
 // Read placement from a solved context into caller output arrays.
 // Returns the number of placed instances; sets nSheetsOut.
+// Positions are SHEET-RELATIVE as documented: `poly->x - sheet->x` removes the internal layout
+// shift, and the sheet points' own bbox-min is subtracted too — the engine solves in the frame the
+// sheet outline was PASSED in, so a caller providing a non-origin sheet otherwise got positions
+// carrying that offset (they read as "parts out of the sheet" to any harness that interprets the
+// documented contract; our C# wrapper masked this by normalizing sheets to origin before calling).
 int readOutputs(const NestingContext& rc, const std::vector<int>& instancePart,
                 double* tx, double* ty, double* angle,
                 int* sheetId, int* partIndex, int* nSheetsOut, double* fitnessOut)
@@ -168,9 +173,10 @@ int readOutputs(const NestingContext& rc, const std::vector<int>& instancePart,
         partIndex[k] = (k < instancePart.size()) ? instancePart[k] : (poly->source.value_or(-1));
         if (poly->fitted() && poly->sheet) {
             int sid = poly->sheet->Id;
+            auto sb = GeometryUtil::getPolygonBounds(*poly->sheet);
             sheetId[k] = sid;
-            tx[k] = poly->x - poly->sheet->x;
-            ty[k] = poly->y - poly->sheet->y;
+            tx[k] = poly->x - poly->sheet->x - sb.x;
+            ty[k] = poly->y - poly->sheet->y - sb.y;
             angle[k] = poly->Rotation;
             usedSheets.insert(sid);
             placed++;
@@ -196,9 +202,10 @@ void updateSnapshot(const NestingContext& rc, const std::vector<int>& instancePa
         const auto& poly = rc.Polygons[k];
         g_snap.partIndex[k] = (k < instancePart.size()) ? instancePart[k] : poly->source.value_or(-1);
         if (poly->fitted() && poly->sheet) {
+            auto sb = GeometryUtil::getPolygonBounds(*poly->sheet);   // sheet-relative, same as readOutputs
             g_snap.sheetId[k] = poly->sheet->Id;
-            g_snap.tx[k] = poly->x - poly->sheet->x;
-            g_snap.ty[k] = poly->y - poly->sheet->y;
+            g_snap.tx[k] = poly->x - poly->sheet->x - sb.x;
+            g_snap.ty[k] = poly->y - poly->sheet->y - sb.y;
             g_snap.angle[k] = poly->Rotation;
             used.insert(poly->sheet->Id);
             placed++;
@@ -209,9 +216,11 @@ void updateSnapshot(const NestingContext& rc, const std::vector<int>& instancePa
 }
 
 // Rectangle fast path -------------------------------------------------------
-// When every part and every sheet is an axis-aligned rectangle with no holes, the general NFP+GA
-// solve is overkill: place with MaxRects (deterministic, sub-millisecond). Returns the placed-
-// instance count if it handled the job, or -1 to fall through to the genetic-algorithm path.
+// When every part is an axis-aligned rectangle with no holes and every sheet is an axis-aligned
+// rectangle whose voids (if any) are ALSO axis-aligned rectangles, the general NFP+GA solve is
+// overkill: place with MaxRects (deterministic, sub-millisecond), treating each rect void as a
+// pre-blocked region. Returns the placed-instance count if it handled the job, or -1 to fall
+// through to the genetic-algorithm path (non-rect part/sheet/void, or part holes).
 int rectFastPath(NestingContext& ctx, const NestConfig& cfg, const NfpParams* params,
                  const std::vector<int>& instancePart,
                  double* out_tx, double* out_ty, double* out_angle,
@@ -220,8 +229,9 @@ int rectFastPath(NestingContext& ctx, const NestConfig& cfg, const NfpParams* pa
     if (std::getenv("NFP_NO_RECT_FASTPATH") != nullptr) return -1;
     if (ctx.Polygons.empty() || ctx.Sheets.empty()) return -1;
 
-    auto isAxisRect = [](const NFP& p) -> bool {
-        if (!p.children.empty()) return false;               // holes => not a plain rectangle
+    // Outline-only rectangle test (children checked separately: parts must have NONE, sheets may
+    // carry axis-aligned rectangular VOIDS — a defect region is just a pre-blocked area in MaxRects).
+    auto isAxisRectOutline = [](const NFP& p) -> bool {
         int n = p.length();
         if (n == 5 && std::fabs(p[0].x - p[4].x) < 1e-9 && std::fabs(p[0].y - p[4].y) < 1e-9) n = 4;
         if (n != 4) return false;
@@ -238,8 +248,13 @@ int rectFastPath(NestingContext& ctx, const NestConfig& cfg, const NfpParams* pa
         }
         return true;
     };
-    for (const auto& p : ctx.Polygons) if (!isAxisRect(*p)) return -1;
-    for (const auto& s : ctx.Sheets)   if (!isAxisRect(*s)) return -1;
+    for (const auto& p : ctx.Polygons)
+        if (!p->children.empty() || !isAxisRectOutline(*p)) return -1;   // part holes => GA path
+    for (const auto& s : ctx.Sheets) {
+        if (!isAxisRectOutline(*s)) return -1;
+        for (const auto& c : s->children)
+            if (!c || !isAxisRectOutline(*c)) return -1;                 // non-rect void => GA path
+    }
 
     const double spacing = cfg.spacing;
     const double sheetSpacing = cfg.sheetSpacing;
@@ -247,11 +262,21 @@ int rectFastPath(NestingContext& ctx, const NestConfig& cfg, const NfpParams* pa
         ? std::min(params->maxSheets, (int)ctx.Sheets.size()) : (int)ctx.Sheets.size();
 
     std::vector<std::array<double, 4>> binDims;   // {originX, originY, W, H} per usable sheet
+    std::vector<std::vector<RectFree>> blocked;   // per sheet: rect voids (defects), inflated by spacing
     binDims.reserve(maxSheets);
+    blocked.resize(maxSheets);
     for (int i = 0; i < maxSheets; i++) {
         auto b = GeometryUtil::getPolygonBounds(*ctx.Sheets[i]);
         binDims.push_back({ b.x + sheetSpacing, b.y + sheetSpacing,
                             b.width - 2 * sheetSpacing, b.height - 2 * sheetSpacing });
+        // Each rect void becomes a pre-blocked region. Inflate by `spacing` on all four sides:
+        // part footprints only carry +spacing on two sides, so this keeps the gap on every side
+        // of the defect (conservative — never lets a part touch the void).
+        for (const auto& c : ctx.Sheets[i]->children) {
+            auto vb = GeometryUtil::getPolygonBounds(*c);
+            blocked[i].push_back({ vb.x - spacing, vb.y - spacing,
+                                   vb.width + 2 * spacing, vb.height + 2 * spacing });
+        }
     }
 
     // Per-part bbox origin + dims; footprint inflated by `spacing` so neighbours keep the gap.
@@ -267,7 +292,7 @@ int rectFastPath(NestingContext& ctx, const NestConfig& cfg, const NfpParams* pa
         items.push_back({ b.width + spacing, b.height + spacing, k, rc >= 2 });
     }
 
-    auto placed = packMaxRects(items, binDims);
+    auto placed = packMaxRects(items, binDims, blocked.empty() ? nullptr : &blocked);
 
     for (auto& p : ctx.Polygons) p->sheet = nullptr;   // reset; anything unplaced stays sheet==null
     for (const auto& pk : placed) {
@@ -329,8 +354,34 @@ NFP_API int nfp_nest(
       g_snap.tx.clear(); g_snap.ty.clear(); g_snap.angle.clear();
       g_snap.sheetId.clear(); g_snap.partIndex.clear(); }
 
+    // In-generation budget/cancel enforcement: arm NfpWorker's deadline so the heavy loops
+    // (NFP pair precompute, placeParts, compaction) can stop MID-generation. Previously the
+    // budget/cancel was only checked between generations, so a heavy first generation
+    // (high-vertex exact NFP) overran a 5 s budget by 10x+ and nfp_cancel() couldn't stop it.
+    // The guard clears the deadline + abort flag on every return path.
+    NfpWorker::Abort = false;
+    if (params->timeBudgetSecs > 0) {
+        long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch()).count();
+        NfpWorker::DeadlineSteadyMs = now + static_cast<long long>(params->timeBudgetSecs * 1000.0);
+    } else {
+        NfpWorker::DeadlineSteadyMs = 0;
+    }
+    struct DeadlineGuard {
+        ~DeadlineGuard() { NfpWorker::DeadlineSteadyMs = 0; NfpWorker::Abort = false; }
+    } deadlineGuard;
+
     NestConfig cfg = toConfig(params);
     const int mode = params->mode;
+
+    // stagnationGens semantics: >0 explicit; -1 never early-exit; 0 = AUTO — defaults to 30
+    // when a time budget is set, so "converged = stop" is the default and the reported solve
+    // time is the real convergence time (external harnesses that zero the struct otherwise
+    // burn the whole budget and benchmark the timer, not the solver). Fixed-generation mode
+    // (timeBudgetSecs == 0, stagnationGens == 0) is unchanged.
+    int effStagnation = params->stagnationGens;
+    if (effStagnation == 0 && params->timeBudgetSecs > 0) effStagnation = 30;
+    if (effStagnation < 0) effStagnation = 0;
 
     // Build inputs into a context.
     NestingContext ctx;
@@ -392,7 +443,7 @@ NFP_API int nfp_nest(
                 if (iter > g_progress) g_progress = iter;
                 if (c.HasCurrent()) g_fitness = c.Current().fitness.value_or(0.0);
             },
-            shouldStop, params->stagnationGens);
+            shouldStop, effStagnation);
         updateSnapshot(best, instancePart);
         return readOutputs(best, instancePart, out_tx, out_ty, out_angle,
                            out_sheet_id, out_part_index, out_n_sheets, out_fitness);
@@ -415,8 +466,9 @@ NFP_API int nfp_nest(
 
     // Stagnation early-exit: once the best fitness has not improved for `stagnationGens`
     // generations AND every instance is placed, further generations only re-spend the budget.
-    // This makes the reported solve time the real convergence time (0 = disabled, legacy behavior).
-    const int stagnationGens = params->stagnationGens;
+    // This makes the reported solve time the real convergence time (see effStagnation above:
+    // 0 = auto-30 for time-budgeted runs, -1 = never, >0 explicit).
+    const int stagnationGens = effStagnation;
     const int totalInstances = static_cast<int>(ctx.Polygons.size());
     double bestFit = std::numeric_limits<double>::infinity();
     int    stagnant = 0;
@@ -655,8 +707,8 @@ NFP_API int nfp_text_to_polylines(
     return static_cast<int>(strokes.size());
 }
 
-NFP_API void nfp_cancel(void)        { g_cancel = true; }
-NFP_API void nfp_cancel_reset(void)  { g_cancel = false; }
+NFP_API void nfp_cancel(void)        { g_cancel = true; NfpWorker::Abort = true; }
+NFP_API void nfp_cancel_reset(void)  { g_cancel = false; NfpWorker::Abort = false; }
 NFP_API long long nfp_progress(void) { return g_progress.load(); }
 NFP_API double nfp_fitness(void)     { return g_fitness.load(); }
 

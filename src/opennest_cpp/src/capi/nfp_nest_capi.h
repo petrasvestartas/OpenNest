@@ -5,7 +5,8 @@
 //
 // Coordinate / transform contract (per placed instance):
 //   final_point = Rotate(part_point, angle_degrees, about (0,0)) + (tx, ty)
-//   (tx, ty) are SHEET-RELATIVE; the C# side adds the sheet's own placement.
+//   (tx, ty) are SHEET-RELATIVE — measured from the sheet outline's bbox MIN CORNER, regardless
+//   of the coordinates the sheet was passed in (the caller re-adds the sheet's own placement).
 //   out_sheet_id == -1 means the instance was not placed.
 
 #include <stddef.h>
@@ -38,16 +39,21 @@ typedef struct NfpParams {
     int    generations;     // GA generations (== component "Iterations")
     int    numSeeds;        // turbo: parallel independent seeds
     int    useParallel;     // bool: parallel NFP / population evaluation
-    double timeBudgetSecs;  // >0 => run until elapsed (overrides generations loop length)
+    double timeBudgetSecs;  // >0 => run until elapsed (overrides generations loop length).
+                            //       Enforced INSIDE a generation too: the NFP precompute /
+                            //       placement loops stop cooperatively at the deadline, so a
+                            //       heavy first generation can no longer overrun the budget.
     int    maxSheets;       // 0 = use all provided sheets
     int    edgeSamples;     // feasible-region edge samples per part (0=off; lower=faster)
     int    compactionPasses;// post-placement compaction passes (0=off; lower=faster)
     int    tryAllRotations; // bool: evaluate every rotation per placement (slower, tighter)
     int    exactNfp;        // bool: full-resolution exact NFP (no simplify/dilate -> no gap, slower)
     int    stagnationGens;  // >0 => stop early once the best fitness has not improved for this many
-                            //       generations AND all instances are placed (0 = never early-exit).
-                            //       Makes the reported solve time the real convergence time rather
-                            //       than always burning the whole timeBudget/generation count.
+                            //       generations AND all instances are placed. 0 = AUTO: defaults to
+                            //       30 whenever timeBudgetSecs > 0 (converged = stop, so the solve
+                            //       time is the real convergence time, not the timer), and to
+                            //       never-early-exit in fixed-generation mode. -1 = NEVER early-exit
+                            //       (legacy full-budget burn, e.g. for wall-clock A/B baselines).
     int    exactVoids;      // bool: exclude sheet voids / part holes with the exact Minkowski sum
                             //       H(+)(-B) instead of the convex-hull approximation. Tight packing
                             //       against NON-CONVEX voids; identical for convex voids; slightly

@@ -103,9 +103,15 @@ private:
 // sorted largest-first, then each is placed into the FIRST bin it fits (BSSF within that bin), so
 // early sheets fill up before new ones open (minimizing sheet count). Items that fit nowhere are
 // omitted from the result.
+//
+// blockedPerBin (optional): per-bin keep-out rectangles (bin-local coordinates) applied when the
+// bin is OPENED — each is `place()`d like a pre-placed item, so the free-rectangle split/prune
+// carves the usable region around it. This is how rectangular SHEET VOIDS (defects) ride the same
+// fast path: sheet minus voids = the maximal-free-rectangle decomposition MaxRects maintains anyway.
 inline std::vector<RectPacked> packMaxRects(
         std::vector<RectToPack> items,
-        const std::vector<std::array<double, 4>>& binDims)
+        const std::vector<std::array<double, 4>>& binDims,
+        const std::vector<std::vector<RectFree>>* blockedPerBin = nullptr)
 {
     std::sort(items.begin(), items.end(), [](const RectToPack& a, const RectToPack& b) {
         double am = std::max(a.w, a.h), bm = std::max(b.w, b.h);
@@ -122,11 +128,15 @@ inline std::vector<RectPacked> packMaxRects(
         for (size_t b = 0; b < bins.size(); ++b) {
             if (bins[b].score(it, rot, px, py)) { placedBin = (int)b; break; }
         }
+        // Open further bins until the item fits. Don't stop at the first empty bin that can't take
+        // it: with per-sheet voids (or differing sheet sizes) a LATER sheet may still fit it.
         while (placedBin < 0 && bins.size() < binDims.size()) {
             size_t b = bins.size();
             bins.emplace_back(binDims[b][0], binDims[b][1], binDims[b][2], binDims[b][3]);
+            if (blockedPerBin && b < blockedPerBin->size())
+                for (const auto& v : (*blockedPerBin)[b])
+                    bins[b].place(v.x, v.y, v.w, v.h);
             if (bins[b].score(it, rot, px, py)) placedBin = (int)b;
-            else break;  // does not fit even an empty sheet
         }
         if (placedBin < 0) continue;
         double fw = rot ? it.h : it.w;
