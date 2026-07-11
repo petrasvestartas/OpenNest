@@ -441,6 +441,7 @@ void NestingEngine::launchWorkersParallel(const std::vector<NestItem>& parts) {
             NfpWorker::UseParallel = true;                 // saturate all cores for the batch
             auto computed = background.pmapDeepNest(unionPairs);
             for (auto& pr : computed) {
+                if (pr.Asource < 0 || pr.Bsource < 0) continue;   // skipped by abort/deadline — don't cache
                 DbCacheKey doc;
                 doc.A = pr.Asource; doc.B = pr.Bsource;
                 doc.ARotation = pr.ARotation; doc.BRotation = pr.BRotation;

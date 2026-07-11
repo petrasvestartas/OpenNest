@@ -290,6 +290,17 @@ namespace {
 // --- Static member initialization ---
 bool NfpWorker::EnableCaches = true;
 bool NfpWorker::UseParallel = false;
+std::atomic<bool> NfpWorker::Abort{false};
+std::atomic<long long> NfpWorker::DeadlineSteadyMs{0};
+
+bool NfpWorker::aborted() {
+    if (Abort.load(std::memory_order_relaxed)) return true;
+    long long dl = DeadlineSteadyMs.load(std::memory_order_relaxed);
+    if (dl == 0) return false;
+    long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch()).count();
+    return now >= dl;
+}
 
 // =============================================================================
 // Simple utility methods
@@ -320,6 +331,9 @@ std::shared_ptr<NFP> NfpWorker::clone(const NFP& nfp) {
 }
 
 std::vector<std::shared_ptr<NFP>> NfpWorker::cloneNfp(const std::vector<std::shared_ptr<NFP>>& nfp, bool inner) {
+    // Empty = a "no NFP" cache doc (a pair whose Minkowski produced nothing, or one skipped by an
+    // abort/deadline). front() on it was an access violation; an empty clone is the correct identity.
+    if (nfp.empty()) return {};
     if (!inner) {
         return { clone(*nfp.front()) };
     }
@@ -1008,6 +1022,7 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
         std::unordered_map<uint64_t, std::vector<Clipper2Lib::Path64>> sheetNfpClipperCache;
 
         for (i = 0; i < static_cast<int>(parts.size()); i++) {
+            if (aborted()) break;   // cooperative budget/cancel: return the partial placement
             auto part = parts[i];
 
             // === Phase A: Collect all valid rotation candidates ===
@@ -1577,6 +1592,7 @@ void NfpWorker::compactPlacements(
 
         // Re-place last-placed parts first (they got worst positions)
         for (int ci = numParts - 1; ci >= 0; ci--) {
+            if (aborted()) return;   // cooperative budget/cancel; placements stay valid as-is
             auto& part = placed[ci];
 
             // 1. Get inner NFP (sheet feasible region for this part)
@@ -1963,6 +1979,7 @@ SheetPlacement NfpWorker::evaluateCandidate(DataInfo d) {
         auto ret1 = pmapDeepNest(pairs);
         // thenDeepNest, but WITHOUT the trailing sync() (we return the placement instead).
         for (size_t i = 0; i < ret1.size(); i++) {
+            if (aborted()) break;
             thenIterate(ret1[i], localParts);
         }
     }
@@ -1982,6 +1999,10 @@ std::shared_ptr<NFP> NfpWorker::getPart(int source, const std::vector<std::share
 }
 
 void NfpWorker::thenIterate(NfpPair& processed, const std::vector<std::shared_ptr<NFP>>& parts) {
+    // Entry skipped by an abort/deadline in pmapDeepNest (sources flagged -1): never cache it —
+    // an empty doc under a real key would wrongly mark that pair "no NFP" for the rest of the solve.
+    if (processed.Asource < 0 || processed.Bsource < 0) return;
+
     auto A = getPart(processed.Asource, parts);
     auto B = getPart(processed.Bsource, parts);
 
@@ -2039,6 +2060,7 @@ void NfpWorker::thenDeepNest(std::vector<NfpPair>& processed, const std::vector<
 
         auto worker = [&](int threadId) {
             for (int i = threadId; i < n; i += numThreads) {
+                if (aborted()) return;   // cooperative budget/cancel (hole inner-NFPs are heavy)
                 thenIterate(processed[i], parts);
             }
         };
@@ -2051,6 +2073,7 @@ void NfpWorker::thenDeepNest(std::vector<NfpPair>& processed, const std::vector<
         for (auto& t : threads) t.join();
     } else {
         for (size_t i = 0; i < processed.size(); i++) {
+            if (aborted()) break;
             thenIterate(processed[i], parts);
         }
     }
@@ -2060,6 +2083,11 @@ void NfpWorker::thenDeepNest(std::vector<NfpPair>& processed, const std::vector<
 std::vector<NfpPair> NfpWorker::pmapDeepNest(std::vector<NfpPair>& pairs) {
     std::vector<NfpPair> ret(pairs.size());
 
+    // Cooperative abort/deadline (budget enforcement INSIDE a generation): skipped entries keep
+    // their default state (null A/B/nfp, source 0) — the consumers below skip un-processed pairs
+    // by checking `skipped`, so no bogus (0,0) cache doc is ever inserted for them.
+    std::vector<char> done(pairs.size(), 0);
+
     if (UseParallel && pairs.size() > 1) {
         int n = static_cast<int>(pairs.size());
         int numThreads = std::min(static_cast<int>(std::thread::hardware_concurrency()), n);
@@ -2067,7 +2095,9 @@ std::vector<NfpPair> NfpWorker::pmapDeepNest(std::vector<NfpPair>& pairs) {
 
         auto worker = [&](int threadId) {
             for (int i = threadId; i < n; i += numThreads) {
+                if (aborted()) return;
                 ret[i] = process(pairs[i]);
+                done[i] = 1;
             }
         };
 
@@ -2079,9 +2109,15 @@ std::vector<NfpPair> NfpWorker::pmapDeepNest(std::vector<NfpPair>& pairs) {
         for (auto& t : threads) t.join();
     } else {
         for (size_t i = 0; i < pairs.size(); i++) {
+            if (aborted()) break;
             ret[i] = process(pairs[i]);
+            done[i] = 1;
         }
     }
+    // Mark skipped entries so consumers don't cache them: flag = A==B==nullptr AND nfp==nullptr AND
+    // sources both -1 (impossible for a processed pair, whose sources are always kept).
+    for (size_t i = 0; i < ret.size(); i++)
+        if (!done[i]) { ret[i].Asource = -1; ret[i].Bsource = -1; ret[i].nfp = nullptr; }
     return ret;
 }
 

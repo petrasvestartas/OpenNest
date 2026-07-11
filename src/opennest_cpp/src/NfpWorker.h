@@ -87,6 +87,17 @@ public:
     static bool EnableCaches;
     static bool UseParallel;
 
+    // --- Cooperative abort for the heavy loops (shared; the C API serializes solves) ---
+    // `Abort` mirrors the C API's nfp_cancel(); `DeadlineSteadyMs` (steady_clock time in ms, 0 = none)
+    // enforces NfpParams.timeBudgetSecs INSIDE a generation — previously the budget/cancel was only
+    // checked BETWEEN generations, so a heavy first generation (high-vertex exact NFP precompute)
+    // overran a 5 s budget by 10x+ and ESC couldn't stop it. Polled at pair/part granularity; an
+    // aborted precompute is safe: missing NFPs make evalCandidate REJECT candidates (localError), so
+    // parts end up unplaced, never overlapping.
+    static std::atomic<bool> Abort;
+    static std::atomic<long long> DeadlineSteadyMs;
+    static bool aborted();
+
     // --- Instance caches (per-NfpWorker, protected by cacheMutex_) ---
     std::unordered_map<uint64_t, std::vector<std::shared_ptr<NFP>>> cacheProcess;
     std::unique_ptr<std::mutex> cacheMutex_ = std::make_unique<std::mutex>();
