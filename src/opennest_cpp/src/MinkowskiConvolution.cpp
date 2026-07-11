@@ -191,11 +191,16 @@ MinkowskiConvolution::Result MinkowskiConvolution::compute(
     double inputscale = (0.1 * static_cast<double>(maxi)) / maxda;
 
     // --- polygon A (outer ring minus holes) ---
+    // NEAREST rounding (llround), not truncation: static_cast<int> truncates toward zero, a
+    // one-sided error of up to 1/inputscale (~1e-5 model units at a 2000-unit extent) that BIASES
+    // every scaled vertex. On contact-tight exact-NFP layouts that bias surfaced as measurable
+    // micro-penetration/out-of-sheet area (~1e-3 sq units over long contact edges, nfp_bench
+    // oob_area). llround halves the max error and removes the bias.
     len = static_cast<unsigned int>(Avec.size() / 2);
     pts.clear();
     for (unsigned int i = 0; i < len; i++) {
-        int x = static_cast<int>(inputscale * Avec[i * 2]);
-        int y = static_cast<int>(inputscale * Avec[i * 2 + 1]);
+        int x = static_cast<int>(std::llround(inputscale * Avec[i * 2]));
+        int y = static_cast<int>(std::llround(inputscale * Avec[i * 2 + 1]));
         pts.push_back(bpoint(x, y));
     }
     bpolygon poly;
@@ -207,8 +212,8 @@ MinkowskiConvolution::Result MinkowskiConvolution::compute(
         pts.clear();
         unsigned int hlen = static_cast<unsigned int>(hole.size() / 2);
         for (unsigned int j = 0; j < hlen; j++) {
-            int x = static_cast<int>(inputscale * hole[j * 2]);
-            int y = static_cast<int>(inputscale * hole[j * 2 + 1]);
+            int x = static_cast<int>(std::llround(inputscale * hole[j * 2]));
+            int y = static_cast<int>(std::llround(inputscale * hole[j * 2 + 1]));
             pts.push_back(bpoint(x, y));
         }
         set_points(poly, pts.begin(), pts.end());
@@ -221,8 +226,8 @@ MinkowskiConvolution::Result MinkowskiConvolution::compute(
     double xshift = (Bvec.size() >= 2) ? Bvec[0] : 0.0;
     double yshift = (Bvec.size() >= 2) ? Bvec[1] : 0.0;
     for (unsigned int i = 0; i < len; i++) {
-        int x = -static_cast<int>(inputscale * Bvec[i * 2]);
-        int y = -static_cast<int>(inputscale * Bvec[i * 2 + 1]);
+        int x = -static_cast<int>(std::llround(inputscale * Bvec[i * 2]));
+        int y = -static_cast<int>(std::llround(inputscale * Bvec[i * 2 + 1]));
         pts.push_back(bpoint(x, y));
     }
     set_points(poly, pts.begin(), pts.end());
