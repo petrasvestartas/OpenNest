@@ -195,7 +195,7 @@ namespace opennest_2
         protected override void RegisterInputParams(GH_Component.GH_InputParamManager pManager)
         {
             pManager.AddGenericParameter("Sheets", "Sheets", "From OpenNest tab, use component Sheets.", GH_ParamAccess.tree);
-            pManager.AddGenericParameter("Geometry", "Geometry", "From OpenNest tab, use component Geometry. When the Batch option is ON, each data-tree BRANCH is nested as its own clustered batch (a batch is kept together as one block); a flat input is one combined nest (or split by 'Batch Size').", GH_ParamAccess.tree);
+            pManager.AddGenericParameter("Geometry", "Geometry", "From OpenNest tab, use component Geometry. When the Batch option is ON, each data-tree BRANCH is nested as its own clustered batch (kept together as one block, one batch per sheet — shape the tree upstream, e.g. Partition List, to control grouping); a flat input (one branch) is one combined nest.", GH_ParamAccess.tree);
 
             // Optional wired options ("key value" strings, e.g. from the Nest Options component); they override
             // the matching on-canvas option rows. Inserted BEFORE Iterations. MakeOptionsInput is shared with the
@@ -344,10 +344,10 @@ namespace opennest_2
                 }
                 _pendingFont = parameters_text.Count > 0 ? parameters_text[parameters_text.Count - 1] : "MecSoft_Font-1 1";
 
-                // element_holes / poles / compact / fit / batch / batch_size: parse BY NAME (robust to dropdown
-                // order). Sheet holes are ALWAYS kept out when the sheet has them. element_holes: 0=off,1=fill,2=fill-first.
+                // element_holes / poles / compact / fit / batch: parse BY NAME (robust to dropdown order). Sheet
+                // holes are ALWAYS kept out when the sheet has them. element_holes: 0=off,1=fill,2=fill-first.
                 int partHolesMode = 1; int poles = 48; bool compact = true; int fitMode = 0;   // 0 = all parts / fewest sheets (default)
-                int batchOn = 0; int batchSize = 0;
+                int batchOn = 0;
                 foreach (var ln in parameters_text)
                 {
                     string t = (ln ?? "").Trim();
@@ -356,7 +356,6 @@ namespace opennest_2
                     if (t.StartsWith("element_holes", StringComparison.OrdinalIgnoreCase) && int.TryParse(tk[tk.Length - 1], out int em)) partHolesMode = em;
                     else if (t.StartsWith("poles", StringComparison.OrdinalIgnoreCase) && int.TryParse(tk[tk.Length - 1], out int pv)) poles = pv;
                     else if (t.StartsWith("compact", StringComparison.OrdinalIgnoreCase) && double.TryParse(tk[tk.Length - 1], out double cv)) compact = (cv != 0.0);
-                    else if (t.StartsWith("batch_size", StringComparison.OrdinalIgnoreCase) && int.TryParse(tk[tk.Length - 1], out int bs)) batchSize = bs;
                     else if (t.StartsWith("batch", StringComparison.OrdinalIgnoreCase) && int.TryParse(tk[tk.Length - 1], out int bo)) batchOn = bo;
                     else if (t.StartsWith("fit", StringComparison.OrdinalIgnoreCase) && int.TryParse(tk[tk.Length - 1], out int fm)) fitMode = fm;
                 }
@@ -364,16 +363,16 @@ namespace opennest_2
                 int max_iterations = 1;
                 DA.GetData(3, ref max_iterations);   // Iterations shifted to index 3 (Options inserted at 2)
 
-                // Decide the batch partition: OFF -> one combined nest; ON -> each Geometry object = batch (>=2
-                // objects), else split the flat part list into groups of batchSize. null / <2 = combined.
-                List<List<int>> partition = BuildBatchPartition(batchOn != 0, batchGeos, merged, batchSize);
+                // Decide the batch partition: OFF or a single branch -> one combined nest; ON with >= 2 Geometry
+                // branches -> one batch per branch. null / <2 = combined.
+                List<List<int>> partition = BuildBatchPartition(batchOn != 0, batchGeos, merged);
 
                 // Diagnostic (Rhino command line): shows exactly what was detected, so "everything on one sheet"
-                // is easy to explain (Batch Off, or only 1 geometry object, or only 1 sheet -> combined).
+                // is easy to explain (Batch Off, or only 1 branch, or only 1 sheet -> combined).
                 int diagSheets = 0;
                 while (diagSheets < nest_sheets.sheets.Length && nest_sheets.sheets[diagSheets] != null && nest_sheets.sheets[diagSheets].Length > 0) diagSheets++;
                 Rhino.RhinoApp.WriteLine(string.Format(
-                    "[OpenNestCollision] Batch={0}  geometry objects={1}  sheets={2}  ->  {3}",
+                    "[OpenNestCollision] Batch={0}  geometry branches={1}  sheets={2}  ->  {3}",
                     batchOn != 0 ? "On" : "Off", batchGeos.Count, diagSheets,
                     (partition != null && partition.Count >= 2) ? (partition.Count + " batches (one per sheet)") : "combined (single nest)"));
 
@@ -696,13 +695,17 @@ namespace opennest_2
                 }
             sheets = CombineSheets(sheetList);
 
-            // EACH nest_geo OBJECT is one batch (robust whether they arrive as separate branches or as several
-            // items on one wire). A single object -> one batch (combined, or count-split by Batch Size).
+            // ONE batch per BRANCH: the objects that share a data-tree branch are merged into a single nest_geo
+            // for that batch, so the tree structure IS the batch definition (shape it upstream — Partition List,
+            // Entwine, …). A single branch -> one batch (combined).
             if (DA.GetDataTree(1, out Grasshopper.Kernel.Data.GH_Structure<Grasshopper.Kernel.Types.IGH_Goo> gtree) && gtree != null)
                 foreach (var branch in gtree.Branches)
                 {
                     if (branch == null) continue;
-                    foreach (var goo in branch) { var g = Unwrap<nest_rhino_lib.nest_geo>(goo); if (g != null) batchGeos.Add(g.duplicate()); }
+                    var inBranch = new List<nest_rhino_lib.nest_geo>();
+                    foreach (var goo in branch) { var g = Unwrap<nest_rhino_lib.nest_geo>(goo); if (g != null) inBranch.Add(g.duplicate()); }
+                    if (inBranch.Count == 0) continue;
+                    batchGeos.Add(inBranch.Count == 1 ? inBranch[0] : nest_rhino_lib.nest_geo.Merge(inBranch));
                 }
 
             if (batchGeos.Count == 0 || sheets == null) return false;
@@ -710,42 +713,29 @@ namespace opennest_2
             return true;
         }
 
-        // Decide the batch partition over the MERGED geo's group indices. OFF -> null (one combined nest). ON:
-        // >=2 Geometry branches -> one batch per branch (contiguous ranges; the merge concatenates branches in
-        // order); else split the flat group list into consecutive groups of batchSize. null when < 2 batches.
+        // Decide the batch partition over the MERGED geo's group indices. OFF or a single branch -> null (one
+        // combined nest). ON with >= 2 Geometry branches -> one batch per branch (contiguous group ranges; the
+        // merge concatenates branches in order). null when < 2 batches result.
         private static List<List<int>> BuildBatchPartition(bool batchOn, List<nest_rhino_lib.nest_geo> batchGeos,
-                                                           nest_rhino_lib.nest_geo merged, int batchSize)
+                                                           nest_rhino_lib.nest_geo merged)
         {
             if (!batchOn || merged == null) return null;
             int G = merged.boundary_sorted != null ? merged.boundary_sorted.Count : 0;
-            if (G <= 1) return null;
+            if (G <= 1 || batchGeos == null || batchGeos.Count < 2) return null;
 
             var parts = new List<List<int>>();
-            if (batchGeos != null && batchGeos.Count >= 2)
+            int off = 0;
+            foreach (var bg in batchGeos)
             {
-                int off = 0;
-                foreach (var bg in batchGeos)
+                int c = bg.boundary_sorted != null ? bg.boundary_sorted.Count : 0;
+                if (c > 0)
                 {
-                    int c = bg.boundary_sorted != null ? bg.boundary_sorted.Count : 0;
-                    if (c > 0)
-                    {
-                        var idx = new List<int>(c);
-                        for (int k = 0; k < c && off + k < G; k++) idx.Add(off + k);
-                        if (idx.Count > 0) parts.Add(idx);
-                    }
-                    off += c;
-                }
-            }
-            else if (batchSize > 0)
-            {
-                for (int s = 0; s < G; s += batchSize)
-                {
-                    var idx = new List<int>();
-                    for (int k = s; k < Math.Min(s + batchSize, G); k++) idx.Add(k);
+                    var idx = new List<int>(c);
+                    for (int k = 0; k < c && off + k < G; k++) idx.Add(off + k);
                     if (idx.Count > 0) parts.Add(idx);
                 }
+                off += c;
             }
-            else return null;
 
             return parts.Count >= 2 ? parts : null;
         }

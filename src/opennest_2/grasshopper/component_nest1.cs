@@ -112,7 +112,7 @@ namespace opennest_2
         protected override void RegisterInputParams(GH_Component.GH_InputParamManager pManager)
         {
             pManager.AddGeometryParameter("Sheets", "Sheets", "Sheets — closed planar surfaces (outer + holes) or closed curves. A single sheet is auto-copied so parts can overflow onto more.", GH_ParamAccess.tree);
-            pManager.AddGeometryParameter("Geo", "Geo", "Parts to nest — closed curves or planar surfaces. Multiple data-tree branches are combined into one nest (for clustered batch nesting, use OpenNestCollision).", GH_ParamAccess.tree);
+            pManager.AddGeometryParameter("Geo", "Geo", "Parts to nest — closed curves or planar surfaces. Multiple data-tree branches are combined into one nest (for clustered batch nesting — one branch per sheet — use OpenNest2 or OpenNestCollision, which have a Batch option).", GH_ParamAccess.tree);
             pManager.AddNumberParameter("Spacing", "Spacing", "Gap to keep between placed parts AND from the sheet edge.\nApplied as a nesting offset directly to the parts and sheets (this component takes raw polylines, not nest_geo/nest_sheets), so it stands in for the Geometry/Sheets Offset inputs. The ORIGINAL geometry is still what gets output.", GH_ParamAccess.item, 1);
             pManager.AddIntegerParameter("Placement", "Placement", "Placement strategy index (0 Box, 1 Gravity, 2 Squeeze, 3 Bottom-Left).", GH_ParamAccess.item, 1);
             pManager.AddNumberParameter("Tolerance", "Tolerance", "Curve simplification tolerance.", GH_ParamAccess.item, 0.1);

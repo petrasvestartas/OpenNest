@@ -13,7 +13,8 @@ namespace opennest_2
     {
         // OpenNest2 (NFP + genetic algorithm, nfp_nest.dll). ORDER IS LOAD-BEARING: component_nest2's
         // BuildOptionStrings() maps the numeric rows to rhino_example's parameters[0..8] by index;
-        // all_rotations/element_holes are parsed by name; the font row must stay LAST.
+        // all_rotations/element_holes/batch are parsed by name (NOT positionally — batch never enters
+        // BuildOptionStrings, so the engine's parameters[0..8] mapping is unaffected); the font row must stay LAST.
         // 'spacing' is intentionally NOT here: gaps between parts are set upstream in the Geometry (part
         // offset) and Sheets (gap) components; only OpenNest1 takes an explicit spacing input. The engine's
         // spacing parameter is still emitted as a fixed 0 in BuildOptionStrings to keep the indices intact.
@@ -26,6 +27,7 @@ namespace opennest_2
             NestOption.Number("population", "Population", 10, 1, 100000, 0, "GA population size."),
             NestOption.Choice("all_rotations", "All Rotations", new[] { "Off", "On" }, new[] { "0", "1" }, 1, "Try every orientation per part for tightest packing — C++ engine only (the C# engine ignores it; it uses 'Rotations'). Default ON; capped at 8 orientations so a large 'Rotations' value can't hang the solver."),
             NestOption.Choice("element_holes", "Element Holes", new[] { "Off", "Fill" }, new[] { "0", "1" }, 1, "Nest smaller parts INSIDE larger parts' holes."),
+            NestOption.Choice("batch", "Batch", new[] { "Off", "On" }, new[] { "0", "1" }, 1, "Keep related parts together for sorting. ON (default): each Geometry data-tree BRANCH is a batch, nested into its own tight block and placed ONE BATCH PER SHEET (branch 0 -> sheet 0, branch 1 -> sheet 1, ...; more branches than sheets wrap round-robin onto the sheets). Shape the tree upstream (e.g. Partition List) to control the grouping. Wire a flat list (one branch) -> one combined nest. OFF: nest everything combined onto the fewest sheets (densest)."),
             NestOption.Text("font", "Sheet Font", "MecSoft_Font-1 1", "Sheet-number label: font name + text size."),
         };
 
@@ -41,8 +43,7 @@ namespace opennest_2
             NestOption.Number("poles", "Poles", 48, 4, 64, 0, "Inscribed circles per part for collision tests; more = more accurate (cleaner pack), fewer = faster but can pack worse."),
             NestOption.Choice("compact", "Compact", new[] { "Off", "Bottom-Left", "Multi" }, new[] { "0", "1", "2" }, 1, "Post-pack tightening slide."),
             NestOption.Choice("fit", "Fit", new[] { "One sheet (max fill)", "All parts (fewest sheets)" }, new[] { "1", "0" }, 1, "One sheet = fill a SINGLE sheet as full as possible; parts that don't fit are placed OUTSIDE. All parts = use as many sheets as needed so nothing is left off."),
-            NestOption.Choice("batch", "Batch", new[] { "Off", "On" }, new[] { "0", "1" }, 1, "Keep related parts together for sorting. ON (default): each Geometry OBJECT you wire in is a batch, nested into its own tight block and placed ONE BATCH PER SHEET (object 0 -> sheet 0, object 1 -> sheet 1, ...; more batches than sheets wrap round-robin onto the sheets). Wire ONE Geometry object -> one combined nest (unless 'Batch Size' splits it). OFF: nest everything combined onto the fewest sheets (densest)."),
-            NestOption.Number("batch_size", "Batch Size", 0, 0, 100000, 0, "Batch ON, flat input (no branches): split the part list into consecutive groups of this many parts (e.g. 20), each a batch on its own sheet. 0 = batch only by tree branch. Ignored when Batch is Off or the Geometry already has branches."),
+            NestOption.Choice("batch", "Batch", new[] { "Off", "On" }, new[] { "0", "1" }, 1, "Keep related parts together for sorting. ON (default): each Geometry data-tree BRANCH is a batch, nested into its own tight block and placed ONE BATCH PER SHEET (branch 0 -> sheet 0, branch 1 -> sheet 1, ...; more branches than sheets wrap round-robin onto the sheets). Shape the tree upstream (e.g. Partition List) to control the grouping. Wire a flat list (one branch) -> one combined nest. OFF: nest everything combined onto the fewest sheets (densest)."),
             NestOption.Text("font", "Sheet Font", "MecSoft_Font-1 1", "Sheet-number label: font name + text size."),
         };
 
