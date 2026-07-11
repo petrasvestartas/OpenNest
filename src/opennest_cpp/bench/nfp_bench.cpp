@@ -5,16 +5,20 @@
 // so every engine change is a measured A/B at a fixed seed.
 //
 //   nfp_bench --dataset concave --seed 7 --mode 1 --placement 1 --gens 20 --pop 30 \
-//             [--rotations 4] [--tryAllRotations] [--edgeSamples N] [--compaction N] \
-//             [--spacing X] [--timeBudget S] [--seeds N] [--dumpPlacements] \
+//             [--rotations 4] [--tryAllRotations [0|1]] [--edgeSamples N] [--compaction N] \
+//             [--spacing X] [--timeBudget S] [--seeds N] [--geomSeed N] [--exactNfp 0|1] \
+//             [--sheetOffset DX DY] [--dumpPlacements] \
 //             --tag baseline [--csv out/results.csv] [--svg out/]
 //
 // Metrics (CSV row):
 //   tag,dataset,seed,mode,placement,gens,pop,wall_ms,placed,total,n_sheets,
-//   fitness,bbox_width,util_strip,util_sheet,overlap_area
+//   fitness,bbox_width,util_strip,util_sheet,overlap_area,oob_area
 //   util_strip   = sum(|part area|) / sum_per_sheet(layout bbox width * sheet H)
-//   overlap_area = pairwise intersection area of placed parts + out-of-sheet
-//                  area (must be ~0 — the correctness guard for speed changes).
+//   overlap_area = pairwise intersection area between placed parts (must be ~0)
+//   oob_area     = placed-part area outside the usable sheet (outer minus any
+//                  void; must be ~0). Both are the correctness guard: run with
+//                  --exactNfp 1 to validate WITHOUT the simplify+dilate
+//                  protective gap that otherwise masks NFP defects.
 
 #include "capi/nfp_nest_capi.h"
 #include "clipper2/clipper.h"
@@ -26,9 +30,11 @@
 #include "NfpWorker.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -40,14 +46,21 @@ namespace {
 struct Args {
     std::string dataset = "concave";
     int seed = 7, seeds = 1;
+    unsigned geomSeed = 1234; // dataset-geometry seed (independent of the GA seed)
     int mode = 1, placement = 1, gens = 20, pop = 30, rotations = 4;
     int tryAllRotations = -1, edgeSamples = -1, compaction = -1; // -1 = engine default
     int useParallel = 1, maxSheets = 0, nSheets = 4;
     double spacing = 0.0, timeBudget = 0.0;
-    int stagnation = 0; // >0 => GA early-exit after N stagnant generations (all placed)
+    int stagnation = 0; // >0 explicit; 0 = AUTO (30 when --timeBudget set, else never);
+                        // -1 = NEVER early-exit (legacy full-budget burn, for wall baselines)
+    int exactNfp = 0;   // 1 => full-resolution exact NFP (no simplify/dilate protective gap)
     int exactVoids = 0; // 1 => exact Minkowski void exclusion (maps to NfpParams.useHoles)
     std::string sheetVoid; // "" none, "rect" (convex) or "L" (non-convex) hole injected per sheet
     double sheetW = 0, sheetH = 0; // 0 = dataset default
+    double sheetOffX = 0, sheetOffY = 0; // translate the sheet passed to the ENGINE only:
+                                         // the validator keeps the documented sheet-relative
+                                         // frame, so any drift here exposes a readOutputs
+                                         // coordinate-contract bug as oob_area > 0.
     bool dumpPlacements = false;
     bool dumpDataset = false;
     bool packDemo = false;
@@ -71,17 +84,27 @@ Args parseArgs(int argc, char** argv) {
         else if (k == "--gens") a.gens = std::atoi(need(i));
         else if (k == "--pop") a.pop = std::atoi(need(i));
         else if (k == "--rotations") a.rotations = std::atoi(need(i));
-        else if (k == "--tryAllRotations") a.tryAllRotations = 1;
+        else if (k == "--tryAllRotations") {
+            // value-taking ("--tryAllRotations 0" mirrors external harnesses that zero the
+            // struct); bare "--tryAllRotations" stays = 1 for backward compat.
+            if (i + 1 < argc && std::isdigit((unsigned char)argv[i + 1][0]))
+                a.tryAllRotations = std::atoi(argv[++i]);
+            else
+                a.tryAllRotations = 1;
+        }
         else if (k == "--edgeSamples") a.edgeSamples = std::atoi(need(i));
         else if (k == "--compaction") a.compaction = std::atoi(need(i));
         else if (k == "--spacing") a.spacing = std::atof(need(i));
         else if (k == "--timeBudget") a.timeBudget = std::atof(need(i));
         else if (k == "--stagnation") a.stagnation = std::atoi(need(i));
+        else if (k == "--exactNfp") a.exactNfp = std::atoi(need(i));
         else if (k == "--exactVoids") a.exactVoids = std::atoi(need(i));
+        else if (k == "--geomSeed") a.geomSeed = (unsigned)std::strtoul(need(i), nullptr, 10);
         else if (k == "--sheetVoid") a.sheetVoid = need(i);
         else if (k == "--sheets") a.nSheets = std::atoi(need(i));
         else if (k == "--sheetW") a.sheetW = std::atof(need(i));
         else if (k == "--sheetH") a.sheetH = std::atof(need(i));
+        else if (k == "--sheetOffset") { a.sheetOffX = std::atof(need(i)); a.sheetOffY = std::atof(need(i)); }
         else if (k == "--serial") a.useParallel = 0;
         else if (k == "--dumpPlacements") a.dumpPlacements = true;
         else if (k == "--dumpDataset") a.dumpDataset = true;
@@ -162,7 +185,7 @@ Clipper2Lib::Paths64 instanceSolid(const bench::BenchPart& part, double tx, doub
 
 struct RunResult {
     double wall_ms = 0, fitness = 0, bbox_width = 0;
-    double util_strip = 0, util_sheet = 0, overlap_area = 0;
+    double util_strip = 0, util_sheet = 0, overlap_area = 0, oob_area = 0;
     int placed = 0, total = 0, n_sheets = 0;
 };
 
@@ -186,14 +209,21 @@ RunResult runOnce(const Args& a, int seed, const bench::BenchData& d) {
     std::vector<int> svc, shc, shvc;
     std::vector<double> sxy, shxy;
     std::vector<double> voidPoly = sheetVoidXY(a.sheetVoid, sheetW, sheetH);
+    // --sheetOffset translates the sheet (and its void) as passed to the ENGINE while the
+    // validator below keeps the documented sheet-relative frame at (0,0)-(W,H): if the engine's
+    // outputs drift with this offset, oob_area exposes a readOutputs coordinate-contract bug.
+    const double offX = a.sheetOffX, offY = a.sheetOffY;
     for (int s = 0; s < a.nSheets; s++) {
         svc.push_back(4);
-        double r[] = {0, 0, sheetW, 0, sheetW, sheetH, 0, sheetH};
+        double r[] = {offX, offY, offX + sheetW, offY, offX + sheetW, offY + sheetH, offX, offY + sheetH};
         sxy.insert(sxy.end(), r, r + 8);
         if (!voidPoly.empty()) {
             shc.push_back(1);
             shvc.push_back(static_cast<int>(voidPoly.size() / 2));
-            shxy.insert(shxy.end(), voidPoly.begin(), voidPoly.end());
+            for (size_t vi = 0; vi + 1 < voidPoly.size(); vi += 2) {
+                shxy.push_back(voidPoly[vi] + offX);
+                shxy.push_back(voidPoly[vi + 1] + offY);
+            }
         } else {
             shc.push_back(0);
         }
@@ -224,6 +254,9 @@ RunResult runOnce(const Args& a, int seed, const bench::BenchData& d) {
     params.compactionPasses= a.compaction;
     params.tryAllRotations = a.tryAllRotations;
     params.stagnationGens  = a.stagnation;
+    params.exactNfp        = a.exactNfp;     // 1 = undilated full-resolution NFP (the config
+                                             // external benchmarks run; simplify+dilate masks
+                                             // NFP defects behind a ~2.9-unit protective gap)
     params.exactVoids      = a.exactVoids;   // dedicated exact Minkowski void-exclusion flag
 
     std::vector<double> tx(instCount), ty(instCount), angle(instCount);
@@ -287,19 +320,26 @@ RunResult runOnce(const Args& a, int seed, const bench::BenchData& d) {
     r.util_strip = stripArea > 0 ? placedArea / stripArea : 0;
     r.util_sheet = usedSheetArea > 0 ? placedArea / usedSheetArea : 0;
 
-    // overlap validator: pairwise same-sheet intersections + out-of-(usable)-sheet area.
-    // Subtracting any sheet void makes a part that intrudes into the void count as out-of-sheet,
-    // so overlap>0 flags an exact/convex void-exclusion bug.
+    // Validity: SPLIT metrics. overlap_area = pairwise same-sheet intersections between placed
+    // parts; oob_area = placed-part area outside the usable sheet (outer minus any sheet void,
+    // so a part intruding into the void counts as out-of-sheet). Both must be ~0; keeping them
+    // separate tells "parts stacked on each other" apart from "parts hanging off the sheet"
+    // (the Frahan h2h reported the two failure modes separately).
     Clipper2Lib::Paths64 sheetRect{toPath64({0, 0, sheetW, 0, sheetW, sheetH, 0, sheetH}, 0, 0, 0)};
     if (!voidPoly.empty()) {
         Clipper2Lib::Paths64 voidPaths{toPath64(voidPoly, 0, 0, 0)};
         sheetRect = Clipper2Lib::Difference(sheetRect, voidPaths, Clipper2Lib::FillRule::NonZero);
     }
-    double overlap = 0;
+    double overlap = 0, oob = 0;
     for (int i = 0; i < instCount; i++) {
         if (sheetId[i] < 0) continue;
         auto out = Clipper2Lib::Difference(solids[i], sheetRect, Clipper2Lib::FillRule::NonZero);
-        overlap += pathsArea(out);
+        double aOut = pathsArea(out);
+        if (aOut > 1.0)
+            std::fprintf(stderr,
+                         "  OOB inst %d (part %d @%.1f,%.1f rot %.0f): area=%.1f outside sheet %d\n",
+                         i, partIndex[i], tx[i], ty[i], angle[i], aOut, sheetId[i]);
+        oob += aOut;
         for (int j = i + 1; j < instCount; j++) {
             if (sheetId[j] != sheetId[i]) continue;
             auto inter = Clipper2Lib::Intersect(solids[i], solids[j], Clipper2Lib::FillRule::NonZero);
@@ -314,6 +354,7 @@ RunResult runOnce(const Args& a, int seed, const bench::BenchData& d) {
         }
     }
     r.overlap_area = overlap;
+    r.oob_area = oob;
 
     if (a.dumpPlacements) {
         for (int k = 0; k < instCount; k++)
@@ -359,14 +400,14 @@ void appendCsv(const Args& a, int seed, const RunResult& r) {
     std::ofstream f(p, std::ios::app);
     if (writeHeader)
         f << "tag,dataset,seed,mode,placement,gens,pop,wall_ms,placed,total,"
-             "n_sheets,fitness,bbox_width,util_strip,util_sheet,overlap_area\n";
+             "n_sheets,fitness,bbox_width,util_strip,util_sheet,overlap_area,oob_area\n";
     char row[512];
     std::snprintf(row, sizeof(row),
-                  "%s,%s,%d,%d,%d,%d,%d,%.1f,%d,%d,%d,%.6f,%.3f,%.5f,%.5f,%.6f\n",
+                  "%s,%s,%d,%d,%d,%d,%d,%.1f,%d,%d,%d,%.6f,%.3f,%.5f,%.5f,%.6f,%.6f\n",
                   a.tag.c_str(), a.dataset.c_str(), seed, a.mode, a.placement,
                   a.gens, a.pop, r.wall_ms, r.placed, r.total, r.n_sheets,
                   r.fitness, r.bbox_width, r.util_strip, r.util_sheet,
-                  r.overlap_area);
+                  r.overlap_area, r.oob_area);
     f << row;
 }
 
@@ -390,7 +431,7 @@ int main(int argc, char** argv) try {
         // Compute the engine's outer NFP for (part0 @rotA) vs (part0 @rotB) of the
         // dataset and print every loop with its signed area, plus whether the
         // "exactly on top" offset (B at A's position) is inside the NFP.
-        bench::BenchData d = bench::makeDataset(a.dataset, 1234);
+        bench::BenchData d = bench::makeDataset(a.dataset, a.geomSeed);
         nest::NFP base;
         for (size_t i = 0; i + 1 < d.parts[0].xy.size(); i += 2)
             base.AddPoint(nest::Point(d.parts[0].xy[i], d.parts[0].xy[i + 1]));
@@ -488,7 +529,7 @@ int main(int argc, char** argv) try {
 
     if (a.packDemo) {
         // Exercise nfp_pack: array mode (5 columns) and distance mode (sheet width).
-        bench::BenchData d = bench::makeDataset(a.dataset, 1234);
+        bench::BenchData d = bench::makeDataset(a.dataset, a.geomSeed);
         std::vector<int> pvc, pqty;
         std::vector<double> pxy;
         int inst = 0;
@@ -522,7 +563,7 @@ int main(int argc, char** argv) try {
     }
 
     if (a.dumpDataset) {
-        bench::BenchData d = bench::makeDataset(a.dataset, 1234);
+        bench::BenchData d = bench::makeDataset(a.dataset, a.geomSeed);
         std::printf("# %s\nsheet %.6f %.6f\n", d.name.c_str(), d.sheetW, d.sheetH);
         for (size_t pi = 0; pi < d.parts.size(); pi++) {
             const auto& p = d.parts[pi];
@@ -539,17 +580,17 @@ int main(int argc, char** argv) try {
     }
 
     for (int seed : seedList) {
-        bench::BenchData d = bench::makeDataset(a.dataset, 1234); // geometry fixed; seed drives the GA
+        bench::BenchData d = bench::makeDataset(a.dataset, a.geomSeed); // geometry fixed by --geomSeed; seed drives the GA
         RunResult r = runOnce(a, seed, d);
         appendCsv(a, seed, r);
         std::printf("%-14s %-8s seed=%-3d wall=%8.1fms placed=%d/%d sheets=%d "
-                    "width=%8.2f util_strip=%.4f util_sheet=%.4f overlap=%.6f fitness=%.4f\n",
+                    "width=%8.2f util_strip=%.4f util_sheet=%.4f overlap=%.6f oob=%.6f fitness=%.4f\n",
                     a.tag.c_str(), a.dataset.c_str(), seed, r.wall_ms, r.placed,
                     r.total, r.n_sheets, r.bbox_width, r.util_strip, r.util_sheet,
-                    r.overlap_area, r.fitness);
-        if (r.overlap_area > 1e-3)
-            std::fprintf(stderr, "WARNING: overlap_area=%.6f > 0 — invalid layout!\n",
-                         r.overlap_area);
+                    r.overlap_area, r.oob_area, r.fitness);
+        if (r.overlap_area > 1e-3 || r.oob_area > 1e-3)
+            std::fprintf(stderr, "WARNING: overlap_area=%.6f oob_area=%.6f — invalid layout!\n",
+                         r.overlap_area, r.oob_area);
         utils.push_back(r.util_strip);
         walls.push_back(r.wall_ms);
     }

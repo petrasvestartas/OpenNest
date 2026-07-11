@@ -204,6 +204,66 @@ inline BenchData makeRings(uint32_t seed) {
     return d;
 }
 
+// N star-shaped concave "blobs" on a tight sheet — reproduces the shape class of the
+// Frahan/CNH "blobs-25 tight 95x70" instance that produced an INVALID layout (true
+// overlap + parts out of sheet) from this engine at exactNfp=1. Radial construction
+// r(th) = rBase*(1 + amp*sin(lobes*th + phase))*(1 + 0.1*jitter) guarantees a simple
+// (star-shaped) polygon; concavity comes from the lobed sine term. All parts are
+// uniformly scaled so sum(part areas) = fill * sheetW * sheetH (overfull by design:
+// the competitor instance placed 17-18 of 25). Deterministic in seed.
+inline BenchData makeBlobs(uint32_t seed, int n = 25, double sheetW = 95,
+                           double sheetH = 70, double fill = 1.15,
+                           int vMin = 12, int vMax = 24, double ampMax = 0.55,
+                           int qMax = 1) {
+    BenchData d;
+    d.name = "blobs";
+    d.sheetW = sheetW;
+    d.sheetH = sheetH;
+    auto& g = rng(seed);
+    double totalArea = 0;
+    int instances = 0;
+    while (instances < n) {
+        BenchPart p;
+        int verts   = irand(g, vMin, vMax);
+        int lobes   = irand(g, 3, 6);
+        double amp  = frand(g, 0.25, ampMax);
+        double ph   = frand(g, 0, 2 * M_PI);
+        double rB   = frand(g, 0.7, 1.3);          // per-part size factor (normalized below)
+        for (int k = 0; k < verts; k++) {
+            double th = 2 * M_PI * k / verts;
+            double r  = rB * (1 + amp * std::sin(lobes * th + ph)) * (1 + 0.10 * frand(g, -1, 1));
+            p.xy.push_back(r * std::cos(th));
+            p.xy.push_back(r * std::sin(th));
+        }
+        // shoelace area (theta sweep 0->2pi with r>0 is CCW already)
+        double a2 = 0;
+        size_t m = p.xy.size() / 2;
+        for (size_t k = 0, j = m - 1; k < m; j = k++)
+            a2 += (p.xy[2 * j] + p.xy[2 * k]) * (p.xy[2 * j + 1] - p.xy[2 * k + 1]);
+        p.qty = qMax <= 1 ? 1 : irand(g, 2, qMax);
+        if (instances + p.qty > n) p.qty = n - instances;
+        instances += p.qty;
+        totalArea += p.qty * std::fabs(a2) / 2;
+        d.parts.push_back(p);
+    }
+    // uniform scale so total part area = fill * sheet area, then bbox-min each part to (0,0)
+    double s = std::sqrt(fill * sheetW * sheetH / totalArea);
+    for (auto& p : d.parts) {
+        double minX = 1e300, minY = 1e300;
+        for (size_t k = 0; k + 1 < p.xy.size(); k += 2) {
+            p.xy[k] *= s;
+            p.xy[k + 1] *= s;
+            if (p.xy[k] < minX) minX = p.xy[k];
+            if (p.xy[k + 1] < minY) minY = p.xy[k + 1];
+        }
+        for (size_t k = 0; k + 1 < p.xy.size(); k += 2) {
+            p.xy[k] -= minX;
+            p.xy[k + 1] -= minY;
+        }
+    }
+    return d;
+}
+
 // Text format:
 //   # comment / blank lines between sections
 //   sheet <W> <H>            (optional, once)
@@ -260,9 +320,18 @@ inline BenchData makeDataset(const std::string& name, uint32_t seed) {
     if (name == "rects")   return makeRects(seed);
     if (name == "concave") return makeConcave(seed);
     if (name == "rings")   return makeRings(seed);
+    if (name == "blobs")   return makeBlobs(seed);
+    // blobsq: same instance count but 2-3 COPIES per shape (quantity nesting — identical
+    // (source,rotation) NFP pairs, the stacked-copies/BUG-1 risk surface).
+    if (name == "blobsq")  return makeBlobs(seed, 25, 95, 70, 1.15, 12, 24, 0.55, 3);
+    // blobshi: high-resolution deep-concavity blobs (48-96 verts, amp up to 0.8) — the
+    // stone-outline shape class (pinch points, near-tangent boundaries).
+    if (name == "blobshi") return makeBlobs(seed, 25, 95, 70, 1.15, 48, 96, 0.8);
+    // blobshiq: both stressors combined.
+    if (name == "blobshiq") return makeBlobs(seed, 25, 95, 70, 1.15, 48, 96, 0.8, 3);
     if (name.rfind("file:", 0) == 0) return loadFile(name.substr(5));
     throw std::runtime_error("unknown dataset: " + name +
-                             " (use rects|concave|rings|file:<path>)");
+                             " (use rects|concave|rings|blobs[q|hi|hiq]|file:<path>)");
 }
 
 } // namespace bench
