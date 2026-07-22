@@ -49,7 +49,10 @@ namespace opennest_2
         // OpenNestCollision's SetupBatches/AssembleBatches, but with the nfp/GA solver). ----
         private volatile bool _batchActive = false;
         private List<nest_rhino_lib.nest_geo> _pendingBatches;   // sub-geos to solve, one per batch (group order == merged)
-        private nest_rhino_lib.nest_sheets _pendingSheets;       // combined sheets (block canvas = sheet 0; tiled onto b%nsheet)
+        private nest_rhino_lib.nest_sheets _pendingSheets;       // combined sheets (preview backdrop)
+        private List<nest_rhino_lib.nest_sheets> _pendingBatchSheets;  // each batch's OWN sheets (paired per branch)
+        private int[] _pendingGroupBatch;                        // merged group i -> batch index (null = combined)
+        private int[] _pendingGroupLocal;                        // merged group i -> its index WITHIN its batch
         private List<double> _pendingParams;                     // engine parameters[0..], shared by every batch
         private int _pendingAllRot, _pendingExactNfp, _pendingUseHoles, _pendingBatchIter;
         private volatile int _batchCur = 0, _batchCount = 0;     // progress (label only)
@@ -392,7 +395,7 @@ namespace opennest_2
                 // Read the Sheets + Geometry TREES. Each Geometry OBJECT is a potential batch; `merged` is the
                 // combined nest_geo PASS 2 consumes, `batchGeos` the per-object pieces (for the batch partition).
                 // Everything is DUPLICATED so the shared upstream geometry is never mutated.
-                if (!ReadNestInputs(DA, out var nest_sheets, out var batchGeos, out var merged))
+                if (!ReadNestInputs(DA, out var nest_sheets, out var batchSheets, out var batchGeos, out var merged))
                 {
                     ReleaseEngine();   // release — no solve was started; wake the next queued component
                     this.Message = "missing Sheets/Geometry";
@@ -442,17 +445,46 @@ namespace opennest_2
                 // branches -> one batch per branch. null = combined.
                 List<nest_rhino_lib.nest_geo> batches = BuildBatches(batchOn != 0 && nsheet >= 1, batchGeos, merged);
 
+                // group -> (batch, local index) map so PASS 2 keys outputs batch-first {b; localGroup} instead of
+                // the flat {globalGroup}. Null in combined mode. Each batch's groups are CONTIGUOUS in `merged`.
+                _pendingGroupBatch = null; _pendingGroupLocal = null;
+                if (batches != null)
+                {
+                    int _G = merged.boundary_sorted != null ? merged.boundary_sorted.Count : 0;
+                    _pendingGroupBatch = new int[_G];
+                    _pendingGroupLocal = new int[_G];
+                    int _off = 0;
+                    for (int _b = 0; _b < batches.Count; _b++)
+                    {
+                        int _gc = batches[_b].boundary_sorted != null ? batches[_b].boundary_sorted.Count : 0;
+                        for (int _li = 0; _li < _gc && _off + _li < _G; _li++) { _pendingGroupBatch[_off + _li] = _b; _pendingGroupLocal[_off + _li] = _li; }
+                        _off += _gc;
+                    }
+                }
+
+                try
+                {
+                    var _loc = typeof(component2_nest).Assembly.Location;
+                    string _when = string.IsNullOrEmpty(_loc) ? "(in-memory)" : System.IO.File.GetLastWriteTime(_loc).ToString("yyyy-MM-dd HH:mm:ss");
+                    Rhino.RhinoApp.WriteLine("[OpenNest2] BUILD " + _when + "   <- " + (string.IsNullOrEmpty(_loc) ? "?" : _loc));
+                }
+                catch { }
                 Rhino.RhinoApp.WriteLine(string.Format(
-                    "[OpenNest2] Batch={0}  geometry branches={1}  sheets={2}  ->  {3}",
-                    batchOn != 0 ? "On" : "Off", batchGeos.Count, nsheet,
-                    batches != null ? (batches.Count + " batches (one per sheet)") : "combined (single nest)"));
+                    "[OpenNest2] Batch={0}  geometry branches={1}  sheet branches={2} (total {3} sheets)  ->  {4}",
+                    batchOn != 0 ? "On" : "Off", batchGeos.Count, batchSheets.Count, nsheet,
+                    batches != null ? (batches.Count + " batches (each nested across its OWN sheets)") : "combined (single nest)"));
+
+                if (batchOn != 0 && batches != null && batchSheets.Count > 1 && batchSheets.Count != batches.Count)
+                    AddRuntimeMessage(GH_RuntimeMessageLevel.Warning,
+                        "Sheet branches (" + batchSheets.Count + ") != Geometry batches (" + batches.Count + "). Paired by clamping; match the Sheets tree to the Geometry tree for one dedicated sheet set per batch.");
 
                 if (batches != null)
                 {
-                    // ---- BATCH MODE: solve each batch on sheet 0, tile blocks one-per-sheet (RunBatchSolveCore). ----
+                    // ---- BATCH MODE: each batch nests across its OWN sheets (multi-sheet), see RunBatchSolveCore. ----
                     _batchActive = true; _batchCancel = false;
                     _pendingBatches = batches;
                     _pendingSheets = nest_sheets;
+                    _pendingBatchSheets = batchSheets;
                     _pendingParams = parameters;
                     _pendingAllRot = allRotations; _pendingExactNfp = exactNfp; _pendingUseHoles = useHoles;
                     _pendingBatchIter = max_iterations;
@@ -547,13 +579,16 @@ namespace opennest_2
 
                 for (int i = 0; i < nest.output_transforms.Count; i++)
                 {
+                    // batch-first output paths in Batch mode: {batch; localGroup; ...}; combined mode keeps {group; ...}
+                    int pb = (_pendingGroupBatch != null && i < _pendingGroupBatch.Length) ? _pendingGroupBatch[i] : -1;
+                    int pl = (_pendingGroupLocal != null && i < _pendingGroupLocal.Length) ? _pendingGroupLocal[i] : i;
                     for (int j = 0; j < nest_geo.boundary_sorted[i].Count; j++)
                     {
                         for (int k = 0; k < nest_geo.xforms[i].Count; k++)
                         {
                             Curve crv_temp = nest_geo.boundary_sorted[i][j].Item2.Duplicate().ToNurbsCurve();
                             crv_temp.Transform(nest_geo.xforms[i][k]);
-                            borders.Append(new GH_Curve(crv_temp), new GH_Path(i, k));
+                            borders.Append(new GH_Curve(crv_temp), pb >= 0 ? new GH_Path(pb, pl) : new GH_Path(i, k));
                         }
                     }
 
@@ -565,7 +600,7 @@ namespace opennest_2
                         {
                             GeometryBase geo_temp = nest_geo.geometry[nest_geo.geometry_sorted[i][j]].Duplicate();
                             geo_temp.Transform(nest_geo.xforms[i][k]);
-                            all_geo_groups.Append(Grasshopper.Kernel.GH_Convert.ToGeometricGoo(geo_temp), new GH_Path(i));
+                            all_geo_groups.Append(Grasshopper.Kernel.GH_Convert.ToGeometricGoo(geo_temp), pb >= 0 ? new GH_Path(pb, pl) : new GH_Path(i));
 
                             int gidx_attr = nest_geo.geometry_sorted[i][j];
                             if (nest_geo.geometry_attributes.Count > gidx_attr)
@@ -578,7 +613,8 @@ namespace opennest_2
                                     GeometryBase geometry_attibute_temp = attrArr[a].Duplicate();
                                     geometry_attibute_temp.Transform(nest_geo.xforms[i][k]);
                                     int port = (portArr != null && a < portArr.Length) ? portArr[a] : 0;
-                                    GH_Path apath = useSub ? new GH_Path(i, port) : new GH_Path(i);
+                                    GH_Path apath = pb >= 0 ? (useSub ? new GH_Path(pb, pl, port) : new GH_Path(pb, pl))
+                                                             : (useSub ? new GH_Path(i, port) : new GH_Path(i));
                                     geometry_attributes.Append(Grasshopper.Kernel.GH_Convert.ToGeometricGoo(geometry_attibute_temp), apath);
                                 }
                             }
@@ -595,8 +631,8 @@ namespace opennest_2
 
                     for (int k = 0; k < nest_geo.xforms[i].Count; k++)
                     {
-                        xforms.Append(new GH_Transform(nest_geo.xforms[i][k]), new GH_Path(i));
-                        sheet_id.Append(new GH_Integer(nest.output_polygon_sheet_ids[i][k]), new GH_Path(i));
+                        xforms.Append(new GH_Transform(nest_geo.xforms[i][k]), pb >= 0 ? new GH_Path(pb, pl) : new GH_Path(i));
+                        sheet_id.Append(new GH_Integer(nest.output_polygon_sheet_ids[i][k]), pb >= 0 ? new GH_Path(pb, pl) : new GH_Path(i));
                     }
                 }
                 DA.SetDataTree(1, borders);
@@ -726,38 +762,24 @@ namespace opennest_2
         {
             var batches = _pendingBatches;
             var merged = _pendingNestGeo;
-            var sheets = _pendingSheets;
+            var batchSheetsList = _pendingBatchSheets;
             var parameters = _pendingParams;
             int iters = _pendingBatchIter;
             int nb = batches.Count;
 
-            // usable sheets + per-sheet origin/size for tiling
-            int nsheet = 0;
-            while (nsheet < sheets.sheets.Length && sheets.sheets[nsheet] != null && sheets.sheets[nsheet].Length > 0) nsheet++;
-            int ns = nsheet == 0 ? 1 : nsheet;
-            var sheetOrigin = new Point3d[ns];
-            var sheetW = new double[ns];
-            var sheetH = new double[ns];
-            for (int s = 0; s < nsheet; s++)
-            {
-                var bb = sheets.sheets[s][0].BoundingBox;
-                sheetOrigin[s] = bb.Min; sheetW[s] = bb.Max.X - bb.Min.X; sheetH[s] = bb.Max.Y - bb.Min.Y;
-            }
-
-            // --- pass 1: solve each batch on sheet 0 -> per-group/per-copy world xf + sheet id + block bbox ---
+            // --- pass 1: solve each batch on ITS OWN sheets (multi-sheet) -> world xf + LOCAL sheet id + used sheets ---
             var localXf = new List<List<Transform>>[nb];
             var localSid = new List<List<int>>[nb];
             var localSimplified = new List<Polyline>[nb];
-            var blockBB = new BoundingBox[nb];
+            var localSheets = new List<List<Polyline>>[nb];
             nest_lib.rhino_example holder = null;
             for (int b = 0; b < nb; b++)
             {
                 _batchCur = b;
-                if (_batchCancel) { blockBB[b] = BoundingBox.Empty; continue; }   // remaining batches emit identities below
-
-                var blockSheet = SingleSheet(sheets, 0);   // block canvas = sheet 0 (a fresh dup, mutated by the solve)
+                if (_batchCancel) continue;   // remaining batches emit identities below
+                var bs = batchSheetsList[System.Math.Min(b, batchSheetsList.Count - 1)].duplicate();  // fresh dup (solve mutates in place)
                 var geoRef = batches[b];
-                var nest = new nest_lib.rhino_example(ref blockSheet, ref geoRef, parameters, iters)
+                var nest = new nest_lib.rhino_example(ref bs, ref geoRef, parameters, iters)
                 {
                     TryAllRotations = _pendingAllRot,
                     ExactNfp = _pendingExactNfp,
@@ -767,66 +789,30 @@ namespace opennest_2
                 _pendingNest = nest;   // lets OnTick show this batch's generation counter
                 nest.static_solver(ref geoRef);
                 if (holder == null) holder = nest;
-
                 localXf[b] = nest.output_transforms;
                 localSid[b] = nest.output_polygon_sheet_ids;
                 localSimplified[b] = nest.simplified_polygons;
-
-                BoundingBox bb = BoundingBox.Empty;
-                int lgMax = System.Math.Min(geoRef.boundary_sorted.Count, localXf[b].Count);
-                for (int lg = 0; lg < lgMax; lg++)
-                {
-                    if (geoRef.boundary_sorted[lg].Count == 0) continue;
-                    var outer = geoRef.boundary_sorted[lg][0].Item2;
-                    for (int c = 0; c < localXf[b][lg].Count; c++)
-                    {
-                        if (c >= localSid[b][lg].Count || localSid[b][lg][c] < 0) continue;   // unplaced part: not in the block
-                        var pl = new Polyline(outer); pl.Transform(localXf[b][lg][c]);
-                        bb.Union(pl.BoundingBox);
-                    }
-                }
-                blockBB[b] = bb;
+                localSheets[b] = nest.output_sheets;   // that batch's used sheets, at their world coords
             }
 
-            // --- pass 2: assign each batch to sheet (b % nsheet), shelf-tile within a sheet if it's shared ---
-            var groupOffset = new int[nb];
-            { int off = 0; for (int b = 0; b < nb; b++) { groupOffset[b] = off; off += batches[b].boundary_sorted.Count; } }
-
-            var cx = new double[ns]; var cy = new double[ns]; var shelfH = new double[ns];
-            double gap = nsheet > 0 ? 0.02 * System.Math.Sqrt(System.Math.Max(1.0, sheetW[0] * sheetH[0])) : 0.0;
-            var tileSheet = new int[nb];
-            var tileOff = new Vector3d[nb];
-            int maxSheetUsed = -1;
-            for (int b = 0; b < nb; b++)
-            {
-                if (nsheet == 0 || !blockBB[b].IsValid) { tileSheet[b] = -1; continue; }
-                int s = b % nsheet;                                   // one batch per sheet, wrapping round-robin
-                double bw = blockBB[b].Max.X - blockBB[b].Min.X;
-                double bh = blockBB[b].Max.Y - blockBB[b].Min.Y;
-                if (cx[s] > 0 && cx[s] + bw > sheetW[s] + 1e-6) { cx[s] = 0; cy[s] += shelfH[s] + gap; shelfH[s] = 0; }
-                tileOff[b] = new Vector3d(sheetOrigin[s].X + cx[s] - blockBB[b].Min.X, sheetOrigin[s].Y + cy[s] - blockBB[b].Min.Y, 0);
-                tileSheet[b] = s;
-                maxSheetUsed = System.Math.Max(maxSheetUsed, s);
-                cx[s] += bw + gap; shelfH[s] = System.Math.Max(shelfH[s], bh);
-            }
-
-            // --- merge every batch's placements into the merged group slots (+ tiled outline preview) ---
+            // --- merge: each batch's parts are already at ITS sheets' world coords, so no tiling — just concat the
+            //     used sheets and remap each batch's local sheet id by the cumulative sheet count of earlier batches. ---
             int G = merged.boundary_sorted.Count;
             var mergedXf = new List<List<Transform>>(G);
             var mergedSid = new List<List<int>>(G);
             for (int i = 0; i < G; i++) { mergedXf.Add(new List<Transform>()); mergedSid.Add(new List<int>()); }
             var mergedSimplified = new List<Polyline>();
-            int placedCount = 0, unplacedCount = 0;
+            var usedSheets = new List<List<Polyline>>();
+            var groupOffset = new int[nb];
+            { int off = 0; for (int b = 0; b < nb; b++) { groupOffset[b] = off; off += batches[b].boundary_sorted.Count; } }
+            int placedCount = 0, unplacedCount = 0, sheetOff = 0;
 
             for (int b = 0; b < nb; b++)
             {
-                bool batchPlaced = tileSheet[b] >= 0;
-                Transform tshift = Transform.Translation(tileOff[b]);
                 int gCount = batches[b].boundary_sorted.Count;
-
                 if (localXf[b] == null)
                 {
-                    // batch was cancelled before it solved: emit identities so PASS 2's per-copy counts line up
+                    // batch cancelled before it solved: emit identities so PASS 2's per-copy counts line up
                     for (int lg = 0; lg < gCount; lg++)
                     {
                         int mg = groupOffset[b] + lg;
@@ -843,33 +829,27 @@ namespace opennest_2
                     var sids = (lg < localSid[b].Count) ? localSid[b][lg] : new List<int>();
                     for (int c = 0; c < xfs.Count; c++)
                     {
-                        bool placed = c < sids.Count && sids[c] >= 0 && batchPlaced;
-                        if (placed) { mergedXf[mg].Add(tshift * xfs[c]); mergedSid[mg].Add(tileSheet[b]); placedCount++; }
-                        else        { mergedXf[mg].Add(xfs[c]);          mergedSid[mg].Add(-1);           unplacedCount++; }
+                        bool placed = c < sids.Count && sids[c] >= 0;
+                        mergedXf[mg].Add(xfs[c]);   // already at this batch's sheet world position — no tiling
+                        if (placed) { mergedSid[mg].Add(sheetOff + sids[c]); placedCount++; }
+                        else        { mergedSid[mg].Add(-1);                 unplacedCount++; }
                     }
                 }
 
                 if (localSimplified[b] != null)
-                    foreach (var pl in localSimplified[b])
-                    {
-                        var p2 = new Polyline(pl);
-                        if (batchPlaced) p2.Transform(tshift);
-                        mergedSimplified.Add(p2);
-                    }
+                    foreach (var pl in localSimplified[b]) mergedSimplified.Add(new Polyline(pl));
+                if (localSheets[b] != null)
+                {
+                    foreach (var sh in localSheets[b]) usedSheets.Add(sh);
+                    sheetOff += localSheets[b].Count;
+                }
             }
-
-            // used sheets (0..maxSheetUsed); the merged geo carries the tiled transforms for PASS 2
-            int emit = maxSheetUsed >= 0 ? maxSheetUsed + 1 : (nsheet > 0 ? 1 : 0);
-            if (emit > nsheet) emit = nsheet;
-            var usedSheets = new List<List<Polyline>>(emit);
-            for (int s = 0; s < emit; s++) usedSheets.Add(new List<Polyline>(sheets.sheets[s]));
 
             merged.xforms = mergedXf;
 
             if (holder == null)
             {
-                // nothing solved (all cancelled before the first block) — leave _pendingNest null; PASS 2 keeps
-                // the previous result via the restart/cache path.
+                // nothing solved (all cancelled before the first) — leave _pendingNest null; PASS 2 keeps the cache.
                 Rhino.RhinoApp.WriteLine("[OpenNest2] BATCH: cancelled before any batch solved.");
                 return;
             }
@@ -881,8 +861,8 @@ namespace opennest_2
             _pendingNest = holder;
 
             Rhino.RhinoApp.WriteLine(string.Format(
-                "[OpenNest2] BATCH (one batch per sheet): {0} batch(es) -> {1} sheet(s); {2} part(s) placed, {3} outside (didn't fit their batch block).",
-                nb, emit, placedCount, unplacedCount));
+                "[OpenNest2] BATCH per-branch: {0} batch(es) across {1} sheet(s); {2} part(s) placed, {3} outside (increase that batch's sheet Count).",
+                nb, usedSheets.Count, placedCount, unplacedCount));
         }
 
         // Copy count of a batch sub-geo's group lg (indexes copies[] via geometry_sorted[lg][0]; defaults to 1).
@@ -1013,17 +993,21 @@ namespace opennest_2
         // the combined nest_geo PASS 2 consumes. Everything is DUPLICATED so the shared upstream geometry is
         // never mutated. Returns false if a sheet or geometry is missing.
         private bool ReadNestInputs(IGH_DataAccess DA, out nest_rhino_lib.nest_sheets sheets,
+                                    out List<nest_rhino_lib.nest_sheets> batchSheets,
                                     out List<nest_rhino_lib.nest_geo> batchGeos, out nest_rhino_lib.nest_geo merged)
         {
-            sheets = null; batchGeos = new List<nest_rhino_lib.nest_geo>(); merged = null;
-            // ALL nest_sheets objects across the tree are combined into one (wiring 2+ sheet objects makes every
-            // sheet available, not just the first). CombineSheets returns a duplicate — safe to mutate.
+            sheets = null; batchSheets = new List<nest_rhino_lib.nest_sheets>();
+            batchGeos = new List<nest_rhino_lib.nest_geo>(); merged = null;
+            // Sheets tree: keep ONE nest_sheets per BRANCH (batchSheets, so a batch nests on its OWN sheets) AND
+            // the flat COMBINED pool (sheets) for the preview. CombineSheets returns fresh duplicates — safe.
             var sheetList = new List<nest_rhino_lib.nest_sheets>();
             if (DA.GetDataTree(0, out Grasshopper.Kernel.Data.GH_Structure<Grasshopper.Kernel.Types.IGH_Goo> stree) && stree != null)
                 foreach (var branch in stree.Branches)
                 {
                     if (branch == null) continue;
-                    foreach (var goo in branch) { var s = Unwrap<nest_rhino_lib.nest_sheets>(goo); if (s != null) sheetList.Add(s); }
+                    var inBranch = new List<nest_rhino_lib.nest_sheets>();
+                    foreach (var goo in branch) { var s = Unwrap<nest_rhino_lib.nest_sheets>(goo); if (s != null) { sheetList.Add(s); inBranch.Add(s); } }
+                    if (inBranch.Count > 0) { var bs = CombineSheets(inBranch); if (bs != null) batchSheets.Add(bs); }
                 }
             sheets = CombineSheets(sheetList);
             // ONE batch per BRANCH: merge the objects that share a branch into a single nest_geo for that batch.

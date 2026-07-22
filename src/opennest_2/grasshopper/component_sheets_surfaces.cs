@@ -137,13 +137,17 @@ namespace opennest_2
             // Create nest_sheet class
             nest_rhino_lib.nest_sheets nest_sheets = new nest_rhino_lib.nest_sheets(plines_list, gap_xy, row_count, copies_val);
 
-            // Convert array of arrays to a GH_Structure
+            // Convert array of arrays to a GH_Structure. Surfaces is LIST access, so GH runs this once per input
+            // BRANCH; key the curves by the current iteration (= branch) so a 10-branch input with Count=3 comes
+            // out as 10 branches x 3 polylines (matching the per-branch Sheets output), not 3 x 10 (which happens
+            // if you key by sheet index — that path is constant across iterations, so GH unions them transposed).
             GH_Structure<GH_Curve> output_curves = new GH_Structure<GH_Curve>();
+            var _brPath = new GH_Path(DA.Iteration);
             for (int i = 0; i < nest_sheets.sheets.Length; i++)
             {
                 for (int j = 0; j < nest_sheets.sheets[i].Length; j++)
                 {
-                    output_curves.Append(new GH_Curve(nest_sheets.sheets[i][j].ToNurbsCurve()), new GH_Path(i));
+                    output_curves.Append(new GH_Curve(nest_sheets.sheets[i][j].ToNurbsCurve()), _brPath);
                 }
 
             }

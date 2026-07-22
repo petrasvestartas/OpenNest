@@ -182,14 +182,31 @@ namespace opennest_2
                     copies.Add(1);
             }
 
-            // Surfaces are a flat LIST, so attributes match by structure (no per-surface paths): a flat list
-            // of N attributes maps one-per-surface, an N-branch tree maps one branch per surface, and
-            // anything else is ignored with a warning (see AttributeMatch).
+            // Attribute matching. Surfaces is LIST access, so a DATA-TREE of surfaces (BATCHED nesting) makes GH
+            // run this once per BRANCH (branch b = one batch). In that case each Attributes port must ALSO be a
+            // tree whose branch b is the list of attributes for batch b's surfaces (one per surface) — so we pull
+            // just THIS iteration's branch (paired by order) and match it one-per-surface. A FLAT (single-branch)
+            // surface input keeps the original whole-tree matching (flat list one-per-surface / one branch per part).
             bool attr_mismatch;
             List<int[]> attr_ports;
-            attributes_geometries = AttributeMatch.Match(geo_current.Count, null, attrTrees, attrPorts, out attr_ports, out attr_mismatch);
+            int surfBranchCount = (Params.Input[0].VolatileData != null) ? Params.Input[0].VolatileData.PathCount : 1;
+            List<GH_Structure<IGH_GeometricGoo>> matchTrees = attrTrees;
+            if (surfBranchCount > 1 && Params.Input[0].VolatileData != null)
+            {
+                // Pull the Attributes SUB-TREE under THIS batch's Surfaces path, re-rooted. So BOTH work:
+                //   1-level Attributes {batch}=[a0,a1,…]      -> re-roots to one flat list -> one attr per surface
+                //   2-level Attributes {batch; surface}=[…]   -> re-roots to one branch per surface (its attrs)
+                var surfPaths = Params.Input[0].VolatileData.Paths;
+                GH_Path curPath = (DA.Iteration >= 0 && DA.Iteration < surfPaths.Count) ? surfPaths[DA.Iteration] : new GH_Path(DA.Iteration);
+                matchTrees = new List<GH_Structure<IGH_GeometricGoo>>(attrTrees.Count);
+                foreach (var t in attrTrees) matchTrees.Add(SubTreeUnder(t, curPath));
+            }
+            attributes_geometries = AttributeMatch.Match(geo_current.Count, null, matchTrees, attrPorts, out attr_ports, out attr_mismatch);
             if (attr_mismatch)
-                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "Tree Branches don't match, attributes will be ignored.");
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning,
+                    surfBranchCount > 1
+                        ? "Attributes don't match: with a data-tree of surfaces, give each surface branch a matching Attributes branch holding ONE attribute per surface (same branch order)."
+                        : "Attributes tree doesn't match the parts; attributes ignored.");
 
 
             for (int i = copies.Count; i< curves.Count; i++)
@@ -257,6 +274,34 @@ namespace opennest_2
                     this.geometry_colors.Add(nest_geo.attributes[i].ObjectColor);
                 }
             }
+        }
+
+        // full == prefix, or prefix is an ancestor of full ({0} matches {0}, {0;0}, {0;1;2}).
+        private static bool PathStartsWith(GH_Path full, GH_Path prefix)
+        {
+            if (full == null || prefix == null || full.Length < prefix.Length) return false;
+            for (int i = 0; i < prefix.Length; i++) if (full.Indices[i] != prefix.Indices[i]) return false;
+            return true;
+        }
+
+        // Every branch of `t` whose path is UNDER `prefix`, re-rooted by stripping the prefix ({b}->{0},
+        // {b;k}->{k}), so the batch's attributes can be matched by AttributeMatch as a standalone tree.
+        private static GH_Structure<IGH_GeometricGoo> SubTreeUnder(GH_Structure<IGH_GeometricGoo> t, GH_Path prefix)
+        {
+            var outT = new GH_Structure<IGH_GeometricGoo>();
+            if (t == null) return outT;
+            for (int b = 0; b < t.PathCount; b++)
+            {
+                GH_Path p = t.Paths[b];
+                if (!PathStartsWith(p, prefix)) continue;
+                int rem = p.Length - prefix.Length;
+                GH_Path np;
+                if (rem <= 0) np = new GH_Path(0);
+                else { var idx = new int[rem]; for (int i = 0; i < rem; i++) idx[i] = p.Indices[prefix.Length + i]; np = new GH_Path(idx); }
+                var br = t.Branches[b];
+                if (br != null) foreach (var goo in br) outT.Append(goo, np);
+            }
+            return outT;
         }
 
         protected override System.Drawing.Bitmap Icon => Properties.Resources.element_surface;
