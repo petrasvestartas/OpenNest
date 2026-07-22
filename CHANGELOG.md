@@ -8,6 +8,20 @@ GitHub Releases. Each entry describes what the release actually changed.
 > the previous tag), so a clear commit subject per push becomes the changelog line — refine an entry
 > here anytime if you want more detail.
 
+## [2.90.0.0] - 2026-07-22
+- feat(gh): per-branch sheets, batch-keyed outputs, per-branch attributes
+- fix(nfp): converged-stop default, sheet-relative outputs, rect-void fast path
+- fix(nfp): enforce time budget and cancel INSIDE a generation
+- fix(nfp): nearest rounding in Minkowski convolution scaling
+- bench(nfp): blobs datasets, split oob_area metric, wire exactNfp
+- feat(gh): branch-based batch nesting for OpenNest2 + OpenNestCollision
+- OpenNest batch: each Geometry object = a batch + detection diagnostic
+- OpenNest batch: one batch per sheet + default Batch ON
+- OpenNest: fix OpenNest1 tree-input crash + use ALL sheet objects (not just the first)
+- OpenNest: batch nesting (OpenNestCollision) + fix the multi-tree infinite hang
+- Consolidate OpenNest3D into opennest_2 (drop standalone opennest_3d plugin)
+- nfp_nest: GA early-exit, rectangle fast-path, exact-Minkowski voids
+
 ## [2.89.0.0] - 2026-06-19
 - bench(nfp): add --packDemo mode exercising nfp_pack + nfp_offset_polygon
 
