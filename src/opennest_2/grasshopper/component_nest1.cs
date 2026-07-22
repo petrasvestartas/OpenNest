@@ -120,7 +120,7 @@ namespace opennest_2
             pManager.AddIntegerParameter("Iterations", "Iterations", "Solver generations to evolve. You watch each one tighten in the preview; higher = tighter but slower. ~4–10 typical.", GH_ParamAccess.item, 6);
             pManager.AddIntegerParameter("Seed", "Seed", "Random seed for reproducible results.", GH_ParamAccess.item, 1);
             pManager.AddBooleanParameter("Reset", "Reset", "Set TRUE (wire a Button) to clear the whole component instantly and drop any running solve.", GH_ParamAccess.item, false);
-            pManager.AddBooleanParameter("Run", "Run", "Wire a Boolean Toggle. TRUE = solve now and re-solve automatically when an input changes (background thread, Rhino stays responsive, live preview). FALSE = hold the last result. Use Reset to clear.", GH_ParamAccess.item, false);
+            pManager.AddBooleanParameter("Run", "Run", "Wire a Boolean Toggle. TRUE = solve now and re-solve automatically when an input changes (background thread, Rhino stays responsive, live preview). FALSE = output nothing and clear the previous result (blank outputs + cleared preview).", GH_ParamAccess.item, false);
 
             for (int i = 2; i < pManager.ParamCount; i++) pManager[i].Optional = true;
         }
@@ -280,6 +280,25 @@ namespace opennest_2
                 return;
             }
 
+            // ===== RUN OFF (input FALSE): output NOTHING and clear any previous result + preview =====
+            // Mirrors Reset but silent: users asked for a clean blank when Run is off, not the held last layout.
+            // A solve in flight is invalidated via _solveGen (its worker drops the result); it frees the gate in
+            // its own finally, so only release here when NOT computing.
+            if (!this.run)
+            {
+                _prevRun = false;
+                _solveGen++;
+                EngineGate.Nfp.Dequeue(_wake);
+                if (_phase != Phase.Computing) ReleaseEngineIfHeld();
+                _phase = Phase.Idle;
+                StopClocks();
+                HardClear();
+                this.Message = null;
+                try { ExpirePreview(true); } catch { }                       // GH rebuilds DrawViewportWires (now empty)
+                try { Rhino.RhinoDoc.ActiveDoc?.Views.Redraw(); } catch { }   // clear the stale layout from the viewport now
+                return;
+            }
+
             // ===== PASS 2: a finished background solve is waiting to publish =====
             if (_phase == Phase.Ready)
             {
@@ -321,17 +340,8 @@ namespace opennest_2
                 return;
             }
 
-            // ===== IDLE =====
-            if (!this.run)
-            {
-                _prevRun = false;
-                EngineGate.Nfp.Dequeue(_wake);
-                this.Message = _hasResult ? "paused" : null;
-                EmitCachedOutputs(DA);
-                return;
-            }
-
-            // Run is ON. Build the inputs (needed to compute the change signature and to solve).
+            // ===== IDLE, Run ON (Run OFF is handled above). Build the inputs (needed to compute the change
+            // signature and to solve). =====
             var sheets = process_sheets(DA);
             var template = process_geometry(DA);
             if (sheets == null || template == null)

@@ -20,7 +20,7 @@ Nests parts onto sheets with the no-fit-polygon genetic solver, keeping each par
 | **Geometry** | Generic | item | From OpenNest tab, use component Geometry. |
 | **Options** | Text | list | Optional list of "key value" option strings — wire the **NestOptions** component here. Each line overrides the matching on-canvas option row below; unwired keys keep their on-canvas value. |
 | **Iterations** | Integer | item | GA generations to evolve. Each generation evaluates the whole population and keeps the best, so the result improves over generations. ~10-40 typical (a live orange preview tightens as it runs; press ESC to stop and keep the best). Pair with the 'population' option (default 10). _Default: 10._ |
-| **Run** | Boolean | item | Wire a Boolean Toggle. TRUE = solve now and re-solve when an input changes (background thread, live preview); FALSE = hold the last result. ESC also stops a running solve. _Default: false._ |
+| **Run** | Boolean | item | Wire a Boolean Toggle. TRUE = solve now and re-solve when an input changes (background thread, live preview); FALSE = output nothing and clear the previous result (blank outputs + cleared preview). ESC stops a running solve but keeps the partial result while Run is held TRUE. _Default: false._ |
 
 ## Outputs
 

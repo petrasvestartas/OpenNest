@@ -25,7 +25,7 @@ Nests parts onto sheets with the physics collision solver - packs tightly and ca
 | **Geometry** | Generic | item | From OpenNest tab, use component Geometry. |
 | **Options** | Text | list | Optional list of "key value" option strings — wire the **NestOptions** component here. Each line overrides the matching on-canvas option row below; unwired keys keep their on-canvas value. |
 | **Iterations** | Integer | item | Relaxation rounds; higher packs tighter but is slower. ~4000 = the tight all-on-one-sheet pack; lower for a quick rough preview. _Default: 4000._ |
-| **Run** | Boolean | item | Wire a Boolean Toggle. TRUE = solve now and re-solve when an input changes (background thread, live preview); FALSE = hold the last result. ESC also stops a running solve. _Default: false._ |
+| **Run** | Boolean | item | Wire a Boolean Toggle. TRUE = solve now and re-solve when an input changes (background thread, live preview); FALSE = output nothing and clear the previous result (blank outputs + cleared preview). ESC stops a running solve but keeps the partial result while Run is held TRUE. _Default: false._ |
 
 ## Outputs
 

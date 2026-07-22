@@ -25,7 +25,7 @@ Nests parts onto sheets with the no-fit-polygon solver (no attributes). Takes cu
 | **Iterations** | Integer | item | Solver generations to evolve. You watch each one tighten in the preview; higher = tighter but slower. ~4–10 typical. _Default: 6._ |
 | **Seed** | Integer | item | Random seed for reproducible results. _Default: 1._ |
 | **Reset** | Boolean | item | Set TRUE (wire a Button) to clear the whole component instantly and drop any running solve. _Default: false._ |
-| **Run** | Boolean | item | Start the nesting solve. _Default: false._ |
+| **Run** | Boolean | item | TRUE = start the nesting solve (and re-solve on input change, live preview). FALSE = output nothing and clear the previous result (blank outputs + cleared preview). _Default: false._ |
 
 ## Outputs
 

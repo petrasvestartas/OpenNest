@@ -172,9 +172,25 @@ namespace opennest_gh2.components
             // the best-so-far. Using the INPUT's previous value (not the phase) means an ESC-stop isn't relaunched
             // just because Run is still held TRUE. To re-run after an input change, toggle Run off then on.
             bool runInput = false; try { runInput = ReadRunInput(access); } catch { }
-            if (runInput && !_prevRunInput && _phase == Phase.Idle) { ClearAll(); _aborted = false; _launchRequested = true; }
-            else if (!runInput && _prevRunInput && _phase == Phase.Computing) { try { RequestCancel(); } catch { } _status = "stopping…"; }
-            _prevRunInput = runInput;
+
+            // Run OFF (input FALSE): output NOTHING and clear any previous result + preview, rather than holding
+            // the last layout. Cancel a running solve (and flag _aborted so its Ready pass clears instead of
+            // publishing); when Idle, clear now and emit nothing this pass. (Users asked for a clean blank on
+            // Run=false — see the GH1 components.)
+            if (!runInput)
+            {
+                if (_phase == Phase.Computing) { _aborted = true; try { RequestCancel(); } catch { } _status = "stopping…"; }
+                else if (_phase == Phase.Ready) { _aborted = true; }   // discard a just-finished result on the publish pass
+                _launchRequested = false;
+                _prevRunInput = false;
+                if (_phase == Phase.Idle) { ClearAll(); _status = null; return; }   // nothing emitted -> outputs blank
+                // Computing/Ready fall through: the Ready pass clears via _aborted (below).
+            }
+            else
+            {
+                if (!_prevRunInput && _phase == Phase.Idle) { ClearAll(); _aborted = false; _launchRequested = true; }
+                _prevRunInput = true;
+            }
 
             switch (_phase)
             {

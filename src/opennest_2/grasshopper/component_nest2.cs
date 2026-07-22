@@ -251,7 +251,7 @@ namespace opennest_2
             pManager.AddParameter(MakeOptionsInput());
             pManager.AddIntegerParameter("Iterations", "Iterations", "GA generations to evolve. Each generation evaluates the whole population and keeps the best, so the result improves over generations. ~10-40 typical (a live orange preview tightens as it runs; press ESC to stop and keep the best). Pair with the 'population' option (default 10).", GH_ParamAccess.item, 10);
             // Standard Run input (replaces the old on-canvas Run button). Wire a Boolean Toggle.
-            pManager.AddBooleanParameter("Run", "Run", "Wire a Boolean Toggle. TRUE = solve now and re-solve when an input changes (background thread, live preview); FALSE = hold the last result. (Options are still edited on the component body; ESC also stops a running solve.)", GH_ParamAccess.item, false);
+            pManager.AddBooleanParameter("Run", "Run", "Wire a Boolean Toggle. TRUE = solve now and re-solve when an input changes (background thread, live preview); FALSE = output nothing and clear the previous result (blank outputs + cleared preview). (Options are still edited on the component body; ESC stops a running solve but keeps the partial result while Run is held TRUE.)", GH_ParamAccess.item, false);
             pManager[2].Optional = true;   // Options
             pManager[3].Optional = true;   // Iterations (has a default)
             pManager[4].Optional = true;   // Run
@@ -306,6 +306,22 @@ namespace opennest_2
             if (_out_geomattr != null) DA.SetDataTree(6, _out_geomattr);
         }
 
+        // Run OFF: drop the cached result and ALL preview/display geometry so every output goes blank and the
+        // viewport preview clears (nothing is re-emitted). Idempotent — safe to call on every no-Run solution.
+        private void ClearOutputsAndPreview()
+        {
+            _hasResult = false;
+            _out_sheets = null; _out_borders = null; _out_allgeo = null;
+            _out_xforms = null; _out_sheetid = null; _out_sheettxt = null; _out_geomattr = null;
+            nest_geos = new List<nest_rhino_lib.nest_geo>();
+            bbox = new BoundingBox();
+            _previewBorders = new List<Polyline>();
+            _previewSheets = new List<Polyline>();
+            ResetDisplayLists();
+            try { ExpirePreview(true); } catch { }                       // GH rebuilds DrawViewportWires (now empty)
+            try { Rhino.RhinoDoc.ActiveDoc?.Views.Redraw(); } catch { }   // clear the stale layout from the viewport now
+        }
+
         protected override void SolveInstance(IGH_DataAccess DA)
         {
             // Sheets + Geometry are TREE inputs read whole in one pass; the async state machine must advance
@@ -324,21 +340,41 @@ namespace opennest_2
             // INPUT's previous value (not _runActive) means an ESC-stop mid-solve isn't immediately relaunched
             // just because Run is still held TRUE.
             bool runInput = false; DA.GetData(4, ref runInput);
-            if (runInput && !_prevRunInput) { _runActive = true; _runButtonRequested = true; }
-            else if (!runInput && _runActive)
+
+            // Run OFF (input FALSE): output NOTHING and clear any previous result + viewport preview, instead of
+            // holding the last layout. Cancel a running/queued solve first; if one is still unwinding this same
+            // block clears on the follow-up Ready pass (once _phase leaves Computing). ESC is separate: it stops
+            // while Run is held TRUE and DOES keep the partial result.
+            if (!runInput)
             {
-                _runActive = false; CancelSolve();
-                try { _debounce.Stop(); } catch { }
-                try { EngineGate.Nfp.Dequeue(_wake); } catch { }
+                bool wasBusy = _runActive || _phase == Phase.Computing;
+                _runActive = false;
+                _prevRunInput = false;
+                _restartRequested = false;   // don't let a mid-solve restart survive into the next Run-on cycle
+                if (wasBusy)
+                {
+                    CancelSolve();
+                    try { _debounce.Stop(); } catch { }
+                    try { EngineGate.Nfp.Dequeue(_wake); } catch { }
+                }
+                if (_phase == Phase.Computing) { this.Message = null; return; }   // solve still unwinding -> clears on the Ready pass
+                _phase = Phase.Idle;
+                StopClocks();
+                ClearOutputsAndPreview();
+                this.Message = null;
+                return;
             }
-            _prevRunInput = runInput;
+
+            // Run ON: a rising edge launches a fresh live session (ESC can still stop it while Run is held TRUE).
+            if (!_prevRunInput) { _runActive = true; _runButtonRequested = true; }
+            _prevRunInput = true;
 
             // ===== phases before the result is ready: gate on Run, launch the solve, or ignore re-solves
             if (_phase != Phase.Ready)
             {
                 if (_phase == Phase.Computing)
                 {
-                    if (!_runActive) { CancelSolve(); return; }     // Run toggled off -> stop the running solve
+                    if (!_runActive) { CancelSolve(); return; }     // ESC pressed (Run still held TRUE) -> stop the running solve
                     // Live (Run on): an input changed vs the solve in flight -> debounce -> cancel + restart.
                     if (InputsChanged(DA)) ArmDebounce();
                     return;
@@ -349,10 +385,11 @@ namespace opennest_2
                 bool launch = _runButtonRequested;
                 _runButtonRequested = false;
 
+                // Reached with Run held TRUE but the session stopped by ESC: keep the partial result on screen
+                // (toggle Run off to clear it). Run=FALSE is handled at the top of SolveInstance, never here.
                 if (!_runActive)
                 {
-                    // Run is OFF: hold the last completed result; do not solve and do not auto-restart.
-                    this.Message = null;
+                    this.Message = _hasResult ? "stopped (Esc)" : null;
                     EmitCachedOutputs(DA);
                     return;
                 }
