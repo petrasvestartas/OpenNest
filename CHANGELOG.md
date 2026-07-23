@@ -8,6 +8,9 @@ GitHub Releases. Each entry describes what the release actually changed.
 > the previous tag), so a clear commit subject per push becomes the changelog line — refine an entry
 > here anytime if you want more detail.
 
+## [2.93.0.0] - 2026-07-23
+- chore(gh): silence per-solve "gravity" + "[nfp_nest] parts=" prints (OpenNest1/2)
+
 ## [2.92.0.0] - 2026-07-23
 - chore(gh): remove per-run console diagnostics from OpenNest2/OpenNestCollision
 
