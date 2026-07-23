@@ -499,18 +499,6 @@ namespace opennest_2
                     }
                 }
 
-                try
-                {
-                    var _loc = typeof(component2_nest).Assembly.Location;
-                    string _when = string.IsNullOrEmpty(_loc) ? "(in-memory)" : System.IO.File.GetLastWriteTime(_loc).ToString("yyyy-MM-dd HH:mm:ss");
-                    Rhino.RhinoApp.WriteLine("[OpenNest2] BUILD " + _when + "   <- " + (string.IsNullOrEmpty(_loc) ? "?" : _loc));
-                }
-                catch { }
-                Rhino.RhinoApp.WriteLine(string.Format(
-                    "[OpenNest2] Batch={0}  geometry branches={1}  sheet branches={2} (total {3} sheets)  ->  {4}",
-                    batchOn != 0 ? "On" : "Off", batchGeos.Count, batchSheets.Count, nsheet,
-                    batches != null ? (batches.Count + " batches (each nested across its OWN sheets)") : "combined (single nest)"));
-
                 if (batchOn != 0 && batches != null && batchSheets.Count > 1 && batchSheets.Count != batches.Count)
                     AddRuntimeMessage(GH_RuntimeMessageLevel.Warning,
                         "Sheet branches (" + batchSheets.Count + ") != Geometry batches (" + batches.Count + "). Paired by clamping; match the Sheets tree to the Geometry tree for one dedicated sheet set per batch.");
@@ -887,7 +875,6 @@ namespace opennest_2
             if (holder == null)
             {
                 // nothing solved (all cancelled before the first) — leave _pendingNest null; PASS 2 keeps the cache.
-                Rhino.RhinoApp.WriteLine("[OpenNest2] BATCH: cancelled before any batch solved.");
                 return;
             }
             holder.output_transforms = mergedXf;
@@ -896,10 +883,6 @@ namespace opennest_2
             holder.simplified_polygons = mergedSimplified;
             holder.CurrentGeneration = iters;
             _pendingNest = holder;
-
-            Rhino.RhinoApp.WriteLine(string.Format(
-                "[OpenNest2] BATCH per-branch: {0} batch(es) across {1} sheet(s); {2} part(s) placed, {3} outside (increase that batch's sheet Count).",
-                nb, usedSheets.Count, placedCount, unplacedCount));
         }
 
         // Copy count of a batch sub-geo's group lg (indexes copies[] via geometry_sorted[lg][0]; defaults to 1).

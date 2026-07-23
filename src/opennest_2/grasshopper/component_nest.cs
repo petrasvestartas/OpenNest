@@ -424,24 +424,6 @@ namespace opennest_2
                         }
                 }
 
-                // Diagnostic (Rhino command line): shows exactly what was detected, so "everything on one sheet"
-                // is easy to explain (Batch Off, or only 1 branch, or only 1 sheet -> combined).
-                int diagSheets = 0;
-                while (diagSheets < nest_sheets.sheets.Length && nest_sheets.sheets[diagSheets] != null && nest_sheets.sheets[diagSheets].Length > 0) diagSheets++;
-                // BUILD STAMP: prints the actual .gha that Grasshopper LOADED + its build time, so you can always
-                // confirm the running version matches the one just installed (no guessing which copy is live).
-                try
-                {
-                    var _loc = typeof(component_nest).Assembly.Location;
-                    string _when = string.IsNullOrEmpty(_loc) ? "(in-memory)" : System.IO.File.GetLastWriteTime(_loc).ToString("yyyy-MM-dd HH:mm:ss");
-                    Rhino.RhinoApp.WriteLine("[OpenNestCollision] BUILD " + _when + "   <- " + (string.IsNullOrEmpty(_loc) ? "?" : _loc));
-                }
-                catch { }
-                Rhino.RhinoApp.WriteLine(string.Format(
-                    "[OpenNestCollision] Batch={0}  geometry branches={1}  sheet branches={2} (total {3} sheets)  ->  {4}",
-                    batchOn != 0 ? "On" : "Off", batchGeos.Count, batchSheets.Count, diagSheets,
-                    (partition != null && partition.Count >= 2) ? (partition.Count + " batches (each nested across its OWN sheets)") : "combined (single nest)"));
-
                 // Per-batch mode pairs geometry-branch b with sheet-branch b. Warn if the counts don't line up
                 // (they get clamped: the last sheet branch is reused, so extra batches overlap on shared sheets).
                 if (batchOn != 0 && partition != null && partition.Count >= 2 && batchSheets.Count > 1 && batchSheets.Count != partition.Count)
@@ -1329,10 +1311,6 @@ namespace opennest_2
                 output_sheets.Add(new List<Polyline>(_sheets.sheets[s]));
 
             _geo.xforms = output_transforms;
-
-            Rhino.RhinoApp.WriteLine(string.Format(
-                "[nest_physics] BATCH per-branch: {0} batch(es) across {1} sheet(s); {2} part(s) still outside (increase that batch's sheet Count).",
-                nb, nsheet, unplaced));
         }
 
         // === Non-rectangular sheet support ===================================================
@@ -1528,36 +1506,12 @@ namespace opennest_2
             return bb;
         }
 
-        // UI THREAD: build the final per-group transforms, emit sheets, print the diagnostic (after Solve).
+        // UI THREAD: build the final per-group transforms and emit sheets (after Solve).
         public void Assemble()
         {
             if (_batchMode) { AssembleBatches(); return; }
             int F = _F, nsheet = _nsheet;
             _unplacedTotal = 0; for (int f = 0; f < F; f++) if (_out_sheet[f] < 0) _unplacedTotal++;
-
-            // ---- DIAGNOSTIC: what the solver received + produced (Rhino command line). ----
-            {
-                double totalArea = 0.0; int cur = 0;
-                for (int f = 0; f < F; f++)
-                {
-                    int n = _pvc[f]; double a = 0.0;
-                    for (int k = 0; k < n; k++)
-                    {
-                        int k2 = (k + 1) % n;
-                        a += _pxyA[2 * (cur + k)] * _pxyA[2 * (cur + k2) + 1] - _pxyA[2 * (cur + k2)] * _pxyA[2 * (cur + k) + 1];
-                    }
-                    totalArea += Math.Abs(a) * 0.5; cur += n;
-                }
-                double sw = 0, sh = 0;
-                if (nsheet > 0) { var bb = _sheets.sheets[0][0].BoundingBox; sw = bb.Max.X - bb.Min.X; sh = bb.Max.Y - bb.Min.Y; }
-                double sheetArea = sw * sh;
-                int totalVerts = 0; foreach (var c in _pvc) totalVerts += c;
-                Rhino.RhinoApp.WriteLine(string.Format(
-                    "[nest_physics] parts={0} (avg {1} verts) | sheet0 = {2:F1} x {3:F1} ({4} sheets) | part area = {5:F0} = {6:F1}% of sheet | rot={7} seed={8} iter={9} poles={13} compact={14} starts={15} | fill_holes={11} part_holes_sent={12} sheet_holes_sent={16} | RESULT sheets used = {10} unplaced(outside)={17}",
-                    F, (F > 0 ? totalVerts / F : 0), sw, sh, nsheet, totalArea,
-                    (sheetArea > 0 ? 100.0 * totalArea / sheetArea : 0), _np.num_rotations, _np.seed, _np.iter_budget, _n_sheets_used,
-                    _np.part_holes_mode, _partHolesTotal, _np.pole_max, _np.final_compact, _np.n_starts, _sheetHolesTotal, _unplacedTotal));
-            }
 
             // Overflow layout for parts that did NOT fit on any sheet (sid == -1): instead of dropping them
             // at the origin (on top of everything), lay them out in a single row just to the RIGHT of all the
