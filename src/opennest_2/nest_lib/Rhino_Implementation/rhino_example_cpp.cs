@@ -65,12 +65,6 @@ namespace nest_lib
                     }
             }
 
-            // Diagnostic: how many PART HOLES were detected + sent to the engine (read it in the Rhino
-            // command line). >0 => element holes reached nfp_nest (it will nest parts into them); 0 => no
-            // holes paired upstream (input not closed, or outer+hole not grouped/contained).
-            int _phSum = 0; foreach (var _h in phc) _phSum += _h;
-            Rhino.RhinoApp.WriteLine("[nfp_nest] parts=" + G + " part_holes_sent=" + _phSum + " useHoles=" + UseHoles);
-
             // --- sheet arrays (normalized so each sheet's min-corner is at origin; we re-add the C#
             //     sheet's world position on output) ---
             var svc = new List<int>();

@@ -130,8 +130,6 @@ namespace nest_lib
                 }
             }
 
-            RhinoApp.WriteLine(SvgNest.Config.placementType.ToString());
-
             this.max_iterations = max_iterations;
             this.max_time_in_seconds = (long)parameters[8];
 
