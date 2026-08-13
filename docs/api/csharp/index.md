@@ -1,6 +1,10 @@
 # C# Examples
 
-Two native engines via P/Invoke. You give part + sheet polygons; you get back, per part, *move by
+Three native engines via P/Invoke: `nfp_nest` (no-fit-polygon + genetic algorithm, with a rectangle
+fast path), `nest_physics` (collision / overlap-relaxation) and `nest_spectral` (3D mesh packing).
+The examples below cover the two 2D engines.
+
+You give part + sheet polygons; you get back, per part, *move by
 (tx, ty)*, *rotate by an angle*, and *which sheet*. The native libraries are resolved by bare name,
 so `nfp_nest`/`nest_physics` (`.dll`/`.dylib`/`.so`) must sit next to the executable.
 

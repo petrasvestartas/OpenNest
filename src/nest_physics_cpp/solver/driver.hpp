@@ -102,6 +102,24 @@ inline bool brute_overlap(const Polygon& a, const Polygon& b) {
     return false;
 }
 
+// Minimum bounding height of a polygon over all rotations (= its minimum width): rotate the verts and take
+// the smallest (max_y - min_y) across `samples` orientations spanning [0,pi). A part whose min width exceeds
+// a strip's height can't fit that strip at ANY orientation. (Lives here rather than in the C ABI because
+// greedy_fill needs it too, to defer a part that doesn't fit THIS sheet to a taller later one.)
+inline f32 min_bounding_height(const Polygon& p, int samples) {
+    const auto& V = p.vertices;
+    if (V.empty()) return 0.0f;
+    f32 best = std::numeric_limits<f32>::max();
+    for (int k = 0; k < samples; ++k) {
+        f32 a = PI_F * (f32)k / (f32)samples;
+        f32 c = std::cos(a), s = std::sin(a);
+        f32 mn = std::numeric_limits<f32>::max(), mx = -mn;
+        for (const auto& v : V) { f32 y = s * v.x + c * v.y; if (y < mn) mn = y; if (y > mx) mx = y; }
+        f32 h = mx - mn; if (h < best) best = h;
+    }
+    return best;
+}
+
 // Re-id a subset of master parts to consecutive ids 0..k-1 (StripInstance indexes by position).
 inline std::vector<std::pair<Part, usize>> subset_items(
         const std::vector<std::pair<Part, usize>>& master, const std::vector<usize>& idxs) {
@@ -204,6 +222,96 @@ struct Sheets {
     int bf = 0;                  // brute-force overlaps within a sheet
     bool ok = true;
 };
+
+// PER-SHEET dimensions (width, height). Sheets beyond the supplied set reuse the LAST entry, matching how
+// per_sheet_holes degrades. An EMPTY vector means "every sheet is the size given by the scalar sheet_w /
+// sheet_h arguments" — the original single-size behaviour, kept byte-identical for that (common) case.
+typedef std::vector<std::pair<f32, f32>> SheetDims;
+inline std::pair<f32, f32> dims_for(const SheetDims* dims, int s, f32 fallback_w, f32 fallback_h) {
+    if (!dims || dims->empty()) return {fallback_w, fallback_h};
+    usize i = (s >= 0 && s < (int)dims->size()) ? (usize)s : dims->size() - 1;
+    return (*dims)[i];
+}
+
+// The packer's own ABSOLUTE placement slack: the one number every pass uses for "close enough to the
+// wall". greedy_fill keeps a part whose x_max <= cur_w + PACKER_SLACK (below); compact_left refuses to
+// slide a part past -PACKER_SLACK / above cur_h + PACKER_SLACK; fill_sheet_gaps and fill_cavities accept
+// a candidate within PACKER_SLACK of their frame. It is ABSOLUTE — a legacy of the original code — and it
+// is genuinely exercised, not merely permitted: at metre scale the bench places parts outside the sheet by
+// up to PACKER_SLACK itself, which is the admission limit every pass uses and therefore the true ceiling.
+// (Repro: np_bench --scale=0.001 over seeds 1-12; the max edge excursion varies by seed — ~5e-4 to ~1e-3 —
+// so quote the ceiling, not a sampled maximum. Orders of magnitude above f32 round-off at these coords.)
+inline constexpr f32 PACKER_SLACK = 1e-3f;
+
+// BOUNDS TOLERANCE for "is this placed part inside the sheet it was placed on?", used by BOTH the
+// demotion pass (drop_invalid_placements) and the final quality verification, so the two can never drift.
+//
+// The RELATIVE term is deliberately relative to the geometry. It used to be an absolute 1.0 model units,
+// which is 0.1% of a 1000 mm sheet but 100% of a 1 m sheet — so the very same defective layout was caught
+// in a millimetre document and completely invisible in a metre one (proven by running one broken layout
+// at both scales). Reference length is the SMALLER of the sheet span and the part's own bbox diagonal, so
+// the check also stays tight when small parts sit on a very large sheet.
+//
+// THE FLOOR IS ABSOLUTE, AND THE VERDICT IS THEREFORE ONLY SCALE-INVARIANT ABOVE IT. The floor is
+// 2 x PACKER_SLACK = 0.002 MODEL UNITS, so it dominates the relative term whenever the reference length
+// is below 20 model units — i.e. in any document whose parts are ~20 units or smaller across, which is
+// what a metre-unit Rhino file looks like. What that costs, in units of the geometry: with the bench's
+// 400x300 parts (diagonal 500) the tolerance is the relative term, 1e-4 x 500 = 0.05 units = 0.01% of the
+// part; scale the identical job by 0.001 and the diagonal is 0.5, the relative term is 5e-5, and the floor
+// takes over at 0.002 = 0.4% of the part — 40x looser. So a defect sized between 0.01% and 0.4% of the
+// part is caught at millimetre scale and invisible at metre scale. That band IS the whole statement.
+//
+// DEMONSTRATED with np_bench (seams armed: -DNEST_PHYSICS_BUILD_BENCH=ON). The --shift seam runs AFTER
+// every packing pass, so the excursion it produces is exactly linear in the flag; dial --shift until the
+// harness line "max edge excursion = ... (X% of the sheet span)" reads the SAME X at both scales, and the
+// two runs then carry the identical RELATIVE defect. It needs two DIFFERENT --shift values to get there,
+// because f32 rounding makes the two layouts non-identical — which is exactly why the single --shift=0.1
+// this note used to quote demonstrated nothing: at --scale=1 it lands the part 0.046 units out, INSIDE
+// the 0.05 tolerance, so nothing is demoted at either scale and the two excursions differ ~7x in relative
+// terms. The pair that does work (both --parts=12 --sheets=4 --seed=100):
+//     --scale=1     --shift=0.1005    -> excursion 0.545971   units = 0.0273% of the sheet span
+//                                        -> DEMOTED (demoted=1, unplaced=1, VERDICT: UNPLACED-SPILL)
+//     --scale=0.001 --shift=0.100223  -> excursion 0.000545965 units = 0.0273% of the sheet span
+//                                        -> KEPT (clean=1, out_of_bounds=0, demoted=0): it SHIPS hanging
+//                                           outside the sheet, and only np_bench's own measurement sees
+//                                           it ("VERDICT: OUT-OF-BOUNDS *** GATE DISAGREES ***")
+// Same relative defect to three significant figures, opposite verdicts, and the floor is the only
+// difference between them. (Append --dropinvalid=0 to the first command to read its excursion: the
+// demotion removes the part before the harness can measure it.) The analytic width of that blind band is
+// the floor itself: 0.002 units, which on a 1x1 m sheet is 0.1% of the span, against 0.0025% at mm scale.
+//
+// The floor is required, not cosmetic: the PACKER's own slack epsilons are absolute (PACKER_SLACK above
+// and the 1e-3f literals listed below), so without a floor of 2 x PACKER_SLACK this exit check would
+// demote placements the packer itself deliberately allowed to graze the wall. The honest fix is to make
+// THOSE relative — but they set slide fixpoints and admission tests, so changing them moves layouts that
+// are required to stay byte-identical, and it is a separate change. Until then this comment, and the
+// np_last_quality contract in nest_physics_capi.h, state the floor rather than claiming invariance.
+//
+// AUDIT of the other absolute epsilons, since this class of bug hides in all of them:
+//   * real_overlap's OVERLAP_EPS_FRAC (capi) shrinks each polygon by a fraction of ITS OWN size — that
+//     part was always relative, but the SHRINK ITSELF was wrong: it scaled toward the area centroid,
+//     which is not an erosion for a concave part (a U/C centroid is outside the material). Replaced with
+//     a genuine miter inward offset, verified to be a subset. Scale-relative and now also shape-correct.
+//   * the 1e-3f slacks in compact_left (above), greedy_fill's keep test, fill_cavities,
+//     precompute_hole_pairs and fill_sheet_gaps are all PERMISSIVE — they only widen what a pass will
+//     ADMIT, and every admitted candidate is then exactly re-verified (brute_overlap) before it commits.
+//     They can make the packer slightly more generous at small model scale; they cannot ship overlapping
+//     or escaped geometry, because this tolerance guards the exit.
+//   * greedy_fill's out.inf test (1e-2f) IS scale-blind, but it feeds only out.ok -> the multi-start
+//     score, i.e. which candidate layout is preferred. Anything it waves through still meets
+//     drop_invalid_placements, which now uses THIS tolerance and is strictly tighter at metre scale. Left
+//     absolute deliberately: changing it perturbs multi-start selection and would move layouts that are
+//     required to stay byte-identical.
+//   * dims_uniform's 1e-4f only decides whether sheets count as interchangeable for renumbering — and
+//     size alone was NOT a sufficient test, see sheets_interchangeable() in the capi: keep-out holes are
+//     indexed by sheet id, so identically-sized sheets with different holes are not interchangeable.
+inline f32 bounds_tol(f32 sheet_w, f32 sheet_h, f32 part_diag) {
+    f32 ref = sheet_w + sheet_h;
+    if (part_diag > 0.0f && part_diag < ref) ref = part_diag;
+    const f32 rel = 1e-4f * ref;
+    const f32 floor_abs = 2.0f * PACKER_SLACK;
+    return rel > floor_abs ? rel : floor_abs;
+}
 
 // ---- Live layout streaming (for an interactive host's animated preview) ----
 // While a solve runs on a background thread, the host (Grasshopper) polls the current best layout
@@ -401,10 +509,17 @@ inline void compact_left(Layout& live, f32 sheet_w, f32 sheet_h, const std::vect
     }
 }
 
+// `per_sheet_dims` (optional) gives each sheet its OWN width x height. Without it every sheet is sheet_w x
+// sheet_h — the original behaviour, and the path a uniform sheet set still takes byte-for-byte. With it,
+// each greedy iteration strip-packs against THAT sheet's real size, which is what makes a mixed-size sheet
+// set correct: the old code took the size from sheet 0 alone, so every part placed on a SMALLER later sheet
+// was reported "placed" while it hung metres outside that sheet's outline (and a LARGER later sheet was
+// packed as if it were tiny).
 inline Sheets greedy_fill(const std::vector<std::pair<Part, usize>>& parts, const CollisionConfig& engine,
                           f32 sheet_w, f32 sheet_h, double total_budget, int max_bins = 6,
                           const std::vector<std::vector<Polygon>>& per_sheet_holes = {},
-                          uint64_t base_seed = 100, bool publish_live = true) {
+                          uint64_t base_seed = 100, bool publish_live = true,
+                          const SheetDims* per_sheet_dims = nullptr) {
     Sheets out;
     std::vector<usize> remaining;
     for (usize i = 0; i < parts.size(); ++i) remaining.push_back(i);
@@ -419,8 +534,31 @@ inline Sheets greedy_fill(const std::vector<std::pair<Part, usize>>& parts, cons
     int sheet = 0;
     while (!remaining.empty() && sheet < max_bins) {
         bool cancel_now = g_cancel.load(std::memory_order_relaxed);
+        // THIS sheet's real size (== sheet_w/sheet_h unless a per-sheet set was supplied).
+        auto [cur_w, cur_h] = dims_for(per_sheet_dims, sheet, sheet_w, sheet_h);
         double b = (sheet == 0) ? total_budget * 0.65 : total_budget * 0.25;
         int passes = (sheet == 0) ? 3 : 2;
+
+        // MIXED SIZES: a part whose minimum width exceeds THIS sheet's height cannot fit it at any
+        // rotation. Defer it to a later (taller) sheet rather than feed it to a strip it can never
+        // satisfy — an unsatisfiable part poisons the whole relaxation for the parts that DO fit.
+        // With uniform sheets `defer` is always empty (the caller already set aside parts that fit no
+        // sheet at all), so this is a no-op there.
+        std::vector<usize> defer;
+        if (per_sheet_dims && !per_sheet_dims->empty()) {
+            std::vector<usize> fit_now;
+            for (usize g : remaining) {
+                const Polygon* cs = parts[g].first.collision_shape.get();
+                if (cs && min_bounding_height(*cs, 90) > cur_h * 1.001f) defer.push_back(g);
+                else fit_now.push_back(g);
+            }
+            remaining.swap(fit_now);
+            if (remaining.empty()) {          // nothing fits this sheet -> leave it empty, try the next
+                out.counts.push_back(0); out.widths.push_back(0.0f);
+                remaining = defer; sheet++; continue;
+            }
+        }
+
         auto sub = subset_items(parts, remaining);
         const std::vector<Polygon>* holes = nullptr;
         if (!per_sheet_holes.empty()) {
@@ -428,26 +566,51 @@ inline Sheets greedy_fill(const std::vector<std::pair<Part, usize>>& parts, cons
             holes = &per_sheet_holes[hidx];
         }
         if (publish_live)
-        {   // publish the subset->global mapping + sheet context so np_poll_layout can band/fold
+        {   // publish the subset->global mapping + sheet context so np_poll_layout can band/fold. The
+            // preview bands by ONE width (cur_w); with mixed-size sheets the live preview is therefore
+            // approximate mid-solve — the FINAL placement below is exact either way.
             std::lock_guard<std::mutex> lk(g_live.mtx);
             g_live.sub2glob = remaining; g_live.sheet_base = sheet;
-            g_live.sheet_w = sheet_w; g_live.max_bins = max_bins;
+            g_live.sheet_w = cur_w; g_live.max_bins = max_bins;
         }
-        StripResult R = run_strip(sub, engine, sheet_h, sheet_w, b, base_seed + (uint64_t)sheet * 7, passes, holes, listener);
+        StripResult R = run_strip(sub, engine, cur_h, cur_w, b, base_seed + (uint64_t)sheet * 7, passes, holes, listener);
         Layout live = Layout::from_snapshot(R.sol.layout_snapshot);
 
-        // CANCELLED (host pressed ESC): freeze the current strip as-is. Emit EVERY remaining part at its
-        // current optimized position, wrapping the long strip into sheet-width bands (clamped to the last
-        // sheet). Nothing is dropped to its origin — the user sees exactly where the solver had each part.
+        // CANCELLED (host pressed ESC): freeze the current strip as-is. Emit every part THAT WENT INTO
+        // THIS STRIP at its current optimized position, wrapping the long strip into columns sized by the
+        // sheet each column lands on (clamped to the last sheet), so the user sees exactly where the
+        // solver had each of them.
+        //
+        // NOT emitted: the parts `defer` just set aside because their minimum width exceeds THIS sheet's
+        // height. They have no position in this strip — they were never packed into it — so there is
+        // nothing to freeze, and inventing one would report a part as placed on a sheet it provably
+        // cannot fit at any rotation. They therefore come back UNPLACED (sheet id -1), which is a real,
+        // visible outcome: the host lays unplaced parts out in a row beside the sheets and the quality
+        // gate counts them (np_last_quality's `unplaced`). Nothing is silently lost; a cancelled solve on
+        // a mixed-size sheet set simply nests fewer parts than a completed one, which is the point of
+        // cancelling. (With uniform sheets `defer` is always empty and this paragraph is moot.)
         if (cancel_now) {
             std::vector<int> band_count((usize)max_bins, 0);
             std::vector<f32> band_wmax((usize)max_bins, 0.0f);
+            // Column boundaries along the strip, using EACH TARGET SHEET'S OWN width. The old code divided
+            // x by cur_w for every band, i.e. it cut a 1000-wide strip into 1000-wide columns and then laid
+            // them on sheets that are 600 wide — every part past the first column hung out of its sheet and
+            // drop_invalid_placements demoted it, costing 29 of 40 parts on a 1000/600 set. col_off[s] is
+            // the strip x where the column for sheet `sheet+s` begins. For a uniform sheet set col_off[s]
+            // == s*cur_w, so band = floor(x/cur_w) and dx = -band*cur_w exactly as before: no change there.
+            const int nb = (max_bins - sheet > 0) ? (max_bins - sheet) : 1;
+            std::vector<f32> col_off((usize)nb + 1, 0.0f);
+            for (int s = 0; s < nb; ++s) {
+                auto [w_s, h_s] = dims_for(per_sheet_dims, sheet + s, sheet_w, sheet_h);
+                (void)h_s;
+                col_off[(usize)s + 1] = col_off[(usize)s] + (w_s > 0.0f ? w_s : cur_w);
+            }
             live.placed_parts.for_each([&](PartKey, const PlacedPart& pi) {
                 usize gid = remaining[pi.part_id];
-                int band = (int)(pi.shape->bbox.x_min / sheet_w);   // x>=0 => truncation == floor
-                if (band < 0) band = 0;
-                int sh = sheet + band; if (sh > max_bins - 1) sh = max_bins - 1;
-                f32 dx = -(f32)(sh - sheet) * sheet_w;
+                int band = 0;                                    // last column whose start is <= x_min
+                while (band + 1 < nb && pi.shape->bbox.x_min >= col_off[(usize)band + 1]) ++band;
+                int sh = sheet + band;                           // <= max_bins-1 by construction of nb
+                f32 dx = -col_off[(usize)band];
                 std::vector<Point> v = pi.shape->vertices;
                 for (auto& p : v) p.x += dx;
                 RigidTransform dt = pi.d_transf; dt.tx += dx;
@@ -465,10 +628,10 @@ inline Sheets greedy_fill(const std::vector<std::pair<Part, usize>>& parts, cons
         }
 
         // STEP 1: geometric left-slide compaction on the feasible layout (no-op unless g_final_compact),
-        // reclaiming the relaxer's leftover slack so fewer parts straddle x = sheet_w and spill to sheet 2.
-        compact_left(live, sheet_w, sheet_h, holes);
+        // reclaiming the relaxer's leftover slack so fewer parts straddle x = cur_w and spill to sheet 2.
+        compact_left(live, cur_w, cur_h, holes);
 
-        // partition placed parts: keep those fully within [0, sheet_w], carry the rest
+        // partition placed parts: keep those fully within [0, cur_w], carry the rest
         struct Keep { usize gid; std::vector<Point> verts; RigidTransform dt; };
         std::vector<Keep> keep;
         std::vector<usize> carry;
@@ -477,7 +640,7 @@ inline Sheets greedy_fill(const std::vector<std::pair<Part, usize>>& parts, cons
             usize gid = remaining[pi.part_id];
             f32 xmax = pi.shape->bbox.x_max;
             if (!any || xmax < best_xmax) { best_xmax = xmax; best_local = pi.part_id; any = true; }
-            if (xmax <= sheet_w + 1e-3f) keep.push_back({gid, pi.shape->vertices, pi.d_transf});
+            if (xmax <= cur_w + 1e-3f) keep.push_back({gid, pi.shape->vertices, pi.d_transf});
             else carry.push_back(gid);
         });
         // progress guarantee: if nothing fit a column (shouldn't happen, parts < sheet_w), force leftmost
@@ -499,18 +662,25 @@ inline Sheets greedy_fill(const std::vector<std::pair<Part, usize>>& parts, cons
             try { shapes.push_back(Polygon::create(k.verts)); } catch (...) {}
         }
         for (auto& s : shapes)
-            if (s.bbox.x_max > sheet_w + 1e-2f || s.bbox.x_min < -1e-2f ||
-                s.bbox.y_max > sheet_h + 1e-2f || s.bbox.y_min < -1e-2f) out.inf++;
+            if (s.bbox.x_max > cur_w + 1e-2f || s.bbox.x_min < -1e-2f ||
+                s.bbox.y_max > cur_h + 1e-2f || s.bbox.y_min < -1e-2f) out.inf++;
         for (usize i = 0; i < shapes.size(); ++i)
             for (usize j = i + 1; j < shapes.size(); ++j)
                 if (brute_overlap(shapes[i], shapes[j])) out.bf++;
 
         out.counts.push_back(keep.size());
         out.widths.push_back(wmax);
+        // parts that didn't fit this column, plus the ones deferred above because this sheet was too short
         remaining = carry;
+        remaining.insert(remaining.end(), defer.begin(), defer.end());
         sheet++;
     }
-    out.n_sheets = sheet;
+    // Count sheets by the LAST one that actually holds a part: with mixed sizes a sheet can be skipped
+    // (nothing left fits it). For a uniform sheet set every iteration keeps >= 1 part (progress guarantee),
+    // so this equals the old `sheet` counter exactly.
+    int last_used = 0;
+    for (const auto& p : out.placements) if (p.sheet + 1 > last_used) last_used = p.sheet + 1;
+    out.n_sheets = last_used;
     out.ok = (out.inf == 0) && (out.bf == 0) && remaining.empty();
     return out;
 }

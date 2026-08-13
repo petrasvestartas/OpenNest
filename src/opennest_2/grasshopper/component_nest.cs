@@ -69,6 +69,10 @@ namespace opennest_2
         private GH_Structure<IGH_GeometricGoo> _out_allgeo, _out_geomattr;
         private GH_Structure<GH_Transform> _out_xforms;
         private GH_Structure<GH_Integer> _out_sheetid;
+        // Quality messages for the cached result. Grasshopper clears runtime messages on every solution, and
+        // a "live — watching" re-expire republishes the cached outputs WITHOUT re-solving — so the overlap /
+        // unplaced warnings have to be re-emitted alongside them or they vanish while the layout stays.
+        private List<Tuple<GH_RuntimeMessageLevel, string>> _out_messages;
 
         public override void DrawViewportWires(IGH_PreviewArgs args)
         {
@@ -250,6 +254,8 @@ namespace opennest_2
         private void EmitCachedOutputs(IGH_DataAccess DA)
         {
             if (!_hasResult) return;
+            if (_out_messages != null)
+                foreach (var m in _out_messages) AddRuntimeMessage(m.Item1, m.Item2);
             if (_out_sheets   != null) DA.SetDataList(0, _out_sheets);
             if (_out_borders  != null) DA.SetDataTree(1, _out_borders);
             if (_out_allgeo   != null) DA.SetDataTree(2, _out_allgeo);
@@ -266,6 +272,7 @@ namespace opennest_2
             _hasResult = false;
             _out_sheets = null; _out_borders = null; _out_allgeo = null;
             _out_xforms = null; _out_sheetid = null; _out_sheettxt = null; _out_geomattr = null;
+            _out_messages = null;
             nest_geos = new List<nest_rhino_lib.nest_geo>();
             bbox = new BoundingBox();
             _previewBorders = new List<Polyline>();
@@ -479,6 +486,8 @@ namespace opennest_2
                 this.Message = (_cancelled ? ("stopped @ " + nest.rounds_done) : (nest.rounds_done + " rounds"))
                              + "  →  " + nest.output_sheets.Count + " sheet(s)"
                              + (nest.BatchMode ? ("  · " + nest.BatchCount + " batches") : "");
+
+                ReportSolutionQuality(nest);
 
                 ///////////////////////////////////////////////////////////////////////////////////
                 //output
@@ -701,6 +710,90 @@ namespace opennest_2
             {
                 try { if (_runActive && _phase == Phase.Idle) { _runButtonRequested = true; ExpireSolution(true); } } catch { }
             }));
+        }
+
+        // Tell the user what actually came out of the solve instead of publishing it silently. Three things
+        // were previously invisible:
+        //   * parts that fit on NO sheet — laid out in a row to the right with sheet id -1. The count was
+        //     tracked (_unplacedTotal) and never read, so "I gave it N sheets and only got M back" looked
+        //     like a solver bug when it was simply "your parts need more sheets than you supplied".
+        //   * a layout the engine itself verified as OVERLAPPING. The relaxation solver optimises a
+        //     penetration-depth proxy over inscribed poles, so an overlap-free result is not guaranteed;
+        //     greedy_fill brute-force-checks every sheet and the ESC snapshot is explicitly best-effort.
+        //     That verdict now crosses the ABI (np_last_quality) — surface it as an ERROR, because an
+        //     overlapping nest cut on a real machine destroys material.
+        //   * all-rectangle input, where this solver is simply the wrong tool (measured on the bench:
+        //     ~72% sheet utilisation for identical rectangles vs a rectangle packer's ~96%).
+        //
+        // There is deliberately NO "part sticks out of its sheet" error here. The engine's drop-invalid
+        // pass runs immediately before the verification, applies the same bounds predicate, and demotes
+        // every violator to unplaced — so such an error could never fire, and a user-facing "please report
+        // this as a bug" that cannot fire is worse than no message. The same event reaches the user
+        // through the unplaced Warning below, which now says how many parts got there by demotion.
+        private void ReportSolutionQuality(NpRun nest)
+        {
+            var msgs = new List<Tuple<GH_RuntimeMessageLevel, string>>();
+            if (nest == null) { _out_messages = msgs; return; }
+
+            if (nest.QAvailable && nest.QOverlapPairs > 0)
+                msgs.Add(Tuple.Create(GH_RuntimeMessageLevel.Error,
+                    nest.QOverlapPairs + " pair(s) of parts OVERLAP in this layout — do not cut it. "
+                    + (nest.QCancelled
+                        ? "The solve was stopped early (ESC / Run off), so the result is a best-effort snapshot; let it finish."
+                        : "Raise Iterations, or use OpenNest2 (no-fit-polygon), which never publishes an overlapping placement.")));
+
+            int unplaced = nest.UnplacedCount;
+            if (unplaced > 0)
+            {
+                // Parts reach the overflow row two ways, and the difference is what the user should act on:
+                // never placed at all (not enough sheet area) vs placed and then taken back off because the
+                // placement did not actually fit that sheet (usually a sheet SMALLER than the first one).
+                int demoted = nest.QAvailable ? Math.Min(nest.QDemoted, unplaced) : 0;
+                msgs.Add(Tuple.Create(GH_RuntimeMessageLevel.Warning,
+                    unplaced + " part(s) did not fit on the sheets you supplied and were laid out in a row to the "
+                    + "RIGHT of them (Sheet Id = -1). "
+                    + (demoted > 0
+                        ? demoted + " of them did not fit the specific sheet the solver tried and were taken back off it"
+                          + (nest.QCancelled ? " (the solve was stopped early — let it finish for a better layout). " : ". ")
+                        : "")
+                    + "Add sheets (Copies on the Sheets component), enlarge them, "
+                    + "or remove parts. The solver never uses more sheets than you give it."));
+            }
+
+            if (AllPartsAreRectangles(_pendingNestGeo))
+                msgs.Add(Tuple.Create(GH_RuntimeMessageLevel.Remark,
+                    "Every part is a rectangle. OpenNestCollision is a collision/relaxation solver built for "
+                    + "irregular shapes — on all-rectangle input OpenNest2 is both faster and packs tighter. "
+                    + "Switch to OpenNest2 unless you specifically need this solver's behaviour."));
+
+            _out_messages = msgs;
+            foreach (var m in msgs) AddRuntimeMessage(m.Item1, m.Item2);
+        }
+
+        // True when EVERY nested outline is a 4-corner rectangle (closing duplicate tolerated, ~90 deg corners).
+        // Cheap: one pass over the outer ring of each group, no Rhino native calls.
+        private static bool AllPartsAreRectangles(nest_rhino_lib.nest_geo geo)
+        {
+            if (geo == null || geo.boundary_sorted == null || geo.boundary_sorted.Count == 0) return false;
+            foreach (var group in geo.boundary_sorted)
+            {
+                if (group == null || group.Count == 0) return false;
+                if (group.Count > 1) return false;                       // has interior holes -> not a plain rectangle
+                Polyline pl = group[0].Item2;
+                if (pl == null) return false;
+                int n = pl.Count;
+                if (n >= 2 && pl[0].DistanceTo(pl[n - 1]) < 1e-9) n--;   // drop the closing duplicate
+                if (n != 4) return false;
+                for (int i = 0; i < 4; i++)
+                {
+                    Vector3d a = pl[(i + 1) % 4] - pl[i];
+                    Vector3d b = pl[(i + 2) % 4] - pl[(i + 1) % 4];
+                    if (a.Length < 1e-9 || b.Length < 1e-9) return false;
+                    a.Unitize(); b.Unitize();
+                    if (Math.Abs(a * b) > 1e-6) return false;            // corner not square
+                }
+            }
+            return true;
         }
 
         // Unwrap a generic GH goo into a native OpenNest type (the Sheets/Geometry inputs carry these as
@@ -945,6 +1038,72 @@ namespace opennest_2
         public long rounds_done = 0;      // relaxation rounds actually completed (for the status label)
         public int rc = 0;
 
+        // ---- SOLUTION QUALITY (read back from the engine after every solve) -------------------------
+        // The relaxation solver optimises against a penetration-depth proxy over inscribed poles, not
+        // exact polygon geometry, so a returned layout is NOT overlap-free by construction. greedy_fill
+        // has always brute-force-verified every sheet it emits, and the ESC snapshot is documented as
+        // "positions are as-is, may still overlap" — but none of that used to cross the ABI, so this
+        // component published a broken layout exactly like a good one. np_last_quality re-verifies the
+        // FINAL placements; PASS 2 turns a non-clean verdict into a Grasshopper message.
+        public int QOverlapPairs = 0;    // pairs of parts that genuinely interpenetrate on a sheet. A part
+                                         //   nested INSIDE another part's hole is legitimate and excluded;
+                                         //   one that pokes back out through the hole wall is counted.
+                                         //   "Genuinely" = deeper than a thin contact skin, because TOUCHING
+                                         //   is the desired outcome of a tight nest and this drives an Error.
+                                         //   The engine's skin used to be computed by scaling each part
+                                         //   toward its AREA CENTROID, which is not a shrink at all for a
+                                         //   concave part (a U/C centroid sits outside the material), so
+                                         //   concave layouts with no overlap anywhere raised this Error:
+                                         //   measured 7 of 24 U/C bench runs before the fix, 0 after.
+        public int QDemoted = 0;         // parts the solver placed and the engine then took back OFF a
+                                         //   sheet (they hung outside it / sat in a sheet hole). Already
+                                         //   inside UnplacedCount; reported to explain WHY they are there.
+        public bool QCancelled = false;  // the layout is a best-effort snapshot of a stopped solve
+        public bool QAvailable = false;  // false when the loaded nest_physics.dll predates np_last_quality
+
+        // NOT surfaced to the user: np_last_quality's out_out_of_bounds ("part is not on usable material of
+        // the sheet it is reported on" — off the edge, or on one of that sheet's keep-out holes). It is an
+        // internal-consistency diagnostic, and with the engine's default drop-invalid pass on it is 0 BY
+        // CONSTRUCTION — that pass applies the identical two predicates immediately before the verification
+        // and demotes every violator, so a message driven by it could never fire. Its replacement is
+        // QDemoted, which reports the same underlying event (a part that did not really fit the sheet it
+        // was put on) via the outcome the user can actually see: the part sitting in the overflow row.
+        // It is still read (and discarded) rather than deleted because it is the engine's tripwire for a
+        // post-pass moving a part AFTER the demotion — the sheet-id renumbering did exactly that.
+
+        // Parts that got no sheet and were laid out in the overflow row OUTSIDE the sheets. Computed by
+        // Assemble/AssembleBatches; PASS 2 reports it. (Was tracked and then never read — the user got no
+        // hint that parts had silently been left off the nest.)
+        public int UnplacedCount => _batchMode ? _unplacedBatchTotal : _unplacedTotal;
+
+        // Declared here rather than in NestPhysicsWrapper so this diagnostic stays self-contained: an
+        // older nest_physics.dll without the export throws EntryPointNotFoundException on first call,
+        // which ReadQuality swallows (QAvailable stays false and no message is shown).
+        [System.Runtime.InteropServices.DllImport("nest_physics",
+            CallingConvention = System.Runtime.InteropServices.CallingConvention.Cdecl)]
+        private static extern int np_last_quality(out int overlapPairs, out int outOfBounds,
+                                                  out int unplaced, out int cancelled, out int demoted);
+
+        // Accumulate the engine's verdict for the solve that just finished (batch mode sums its batches).
+        //
+        // np_last_quality reports whichever solve wrote the engine's globals LAST — the verdict is
+        // attributed by TIMING, not by solve (see the note on the g_q_* atomics in nest_physics_capi.cpp).
+        // That is correct here only because every np_nest call is serialised: this component holds
+        // EngineGate.Physics for the whole solve, and batch mode runs its inner NpRuns one at a time, so
+        // ReadQuality always runs between "our np_nest returned" and "anyone else's np_nest starts".
+        // If that ever changes, the verdict has to become a per-call out-param of np_nest — a lock here
+        // would not help, because by then the numbers already belong to a different layout.
+        private void ReadQuality()
+        {
+            try
+            {
+                np_last_quality(out int ovl, out int _oob, out int _unp, out int can, out int dem);
+                QOverlapPairs += ovl; QDemoted += dem; QCancelled |= (can != 0);
+                QAvailable = true;
+            }
+            catch { QAvailable = false; }   // DLL older than the export -> stay silent rather than guess
+        }
+
         // ---- BATCH MODE (Batch option ON): each batch is nested into its own tight block by an inner NpRun,
         // then the blocks are shelf-tiled across the sheets so related parts stay clustered. In combined
         // mode (_batches == null) this whole block is inert and the single-solve path below runs as before. ----
@@ -1113,8 +1272,13 @@ namespace opennest_2
             // preview (~sub-second), ~4000 = the tight all-on-one-sheet pack (~2 min).
             np.iter_mode = 1; np.time_budget_secs = 0; np.iter_budget = (long)Math.Max(1, max_iterations);
             // BATCH mode packs each batch into ONE sheet-sized block (maxSheetsOverride=1, fitModeOverride=1);
-            // combined mode uses all sheets and the user's Fit choice.
-            np.max_sheets = maxSheetsOverride > 0 ? maxSheetsOverride : (nsheet > 0 ? nsheet : 6);
+            // combined mode uses ALL the sheets the user supplied.
+            // NOTE: this used to fall back to a hardcoded 6 when nsheet==0. That literal was unreachable (a
+            // run with no sheets is stopped by `Ready`) but it hid the one place a cap can silently apply:
+            // nest_physics_capi.cpp turns max_sheets<=0 into 6 bins. Pass the real count and never 0, so the
+            // solver can only ever be limited by the sheets actually on the canvas. Parts that still don't
+            // fit are reported to the user in PASS 2 rather than quietly dropped into the overflow row.
+            np.max_sheets = maxSheetsOverride > 0 ? maxSheetsOverride : Math.Max(1, nsheet);
             np.n_starts = Math.Max(1, (int)GetP(2, 1));   // multi-start: run N seeds, keep the densest (positional [2] after spacing+simplify removed)
             np.part_holes_mode = partHolesMode;   // 0=off, 1=post-pass fill, 2=fill-first (from Element Holes dropdown)
             np.pole_max = poles > 0 ? poles : 0;      // surrogate poles/part (16 ≈ 2.7x faster; 0 = default 48)
@@ -1195,7 +1359,7 @@ namespace opennest_2
             np.seed = (int)GetP(1, 100); if (np.seed < 0) np.seed = 0;
             np.iter_mode = 1; np.time_budget_secs = 0; np.iter_budget = (long)Math.Max(1, max_iterations);
             np.n_starts = Math.Max(1, (int)GetP(2, 1));
-            np.max_sheets = nsheet > 0 ? nsheet : 6;
+            np.max_sheets = Math.Max(1, nsheet);   // progress/diagnostic only; each batch carries its own params
             np.part_holes_mode = partHolesMode; np.pole_max = poles > 0 ? poles : 0;
             np.final_compact = compact ? 1 : 0; np.fit_mode = fitMode;
             _np = np;
@@ -1436,6 +1600,11 @@ namespace opennest_2
                     _batches[b].SolveCore();
                     long r = _batches[b].rounds_done;
                     BatchRoundsDone += r; rounds_done += r;
+                    // roll each batch's quality verdict up to this (outer) run, which is what PASS 2 reads
+                    QOverlapPairs += _batches[b].QOverlapPairs;
+                    QDemoted += _batches[b].QDemoted;
+                    QCancelled |= _batches[b].QCancelled;
+                    QAvailable |= _batches[b].QAvailable;
                 }
                 return;
             }
@@ -1453,6 +1622,7 @@ namespace opennest_2
                 _phcA, _phvcA, _phxyA,
                 ref _np, _out_tx, _out_ty, _out_angle, _out_sheet, out _n_sheets_used);
             rounds_done = NestPhysicsWrapper.np_progress();
+            ReadQuality();   // engine's verdict on the layout it just returned (see the Q* fields)
             if (rc != 0) Rhino.RhinoApp.WriteLine("nest_physics np_nest returned " + rc.ToString());
         }
 

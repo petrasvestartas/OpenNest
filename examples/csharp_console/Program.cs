@@ -1,7 +1,8 @@
 // OpenNest — standalone C# console example (no Rhino).
 //
 // Runs the 8 examples from the docs site (the same set as the compas_nest Python examples) by
-// P/Invoking the two native engines directly. The native libraries (nfp_nest, nest_physics) are
+// P/Invoking OpenNest's two 2D engines directly (the third engine, nest_spectral, does 3D mesh packing
+// and is not exercised here). The native libraries (nfp_nest, nest_physics) are
 // resolved by bare name, so they must sit next to this exe — the .csproj copies them after build,
 // and the CMake superbuild builds them first. See docs/api/csharp/.
 

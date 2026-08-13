@@ -15,7 +15,9 @@ include(ExternalProject)
 
 get_filename_component(REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 
-# --- 1) the two native engines (reuse their standalone CMakeLists, unchanged) ---
+# --- 1) the two 2D engines (reuse their standalone CMakeLists, unchanged). OpenNest has THREE native
+#        engines; the third, nest_spectral (3D mesh packing, src/nest_spectral_cpp), is deliberately not
+#        built here because none of the example apps call it. The repo-root CMakeLists.txt builds all three.
 ExternalProject_Add(nfp_engine
   SOURCE_DIR  ${REPO_ROOT}/src/opennest_cpp
   BINARY_DIR  ${REPO_ROOT}/src/opennest_cpp/build

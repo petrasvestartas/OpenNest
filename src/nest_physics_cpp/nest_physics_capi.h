@@ -79,6 +79,44 @@ NP_EXPORT int np_nest(
     int*          out_sheet_id,
     int*          out_n_sheets);
 
+// Quality verdict of the LAST completed np_nest, measured by exact brute-force verification of the FINAL
+// placements (after every post-pass), so it describes precisely the layout np_nest just returned:
+//   out_overlap_pairs  pairs of parts that genuinely interpenetrate on the same sheet   (should be 0).
+//                      A part sitting INSIDE another part's hole is legitimate nesting (part_holes_mode
+//                      1/2 puts it there on purpose) and is NOT counted; a part that pokes out through
+//                      the hole wall it was seated in IS counted. "Genuinely" means deeper than a thin
+//                      contact skin (a fraction of each part's own size): touching is the desired outcome
+//                      of a tight nest, so a strict edge test would fire on most good layouts.
+//   out_out_of_bounds  parts that are not on usable material of the sheet they are reported on — either
+//                      their bbox leaves the sheet, or they sit on one of that sheet's keep-out holes.
+//                      INTERNAL CONSISTENCY DIAGNOSTIC, not a user-facing condition: with the default
+//                      drop-invalid pass on, that pass has already demoted every such part to unplaced
+//                      using the same two predicates, so this is 0 by construction. It can only be
+//                      non-zero with the dev switch NP_DROP_INVALID=0 — which is exactly what it exists
+//                      for (A/B harnessing) — or if a future post-pass moves a part after the demotion,
+//                      which is the regression this counter is here to catch.
+//                      Hosts should report `out_demoted` / `out_unplaced` to users, never this.
+//   out_unplaced       input parts that got no sheet (host lays them outside). Includes out_demoted.
+//   out_cancelled      1 if the solve was stopped early (np_cancel) — that snapshot is best-effort
+//   out_demoted        of out_unplaced, how many the solver HAD placed and the drop-invalid pass took
+//                      back off a sheet because they hung outside it or sat in a sheet hole
+// Any out-param may be NULL. Returns 1 when the layout is CLEAN (no overlaps, in bounds, nothing
+// unplaced, not cancelled), else 0.
+// The relaxation solver optimises against a penetration-depth proxy over inscribed poles, not exact
+// polygon geometry, so a returned layout is not overlap-free by construction — this is the check.
+//
+// SCALE. Bounds are judged with a tolerance that is RELATIVE to the sheet/part size, BUT WITH AN ABSOLUTE
+// FLOOR of 0.002 model units (2 x the packer's own absolute placement slack — see bounds_tol in
+// solver/driver.hpp for why that floor cannot be removed without moving layouts). The floor dominates
+// whenever the reference length is below ~20 model units, so in a METRE-unit document there is a blind
+// band: an excursion of up to 0.002 units past the sheet edge is accepted, which on a 1x1 m sheet is 0.1%
+// of the sheet span, against 0.0025% at millimetre scale. Measured: the identical relative defect
+// (np_bench --shift=0.1) is demoted at --scale=1 and ships at --scale=0.001 hanging 0.0161% of the sheet
+// span outside. Above that band the verdict IS the same in mm and in m. The overlap test has no such
+// floor — its skin is a pure fraction of each part's own size.
+NP_EXPORT int np_last_quality(int* out_overlap_pairs, int* out_out_of_bounds,
+                              int* out_unplaced, int* out_cancelled, int* out_demoted);
+
 // Cooperative cancel + progress for an interactive host that runs np_nest on a background thread.
 // np_cancel(): ask the running solve to stop at the next round and return its best-so-far (valid nest).
 // np_cancel_reset(): clear the flag (np_nest also clears it on entry).

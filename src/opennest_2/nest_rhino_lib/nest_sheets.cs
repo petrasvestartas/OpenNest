@@ -12,8 +12,9 @@ namespace nest_rhino_lib
 
     /// <summary>
     /// Holds the sheets (bins) to nest into. Like nest_geo, any spacing/margin is applied HERE, upstream of
-    /// the solver — the solver does no offsetting. To keep parts set back from the sheet edge, call
-    /// <see cref="offset_sheet_boundary"/> before solving:
+    /// the solver, and the solver is then handed spacing 0 so it does not apply one of its own (see the
+    /// nest_geo header — the engine CAN offset, callers deliberately do not let it). To keep parts set back
+    /// from the sheet edge, call <see cref="offset_sheet_boundary"/> before solving:
     ///
     ///     sheets.offset_sheet_boundary(spacing / 2);   // shrink outer in, grow holes out
     ///
@@ -318,8 +319,16 @@ namespace nest_rhino_lib
         // Inward MARGIN on the NESTING container: each sheet's OUTER boundary shrinks by `margin` (parts keep a
         // setback from the edge), each sheet HOLE grows by `margin` (keep-out regions get clearance). Reuses the
         // same orientation-agnostic, collinear-merged offset as parts. On failure the original is kept.
+        // Rings the LAST offset_sheet_boundary call could NOT offset (left at their original size, so those
+        // sheets give parts no setback from the edge) and the number it attempted. Same reason as
+        // nest_geo.last_offset_failures: a failed offset here is a SILENT zero-gap, so callers warn on it.
+        public int last_offset_failures;
+        public int last_offset_rings;
+
         public void offset_sheet_boundary(double margin)
         {
+            this.last_offset_failures = 0;
+            this.last_offset_rings = 0;
             if (System.Math.Abs(margin) < 1e-9) return;
             double tol = Rhino.RhinoDoc.ActiveDoc.ModelAbsoluteTolerance;
             for (int s = 0; s < this.sheets.Length; s++)
@@ -327,10 +336,12 @@ namespace nest_rhino_lib
                 if (this.sheets[s] == null) continue;
                 for (int j = 0; j < this.sheets[s].Length; j++)
                 {
-                    if (this.sheets[s][j] == null || this.sheets[s][j].Count < 4) continue;
+                    this.last_offset_rings++;
+                    if (this.sheets[s][j] == null || this.sheets[s][j].Count < 4) { this.last_offset_failures++; continue; }
                     // sheet OUTER (j==0) shrinks (isHole=true); sheet HOLES (j>0) grow (isHole=false)
                     Polyline off = nest_geo.offset_closed_polyline(this.sheets[s][j], margin, j == 0, tol);
                     if (off != null && off.Count >= 4) this.sheets[s][j] = off;
+                    else this.last_offset_failures++;
                 }
             }
         }

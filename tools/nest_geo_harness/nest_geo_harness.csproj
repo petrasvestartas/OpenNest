@@ -1,0 +1,29 @@
+<!-- Rhino-free regression test for the NESTING-outline math in nest_rhino_lib.
+
+     Run it from the repo root with "dotnet run" against this project, in Release.
+     Exit code 0 = every check passed.
+
+     It compiles the REAL production sources (they are Rhino-free on purpose, exactly so this is possible)
+     rather than a copy, so the assertions bind to what ships. CI does not build this project (the publish
+     workflow names its csproj paths explicitly), so it is a developer tool, not part of the plugin. -->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>nest_geo_harness</AssemblyName>
+    <RootNamespace>nest_geo_harness</RootNamespace>
+    <NoWarn>CS0168;CS0219;CS0162;CS0649;CS0169;CS0414;CS0660;CS0661</NoWarn>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\src\opennest_2\nest_rhino_lib\curve_sampling.cs" Link="curve_sampling.cs" />
+    <Compile Include="..\..\src\opennest_2\nest_rhino_lib\polygon_offset.cs" Link="polygon_offset.cs" />
+    <Compile Include="..\..\src\opennest_2\nest_rhino_lib\Text\Util\Clipper.cs" Link="Clipper.cs" />
+    <Compile Include="Program.cs" />
+  </ItemGroup>
+
+</Project>

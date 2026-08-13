@@ -115,6 +115,13 @@ std::vector<int> buildInputs(
         int q = (pqty && pqty[i] > 0) ? pqty[i] : 1;
         for (int c = 0; c < q; c++) {
             auto poly = std::make_shared<NFP>();
+            // Id = index in ctx.Polygons / ctx.Sheets, the SAME numbering NestingContext::init()
+            // assigns. init() only runs on the first NestIterate, so any path that returns before
+            // the GA starts (the rectangle fast path) would otherwise read the default Id 0 for
+            // EVERY polygon and sheet — and readOutputs reports poly->sheet->Id as out_sheet_id,
+            // so an all-rectangle job came back with every part on sheet 0 (multi-sheet layouts
+            // collapsed onto one sheet, stacked). Number them here, where they are created.
+            poly->Id = static_cast<int>(ctx.Polygons.size());
             poly->source = i;
             poly->rotationCount = (prot && prot[i] > 0) ? prot[i] : 0;   // per-part rotation override
             poly->Points = outer;
@@ -133,6 +140,7 @@ std::vector<int> buildInputs(
     for (int i = 0; i < sheet_count; i++) {
         int nv = svc[i];
         auto sheet = std::make_shared<NFP>();
+        sheet->Id = i;          // see the part loop above: out_sheet_id IS this Id
         sheet->source = i;
         for (int k = 0; k < nv; k++)
             sheet->AddPoint(Point(sxy[sxyCur + 2*k], sxy[sxyCur + 2*k + 1]));
@@ -267,15 +275,29 @@ int rectFastPath(NestingContext& ctx, const NestConfig& cfg, const NfpParams* pa
     blocked.resize(maxSheets);
     for (int i = 0; i < maxSheets; i++) {
         auto b = GeometryUtil::getPolygonBounds(*ctx.Sheets[i]);
-        binDims.push_back({ b.x + sheetSpacing, b.y + sheetSpacing,
-                            b.width - 2 * sheetSpacing, b.height - 2 * sheetSpacing });
-        // Each rect void becomes a pre-blocked region. Inflate by `spacing` on all four sides:
-        // part footprints only carry +spacing on two sides, so this keeps the gap on every side
-        // of the defect (conservative — never lets a part touch the void).
+        // FOOTPRINT FRAME. Every part is packed as (w + spacing) x (h + spacing) — the gap rides
+        // on its top and right edge only (see `items` below) — so the usable region must carry the
+        // SAME +spacing or the sheet silently loses one whole gap of width and height. With it,
+        // k parts in a row need k*(w+spacing) <= usable+spacing, i.e. k*w + (k-1)*spacing <= usable:
+        // k parts and the k-1 gaps BETWEEN them, with no phantom gap past the last one.
+        //
+        // This is exactly the convention the GA path uses — NestingContext::init() offsets each part
+        // OUT by spacing/2 (footprint w+spacing) and each sheet IN by (sheetSpacing - spacing/2),
+        // which admits real part positions in [sheetSpacing, W - sheetSpacing]. Without the
+        // +spacing here the fast path admitted only [sheetSpacing, W - sheetSpacing - spacing] and
+        // so under-filled every sheet relative to the GA whenever spacing > 0.
+        double usableW = b.width  - 2 * sheetSpacing;
+        double usableH = b.height - 2 * sheetSpacing;
+        if (usableW <= 0 || usableH <= 0) usableW = usableH = 0;   // sheetSpacing ate the sheet
+        else { usableW += spacing; usableH += spacing; }
+        binDims.push_back({ b.x + sheetSpacing, b.y + sheetSpacing, usableW, usableH });
+        // Each rect void becomes a pre-blocked region, sized in the same footprint frame: a void
+        // occupying [vx, vx+vw] blocks exactly [vx, vx+vw+spacing]. A part footprint ending at vx
+        // has its real body ending at vx-spacing, and one starting at vx+vw+spacing starts a full
+        // `spacing` clear of the void — the gap is kept on BOTH sides with no extra loss.
         for (const auto& c : ctx.Sheets[i]->children) {
             auto vb = GeometryUtil::getPolygonBounds(*c);
-            blocked[i].push_back({ vb.x - spacing, vb.y - spacing,
-                                   vb.width + 2 * spacing, vb.height + 2 * spacing });
+            blocked[i].push_back({ vb.x, vb.y, vb.width + spacing, vb.height + spacing });
         }
     }
 
@@ -289,7 +311,13 @@ int rectFastPath(NestingContext& ctx, const NestConfig& cfg, const NfpParams* pa
         auto b = GeometryUtil::getPolygonBounds(p);
         pinfo[k] = { b.x, b.y, b.width, b.height };
         int rc = p.rotationCount > 0 ? p.rotationCount : cfg.rotations;   // per-part override
-        items.push_back({ b.width + spacing, b.height + spacing, k, rc >= 2 });
+        // canRotate = may this part turn under the CURRENT settings; canRotateMin = may it turn
+        // even with the global rotation count at its lowest (i.e. its own override says so). The
+        // packer needs both so its rotation-floor passes reproduce the exact layout the user would
+        // get by turning rotation off, and "more rotation" can never place FEWER parts. (It can
+        // still use more sheets when the sheet supply runs out — see the guarantee spelled out
+        // above packMaxRects in RectPack.h; the extra sheets always carry extra parts.)
+        items.push_back({ b.width + spacing, b.height + spacing, k, rc >= 2, p.rotationCount >= 2 });
     }
 
     auto placed = packMaxRects(items, binDims, blocked.empty() ? nullptr : &blocked);

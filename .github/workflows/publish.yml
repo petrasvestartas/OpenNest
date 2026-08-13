@@ -184,26 +184,105 @@ jobs:
       #         download the user loads by hand inside Grasshopper 2 (Rhino 9 only). The command MUST match the
       #         Rhino runtime: a net7/RC8 .rhp can't load on Rhino 9, so the rh9 packages ship the net8/RC9
       #         command. yak infers the distribution tag from the inspected plug-in; we force it by rename
-      #         (guide-sanctioned) since we KNOW which Rhino each staging targets. ----
+      #         (guide-sanctioned) since we KNOW which Rhino each staging targets.
+      #
+      #         .NET MULTI-TARGETING (the rh8-win package only). Rhino 8 on Windows runs on EITHER runtime —
+      #         .NET Core or .NET Framework 4.8 (_SetDotNetRuntime) — and a .NET Core .gha simply cannot load
+      #         under .NET Framework. Shipping only the net7.0-windows build is why Rhino-8/netfx users saw
+      #         "installs but the components never appear" and had to switch runtimes by hand. Yak has
+      #         supported per-framework payload folders since Rhino 8.2 (RH-76604, "LoadPlugin: Added support
+      #         for multi-targeting plugins to have specific assemblies for .NET Core vs. .NET Framework"), so
+      #         the rh8-win package now carries BOTH, laid out exactly as McNeel's guide shows
+      #         (developer.rhino3d.com "The Anatomy of a Package" §"A note on .NET multi-targeting" and
+      #         "Creating a Multi-targeted Rhino Plug-In Package"):
+      #             manifest.yml            <- at the ROOT, OUTSIDE the framework folders
+      #             net48/   [complete payload]
+      #             net7.0/  [complete payload]
+      #         Rules that shape the code below:
+      #           * The package ROOT must contain NO .rhp/.gha — RH-76604: "For yak packages, it will only do
+      #             this if there are no .rhp/.gha files directly in its root package folder." One stray
+      #             root-level .gha silently disables the whole framework-folder mechanism.
+      #           * Each folder must be a COMPLETE payload: the .gha + its managed deps + the three native
+      #             engines + the command .rhp (+ .deps/.runtimeconfig). Nothing is shared from the root.
+      #           * Folder names are the dotnet SDK's own TFM directory names. `net7.0` is what both McNeel
+      #             examples use and it roll-forwards (McNeel QA on RH-84510: "Works well for net7.0/net48 and
+      #             even when I set to net8.0"); `net7.0-windows` is accepted too (RH-76604) but buys nothing
+      #             in a win-only package, so we stay on the documented plain name.
+      #           * grasshopper2/ is NOT a framework name, so Rhino skips it when picking a folder — the GH2
+      #             files stay a plain manual download exactly as before.
+      #         The other three packages stay FLAT on purpose:
+      #           * rh9-win — Rhino 9 defaults to .NET Core and its /netfx path is deprecated by McNeel, and
+      #             more decisively opennest_commands has no RhinoCommon-9 net48 build (its net48 TFM is built
+      #             against RhinoCommon 8), so a net48/ folder here would ship a .rhp Rhino 9 refuses to load.
+      #           * rh8-mac / rh9-mac — macOS has no .NET Framework at all; Rhino 8/9 for Mac are .NET Core
+      #             only, so there is no second runtime to target. ----
       - name: Build OpenNest Yak packages (R8+R9, win+mac)
         shell: pwsh
         run: |
           $yak = "$env:GITHUB_WORKSPACE/yak.exe"
-          function Build-Pkg($stage, $platform, $rh, $ghaDir, $cmdDir, $manifestDir, $useDylibs) {
-            New-Item -ItemType Directory -Force $stage | Out-Null
+          # Every payload staged below appends one row here; dumped to pkg_layout.json at the end of this step
+          # and consumed by step 7, which re-checks the SHIPPED zip against it.
+          $script:layout = @()
+          # Stages ONE complete, self-sufficient runtime payload into $dest: the GH1 .gha with the managed
+          # dependencies its TFM needs, the three native engines, and the Rhino command .rhp. Called once for a
+          # flat package, once per framework folder for a multi-targeted one.
+          function Add-Payload($dest, $ghaDir, $cmdDir, $useDylibs) {
+            if (-not (Test-Path "$ghaDir/opennest_2.gha"))         { throw "missing $ghaDir/opennest_2.gha - did the opennest_2 build cover this TFM?" }
+            if (-not (Test-Path "$cmdDir/opennest_commands.rhp"))  { throw "missing $cmdDir/opennest_commands.rhp" }
+            New-Item -ItemType Directory -Force $dest | Out-Null
             # GH1 payload (managed deps included). On mac, drop the Windows-native DLLs the PostBuild copied in
             # and ship the universal dylibs instead.
-            Copy-Item "$ghaDir/*" $stage -Recurse -Force
+            Copy-Item "$ghaDir/*" $dest -Recurse -Force
             if ($useDylibs) {
-              Remove-Item "$stage/nfp_nest.dll","$stage/nest_physics.dll","$stage/nest_spectral.dll" -Force -ErrorAction SilentlyContinue
-              Copy-Item "mac_dylibs/*.dylib" $stage -Force
+              Remove-Item "$dest/nfp_nest.dll","$dest/nest_physics.dll","$dest/nest_spectral.dll" -Force -ErrorAction SilentlyContinue
+              Copy-Item "mac_dylibs/*.dylib" $dest -Force
             }
             # Rhino command — net7/RC8 for the rh8 package, net8/RC9 for the rh9 package (runtimeconfig.json
-            # must be present for the .NET plug-in to start).
-            Copy-Item "$cmdDir/opennest_commands.rhp" $stage -Force
-            Copy-Item "$cmdDir/opennest_commands.deps.json" $stage -Force -ErrorAction SilentlyContinue
-            Copy-Item "$cmdDir/opennest_commands.runtimeconfig.json" $stage -Force -ErrorAction SilentlyContinue
-            # GH2 manual-load subfolder: the net8 (portable) .rhp + GH1 payload + engines beside it.
+            # must be present for the .NET plug-in to start). It resolves opennest_2.gha out of its OWN folder
+            # (OpenNestCommandPlugIn.ResolveOpenNest2 uses Assembly.Location), so .rhp and .gha must stay side
+            # by side — which is why a multi-targeted package repeats BOTH in every framework folder.
+            Copy-Item "$cmdDir/opennest_commands.rhp" $dest -Force
+            Copy-Item "$cmdDir/opennest_commands.deps.json" $dest -Force -ErrorAction SilentlyContinue
+            Copy-Item "$cmdDir/opennest_commands.runtimeconfig.json" $dest -Force -ErrorAction SilentlyContinue
+            # The engines arrive via opennest_2's PostBuild copy, which runs per-TFM into each $(TargetDir).
+            # A missing one is silently skipped there (Exists guard), and the P/Invokes would then throw
+            # DllNotFoundException in Rhino — fail the release here instead.
+            $ext = if ($useDylibs) { "dylib" } else { "dll" }
+            foreach ($e in @("nfp_nest", "nest_physics", "nest_spectral")) {
+              if (-not (Test-Path "$dest/$e.$ext")) { throw "missing $dest/$e.$ext - the native engine never reached the package" }
+            }
+            # Record what this payload was built FROM so step 7 can diff the staged inputs against the files
+            # that actually survive into the .yak, with no second copy of these paths to drift out of sync.
+            # $dest is "<stage>" (flat) or "<stage>/<framework folder>".
+            $rel = ($dest -replace '\\', '/').TrimEnd('/')
+            $parts = $rel -split '/', 2
+            $script:layout += [pscustomobject]@{
+              package = $parts[0]
+              folder  = if ($parts.Count -gt 1) { $parts[1] } else { "" }
+              ghaDir  = $ghaDir
+              cmdDir  = $cmdDir
+              native  = $ext
+            }
+          }
+          # $fxGhaDir/$fxCmdDir non-empty => build a MULTI-TARGETED package (net48/ + net7.0/, nothing loadable
+          # in the root); empty => the historic flat layout.
+          function Build-Pkg($stage, $platform, $rh, $ghaDir, $cmdDir, $manifestDir, $useDylibs, $fxGhaDir = "", $fxCmdDir = "") {
+            Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force $stage | Out-Null
+            if ($fxGhaDir) {
+              Add-Payload "$stage/net48"  $fxGhaDir $fxCmdDir $useDylibs
+              Add-Payload "$stage/net7.0" $ghaDir   $cmdDir   $useDylibs
+              # McNeel's multi-target example keeps a copy of the manifest icon inside every framework folder
+              # (only manifest.yml is required to be at the root) — mirror it so nothing depends on which copy
+              # yak resolves.
+              Copy-Item "$manifestDir/icon.png" "$stage/net48"  -Force
+              Copy-Item "$manifestDir/icon.png" "$stage/net7.0" -Force
+            } else {
+              Add-Payload $stage $ghaDir $cmdDir $useDylibs
+            }
+            # GH2 manual-load subfolder: the net8 (portable) .rhp + GH1 payload + engines beside it. Stays at
+            # the package ROOT in both layouts — "grasshopper2" is not a framework folder name, so Rhino never
+            # mistakes it for one (and never auto-loads it).
             if (Test-Path "src/opennest_gh2/bin/Release/net8.0/opennest_gh2.rhp") {
               $g2 = "$stage/grasshopper2"; New-Item -ItemType Directory -Force $g2 | Out-Null
               Copy-Item "src/opennest_gh2/bin/Release/net8.0/opennest_gh2.rhp" $g2 -Force
@@ -214,6 +293,8 @@ jobs:
               else { Copy-Item "$ghaDir/nest_physics.dll" $g2 -Force; Copy-Item "$ghaDir/nfp_nest.dll" $g2 -Force; Copy-Item "$ghaDir/nest_spectral.dll" $g2 -Force }
               Copy-Item "grasshopper_plugin/GRASSHOPPER2_INSTALL.txt" $g2 -Force -ErrorAction SilentlyContinue
             }
+            # manifest.yml MUST sit at the root, outside the framework folders (McNeel: "the manifest.yml must
+            # now be outside the framework directory, rather than inside of it").
             Copy-Item "$manifestDir/manifest.yml" $stage -Force
             Copy-Item "$manifestDir/icon.png" $stage -Force
             if (Test-Path "README.md") { Copy-Item "README.md" "$stage/" -Force }
@@ -221,6 +302,9 @@ jobs:
             Push-Location $stage
             & $yak build --platform $platform
             Pop-Location
+            # yak inspects the payload to derive the distribution tag and has historically thrown on
+            # multi-targeted trees (RH-80648, fixed in 8.8) — never let a silent yak failure publish nothing.
+            if (-not (Get-ChildItem "$stage/*.yak" -ErrorAction SilentlyContinue)) { throw "yak build produced no .yak in $stage" }
             Get-ChildItem "$stage/*.yak" | ForEach-Object {
               $n = $_.Name -replace '-(any|rh[0-9_]+)-(win|mac|any)\.yak$', "-$rh-`$2.yak"
               if ($n -ne $_.Name) { Rename-Item $_.FullName $n; Write-Host "Retagged $($_.Name) -> $n" }
@@ -228,10 +312,257 @@ jobs:
             Get-ChildItem "$stage/*.yak" | Select-Object Name
           }
           if (-not (Test-Path "src/opennest_gh2/bin/Release/net8.0/opennest_gh2.rhp")) { Write-Host "WARNING: GH2 .rhp missing - packages will ship without the grasshopper2/ subfolder." }
-          Build-Pkg "yak_win_rh8" "win" "rh8_0" "src/opennest_2/bin/Release/net7.0-windows" "src/opennest_commands/bin/Release/net7.0-windows" "grasshopper_plugin/opennest_win" $false
+          Build-Pkg "yak_win_rh8" "win" "rh8_0" "src/opennest_2/bin/Release/net7.0-windows" "src/opennest_commands/bin/Release/net7.0-windows" "grasshopper_plugin/opennest_win" $false "src/opennest_2/bin/Release/net48" "src/opennest_commands/bin/Release/net48"
           Build-Pkg "yak_win_rh9" "win" "rh9_0" "src/opennest_2/bin/Release/net7.0-windows" "src/opennest_commands/bin/Release/net8.0-windows" "grasshopper_plugin/opennest_win" $false
           Build-Pkg "yak_mac_rh8" "mac" "rh8_0" "src/opennest_2/bin/Release/net7.0"         "src/opennest_commands/bin/Release/net7.0"         "grasshopper_plugin/opennest_mac" $true
           Build-Pkg "yak_mac_rh9" "mac" "rh9_0" "src/opennest_2/bin/Release/net7.0"         "src/opennest_commands/bin/Release/net8.0"         "grasshopper_plugin/opennest_mac" $true
+          # Guard the rule the whole fix hinges on: a multi-targeted package with a loadable file in its root
+          # silently degrades to "root only", i.e. straight back to the .NET-Core-only bug.
+          if (Get-ChildItem "yak_win_rh8/*.gha","yak_win_rh8/*.rhp" -ErrorAction SilentlyContinue) { throw "yak_win_rh8 has a plug-in in its ROOT - that disables the net48/net7.0 framework folders" }
+          # Hand step 7 the exact staging map (package -> framework folder -> source dirs). Written OUTSIDE any
+          # $stage folder so it is not swept into a .yak.
+          ConvertTo-Json -Depth 4 -InputObject @($script:layout) | Set-Content "pkg_layout.json"
+          Write-Host "Staged payloads:"; $script:layout | Format-Table -AutoSize | Out-String | Write-Host
+
+      # ---- 7) Verify the metadata that actually SHIPS inside each .yak, not what we staged.
+      #
+      #         WHICH YAK. The Install step above pulls files.mcneel.com/yak/tools/latest/yak.exe. That path
+      #         is frozen: it still serves yak 0.12.14 (Last-Modified 2021-09-14, sha256 d87e14de977a84e6...).
+      #         Rhino 8 bundles a much newer one (0.15.2, C:\Program Files\Rhino 8\System\yak.exe), so a
+      #         local `yak build` and CI's `yak build` are NOT the same program and do not behave the same.
+      #         Both were re-run against all four staging trees produced by step 6; results below.
+      #
+      #         WHAT CHANGED BETWEEN THEM. 0.12.14 inspects the package ROOT only. 0.15.2 RECURSES: given
+      #         the multi-targeted rh8-win tree (empty root by design) it prints "Inspecting content:
+      #         opennest_commands.rhp", i.e. it reaches inside net48/ or net7.0/, where 0.12.14 printed
+      #         "WARNING: No files found that could be inspected". Two consequences, and only one of them
+      #         matters:
+      #           * DISTRIBUTION TAG — 0.15.2 now derives it from the .rhp it found, so the packages come
+      #             out named "-rh8_0-win" / "-rh9_0-win" / "-rh8_0-mac" / "-rh9_0-mac" already and step 6's
+      #             "-any-" rename never fires. Under 0.12.14 all four come out "-any-" and the rename does
+      #             all the work. KEEP THE RENAME: it is what makes the tag independent of which yak the
+      #             frozen "latest" URL happens to serve, and it is a verified no-op when yak gets it right.
+      #           * GUID KEYWORD — unchanged, and this is the load-bearing one. Neither version derives a
+      #             guid from anything below the root. Re-run with the hand-declared `keywords:` stripped out
+      #             of the staged manifest, the multi-targeted rh8-win package ships `keywords: []` under
+      #             BOTH 0.12.14 and 0.15.2, exit code 0 either way — CI would go green shipping it.
+      #             (The flat packages do get one, but never the right pair: 0.12.14 adds only the
+      #             assembly-guid fallback 73f7a328, 0.15.2 adds only GH_AssemblyInfo's 69663e7d.)
+      #
+      #         WHY THE HAND-DECLARED KEYWORDS STAY. Grasshopper's Package Restore (developer.rhino3d.com
+      #         "Package Restore in Grasshopper") matches a missing component to a package by plug-in NAME
+      #         first, then plug-in ID; our name never matches ("opennest_2" vs package "OpenNest"), so the
+      #         id keyword is the ONLY restore path — and rh8-win, the one that ships `keywords: []`, is the
+      #         distribution most Windows users install. Declaring them in grasshopper_plugin/*/manifest.yml
+      #         is version-independent (both yaks preserve author-supplied keywords verbatim and neither adds
+      #         a duplicate of one already present — verified in all four packages, both versions) and it is
+      #         the only way to carry 69663e7d, the id Grasshopper actually persists in documents, into the
+      #         multi-targeted package at all. This step is what makes their loss loud: with the keywords
+      #         stripped it throws on the first package under both yak versions.
+      #
+      #         REPRODUCE: extract this step and step 6 from this YAML, run them over a tree containing
+      #         src/opennest_{2,commands,gh2}/bin/Release/**, grasshopper_plugin/opennest_{win,mac}/ and a
+      #         mac_dylibs/ with the three dylibs, once per yak build, pointing GITHUB_WORKSPACE at the
+      #         folder holding that yak. ----
+      - name: Verify Yak package contents (framework payloads + guid keywords + distribution tag)
+        shell: pwsh
+        run: |
+          # ============================ WHY THIS STEP EXISTS ============================
+          # PART 1 - FRAMEWORK PAYLOADS. Up to and including v2.93.0.0 the rh8-win package shipped ONE
+          # payload, the .NET Core one, in a flat root: unzipping opennest-2.93.0-rh8_0-win.yak gives
+          # opennest_2.gha + opennest_2.runtimeconfig.json ("tfm": "net7.0") and NO net48/ folder, and both
+          # opennest_2.gha and opennest_commands.rhp carry TargetFrameworkAttribute ".NETCoreApp,Version=v7.0".
+          # A Rhino 8 Windows user left on the .NET Framework runtime therefore had nothing loadable in the
+          # package, the components never appeared, and the only way out was _SetDotNetRuntime -> .NET Core.
+          # Nothing failed while producing that package: every step was green. Step 6 now stages net48/ +
+          # net7.0/ for rh8-win, and the checks below are what stop that silently reverting - by policy (the
+          # package MUST be multi-targeted), by runtime identity (the two folders must hold assemblies built
+          # for DIFFERENT runtimes, not the same Core build copied twice), and by closure (every file the
+          # build emitted has to survive into the zip).
+          #
+          # PART 2 - GUID KEYWORDS (unchanged, and still load-bearing).
+          #
+          #         WHICH YAK. The Install step above pulls files.mcneel.com/yak/tools/latest/yak.exe. That path
+          #         is frozen: it still serves yak 0.12.14 (Last-Modified 2021-09-14, sha256 d87e14de977a84e6...).
+          #         Rhino 8 bundles a much newer one (0.15.2, C:\Program Files\Rhino 8\System\yak.exe), so a
+          #         local `yak build` and CI's `yak build` are NOT the same program and do not behave the same.
+          #         Both were re-run against all four staging trees produced by step 6; results below.
+          #
+          #         WHAT CHANGED BETWEEN THEM. 0.12.14 inspects the package ROOT only. 0.15.2 RECURSES: given
+          #         the multi-targeted rh8-win tree (empty root by design) it prints "Inspecting content:
+          #         opennest_commands.rhp", i.e. it reaches inside net48/ or net7.0/, where 0.12.14 printed
+          #         "WARNING: No files found that could be inspected". Two consequences, and only one of them
+          #         matters:
+          #           * DISTRIBUTION TAG — 0.15.2 now derives it from the .rhp it found, so the packages come
+          #             out named "-rh8_0-win" / "-rh9_0-win" / "-rh8_0-mac" / "-rh9_0-mac" already and step 6's
+          #             "-any-" rename never fires. Under 0.12.14 all four come out "-any-" and the rename does
+          #             all the work. KEEP THE RENAME: it is what makes the tag independent of which yak the
+          #             frozen "latest" URL happens to serve, and it is a verified no-op when yak gets it right.
+          #           * GUID KEYWORD — unchanged, and this is the load-bearing one. Neither version derives a
+          #             guid from anything below the root. Re-run with the hand-declared `keywords:` stripped out
+          #             of the staged manifest, the multi-targeted rh8-win package ships `keywords: []` under
+          #             BOTH 0.12.14 and 0.15.2, exit code 0 either way — CI would go green shipping it.
+          #             (The flat packages do get one, but never the right pair: 0.12.14 adds only the
+          #             assembly-guid fallback 73f7a328, 0.15.2 adds only GH_AssemblyInfo's 69663e7d.)
+          #
+          #         WHY THE HAND-DECLARED KEYWORDS STAY. Grasshopper's Package Restore (developer.rhino3d.com
+          #         "Package Restore in Grasshopper") matches a missing component to a package by plug-in NAME
+          #         first, then plug-in ID; our name never matches ("opennest_2" vs package "OpenNest"), so the
+          #         id keyword is the ONLY restore path — and rh8-win, the one that ships `keywords: []`, is the
+          #         distribution most Windows users install. Declaring them in grasshopper_plugin/*/manifest.yml
+          #         is version-independent (both yaks preserve author-supplied keywords verbatim and neither adds
+          #         a duplicate of one already present — verified in all four packages, both versions) and it is
+          #         the only way to carry 69663e7d, the id Grasshopper actually persists in documents, into the
+          #         multi-targeted package at all. This step is what makes their loss loud: with the keywords
+          #         stripped it throws on the first package under both yak versions.
+          #
+          #         REPRODUCE: extract this step and step 6 from this YAML, run them over a tree containing
+          #         src/opennest_{2,commands,gh2}/bin/Release/**, grasshopper_plugin/opennest_{win,mac}/ and a
+          #         mac_dylibs/ with the three dylibs, once per yak build, pointing GITHUB_WORKSPACE at the
+          #         folder holding that yak. ----
+          # ==============================================================================
+
+          # ---- Policy. A package listed here MUST ship these framework folders. This is the tripwire for the
+          #      original bug: delete the net48 arguments from step 6's Build-Pkg call for yak_win_rh8 and this
+          #      throws, instead of quietly publishing a .NET-Core-only package again. Packages absent from the
+          #      table are asserted FLAT (single .NET Core payload in the root):
+          #        rh9-win  - Rhino 9 is .NET Core only, and opennest_commands has no RhinoCommon-9 net48 build
+          #                   (its net48 TFM compiles against RhinoCommon 8), so a net48/ folder here would ship
+          #                   a .rhp Rhino 9 refuses to load.
+          #        rh8-mac / rh9-mac - the .NET Framework runtime switch is Windows-only (rhino3d.com/docs/
+          #                   guides/netcore: the section is headed "Windows only" and step 1 is "Start Rhino
+          #                   for Windows"); there is no second runtime to target on macOS. ----
+          $mustMultiTarget = @{ "yak_win_rh8" = @("net48", "net7.0") }
+          # Without these a framework folder is not a payload, just a folder.
+          $requiredPayload = @("opennest_2.gha", "opennest_commands.rhp")
+          # .NET Framework 4.8 ships none of these in the GAC, and Grasshopper's LoadFrom of the .gha probes
+          # only the .gha's own directory for them. Missing => FileNotFoundException/TypeLoadException the
+          # instant Grasshopper touches the assembly, i.e. exactly the "installs but no components" report we
+          # are fixing - a net48/ folder holding a .gha that cannot resolve its dependencies fails just as
+          # loudly as no net48/ folder at all. The list is the dependency set the net48 build of opennest_2
+          # currently emits (System.Drawing.Common 7.0.0 + System.Resources.Extensions 5.0.0 and their
+          # transitive shims); if a PackageReference legitimately changes, update it here in the same commit.
+          $requiredNetfxDeps = @(
+            "System.Buffers.dll", "System.Drawing.Common.dll", "System.Memory.dll",
+            "System.Numerics.Vectors.dll", "System.Resources.Extensions.dll",
+            "System.Runtime.CompilerServices.Unsafe.dll"
+          )
+          # Reading TargetFrameworkAttribute's argument by byte scan: it sits in the assembly metadata as plain
+          # ASCII, and this pwsh (.NET 8) cannot Assembly.Load a net48 .gha to ask it politely.
+          function Get-AssemblyTfm($path) {
+            $txt = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($path))
+            if ($txt -match '\.NETFramework,Version=v[0-9.]+') { return $Matches[0] }
+            if ($txt -match '\.NETCoreApp,Version=v[0-9.]+')   { return $Matches[0] }
+            return "unknown"
+          }
+          function Get-RelFiles($root) {
+            if (-not (Test-Path $root)) { return @() }
+            $full = (Resolve-Path $root).Path
+            @(Get-ChildItem $full -Recurse -File | ForEach-Object {
+              ($_.FullName.Substring($full.Length).TrimStart('\', '/')) -replace '\\', '/'
+            })
+          }
+
+          if (-not (Test-Path "pkg_layout.json")) { throw "pkg_layout.json missing - step 6 did not record what it staged" }
+          # Assign, THEN wrap in @(). ConvertFrom-Json emits a JSON array as ONE pipeline item, so the obvious
+          # `@(ConvertFrom-Json ...)` yields a single-element list holding the whole array; $_.package then
+          # member-enumerates, `-eq` matches, and every check below silently degrades into a no-op that
+          # passes anything. Verified against Windows PowerShell 5.1 with a real pkg_layout.json.
+          $layoutJson = ConvertFrom-Json (Get-Content "pkg_layout.json" -Raw)
+          $layout = @($layoutJson)
+
+          # 69663e7d = opennest_2Info.Id — the id Grasshopper writes into every saved document (Library/Id,
+          #            and each object's "Lib") and therefore the one restore searches for.
+          # 73f7a328 = the assembly-guid fallback yak derives when it cannot load GH_AssemblyInfo out of a
+          #            .NET Core .gha; every published OpenNest version carries it, so keep it resolvable.
+          $required = @("guid:69663e7d-f412-4b90-ba83-520c906eaeec", "guid:73f7a328-a594-3f93-c813-5f3cfb67e447")
+          $yaks = @(Get-ChildItem yak_win_rh8/*.yak, yak_win_rh9/*.yak, yak_mac_rh8/*.yak, yak_mac_rh9/*.yak -ErrorAction SilentlyContinue)
+          if ($yaks.Count -ne 4) { throw "expected 4 .yak packages (rh8/rh9 x win/mac), found $($yaks.Count)" }
+          foreach ($y in $yaks) {
+            $stage = $y.Directory.Name
+            # A .yak is a zip; Expand-Archive insists on the extension, hence the copy.
+            $work = Join-Path $env:RUNNER_TEMP "yakcheck/$($y.BaseName)"
+            Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force $work | Out-Null
+            Copy-Item $y.FullName "$work/pkg.zip" -Force
+            Expand-Archive "$work/pkg.zip" "$work/x" -Force
+            $root = "$work/x"
+            if (-not (Test-Path "$root/manifest.yml")) { throw "$($y.Name): no manifest.yml at the package root" }
+            $manifest = Get-Content "$root/manifest.yml" -Raw
+            Write-Host "== $($y.Name) ==`n$manifest"
+            Write-Host "-- shipped files --"; Get-RelFiles $root | Sort-Object | ForEach-Object { Write-Host "   $_" }
+            foreach ($k in $required) {
+              if ($manifest -notmatch [regex]::Escape($k)) {
+                throw "$($y.Name): manifest.yml is missing keyword '$k' - Grasshopper Package Restore cannot map a missing component back to this package. Declare it in grasshopper_plugin/*/manifest.yml (yak writes keywords: [] without a word of complaint when the package root has nothing to inspect)."
+              }
+            }
+            # yak reads the distribution tag off the plug-in it inspects; with nothing inspectable it emits
+            # "-any-" and only the rename in step 6 pins rh8/rh9. An "-any-" package is offered to EVERY Rhino.
+            if ($y.Name -notmatch '-rh[89]_0-(win|mac)\.yak$') { throw "$($y.Name): Rhino distribution tag missing (expected -rh8_0- / -rh9_0-)" }
+
+            # ---- Framework payloads, checked against the SHIPPED zip (not the staging folder) ----
+            $wantFolders = @($mustMultiTarget[$stage])
+            $isMulti = ($wantFolders.Count -gt 0 -and $wantFolders[0])
+            $staged  = @($layout | Where-Object { $_.package -eq $stage })
+            if ($staged.Count -eq 0) { throw "$($y.Name): step 6 recorded no payload for staging folder '$stage'" }
+            if ($isMulti) {
+              # Policy first - it carries the actionable message when the multi-target wiring is removed.
+              $got = @($staged | ForEach-Object { $_.folder })
+              foreach ($f in $wantFolders) {
+                if ($got -notcontains $f) { throw "$($y.Name): step 6 never staged a '$f/' payload (staged: $(if ($got -join ', ') { $got -join ', ' } else { '<flat root>' })). Rhino 8 on Windows runs on EITHER .NET Core or .NET Framework 4.8, and a .NET Core .gha cannot load under .NET Framework; shipping only one runtime is exactly what forced users to run _SetDotNetRuntime. Restore the framework-folder arguments on the Build-Pkg call for $stage." }
+                if (-not (Test-Path "$root/$f" -PathType Container)) { throw "$($y.Name): staged '$f/' never reached the .yak - yak dropped the subfolder" }
+              }
+              # RH-76604: Rhino only honours framework folders when NOTHING loadable sits in the package root.
+              # One stray root .gha/.rhp turns the whole package back into a single-runtime package.
+              $strays = @(Get-ChildItem "$root/*.gha", "$root/*.rhp" -File -ErrorAction SilentlyContinue)
+              if ($strays.Count) { throw "$($y.Name): plug-in file(s) in the package ROOT ($($strays.Name -join ', ')) - that disables the framework folders and reverts this package to a single runtime" }
+            } elseif ($staged.Count -ne 1 -or $staged[0].folder) {
+              throw "$($y.Name): expected a FLAT single-runtime package but step 6 staged framework folders ($(($staged | ForEach-Object { $_.folder }) -join ', ')). If that is intentional, add '$stage' to `$mustMultiTarget."
+            }
+            foreach ($p in $staged) {
+              $dir   = if ($p.folder) { "$root/$($p.folder)" } else { $root }
+              $label = "$($y.Name):$(if ($p.folder) { $p.folder } else { '<root>' })"
+              foreach ($f in $requiredPayload) {
+                if (-not (Test-Path "$dir/$f")) { throw "$label is not a loadable payload - missing $f" }
+              }
+              foreach ($e in @("nfp_nest", "nest_physics", "nest_spectral")) {
+                if (-not (Test-Path "$dir/$e.$($p.native)")) { throw "$label is missing native engine $e.$($p.native) - the P/Invokes would throw DllNotFoundException in Rhino" }
+              }
+              # Runtime identity. Two independent signals, so a copy/paste slip that stages the SAME .NET Core
+              # build into both folders cannot pass: the assembly's own TargetFrameworkAttribute, and whether
+              # the SDK emitted a runtimeconfig.json (a .NET Core artefact - net48 never has one).
+              $tfm    = Get-AssemblyTfm "$dir/opennest_2.gha"
+              $hasCfg = Test-Path "$dir/opennest_2.runtimeconfig.json"
+              if ($p.folder -eq "net48") {
+                if ($tfm -notmatch '^\.NETFramework,Version=v4\.') { throw "$label/opennest_2.gha targets '$tfm', not .NET Framework - a .NET Core .gha cannot load under the .NET Framework runtime, so this folder is dead weight" }
+                if ($hasCfg) { throw "$label has opennest_2.runtimeconfig.json - that is a .NET Core build wearing a net48 folder name" }
+                foreach ($d in $requiredNetfxDeps) {
+                  if (-not (Test-Path "$dir/$d")) { throw "$label is missing $d - .NET Framework 4.8 does not provide it and Grasshopper probes only the .gha's own folder, so the .gha would throw FileNotFoundException on load. Check CopyLocalLockFileAssemblies / PrivateAssets on the net48 TFM in src/opennest_2/opennest_2.csproj." }
+                }
+                $cmdTfm = Get-AssemblyTfm "$dir/opennest_commands.rhp"
+                if ($cmdTfm -notmatch '^\.NETFramework,Version=v4\.') { throw "$label/opennest_commands.rhp targets '$cmdTfm', not .NET Framework" }
+              } else {
+                if ($tfm -notmatch '^\.NETCoreApp,') { throw "$label/opennest_2.gha targets '$tfm', not .NET Core" }
+                if (-not $hasCfg) { throw "$label is missing opennest_2.runtimeconfig.json - a .NET plug-in will not start without it" }
+                if (-not (Test-Path "$dir/opennest_commands.runtimeconfig.json")) { throw "$label is missing opennest_commands.runtimeconfig.json" }
+              }
+              # Closure: everything the build emitted for this TFM has to be in the zip. Self-maintaining - it
+              # follows whatever the SDK produced, so a new NuGet dependency is covered without editing a list.
+              # (On mac the three Windows engine .dll are deliberately swapped for .dylib, so skip those.)
+              $skip = if ($p.native -eq "dylib") { @("nfp_nest.dll", "nest_physics.dll", "nest_spectral.dll") } else { @() }
+              $want = @(Get-RelFiles $p.ghaDir | Where-Object { $skip -notcontains $_ })
+              $have = @(Get-RelFiles $dir)
+              $miss = @($want | Where-Object { $have -notcontains $_ })
+              if ($miss.Count) { throw "$label is missing $($miss.Count) file(s) that $($p.ghaDir) built: $($miss -join ', ')" }
+              Write-Host "OK  $label  [$tfm]  $($have.Count) files"
+            }
+            # A multi-targeted package whose two .gha are byte-identical is one runtime shipped twice.
+            if ($isMulti) {
+              $h = @($wantFolders | ForEach-Object { (Get-FileHash "$root/$_/opennest_2.gha" -Algorithm SHA256).Hash })
+              if (($h | Select-Object -Unique).Count -eq 1) { throw "$($y.Name): every framework folder holds the SAME opennest_2.gha - only one runtime is really being shipped" }
+            }
+          }
+          Write-Host "OK: all $($yaks.Count) packages carry both guid keywords, a Rhino distribution tag, and a complete payload for every framework they claim to support."
 
       # NOTE: there is no longer a separate auto-loading "OpenNest_GH2" Yak package. A GH2 .rhp delivered as a
       # registered Yak plug-in is scanned by Rhino's plug-in manager, which crashes on it
@@ -303,6 +634,10 @@ jobs:
         with:
           tag_name: "v${{ steps.ver.outputs.version }}"
           generate_release_notes: true   # auto release notes (commits since last release) on the Release page
+          # The staging folders are per Rhino version (step 6 builds yak_{win,mac}_rh{8,9}); the old
+          # yak_win/ + yak_mac/ globs matched nothing, so releases shipped with no .yak attached.
           files: |
-            yak_win/*.yak
-            yak_mac/*.yak
+            yak_win_rh8/*.yak
+            yak_win_rh9/*.yak
+            yak_mac_rh8/*.yak
+            yak_mac_rh9/*.yak

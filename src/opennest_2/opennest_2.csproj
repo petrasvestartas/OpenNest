@@ -61,8 +61,12 @@
   </ItemGroup>
 
   <Target Name="PostBuild" AfterTargets="PostBuildEvent">
-    <!-- Copy the nest_physics solver DLL next to the .gha so the component_nest P/Invoke finds it -->
-    <Copy Condition=" '$(OS)' == 'Windows_NT' AND Exists('nest_physics.dll') " SourceFiles="nest_physics.dll" DestinationFolder="$(TargetDir)" />
+    <!-- Copy the nest_physics solver DLL next to the .gha so the component_nest P/Invoke finds it.
+         Read from the CMake build dir, exactly like the two engines below. It used to be copied from a
+         checked-in `nest_physics.dll` sitting next to this csproj, so every build shipped that stale binary
+         and NOTHING built from src/nest_physics_cpp/ ever reached a user - publish.yml's "Build
+         nest_physics.dll" step produced an artefact no one consumed. -->
+    <Copy Condition=" '$(OS)' == 'Windows_NT' AND Exists('../nest_physics_cpp/build/Release/nest_physics.dll') " SourceFiles="../nest_physics_cpp/build/Release/nest_physics.dll" DestinationFolder="$(TargetDir)" />
     <!-- Copy the nfp_nest NFP/SvgNest solver DLL (Boost.Polygon GA) next to the .gha for component_nest2 -->
     <Copy Condition=" '$(OS)' == 'Windows_NT' AND Exists('../opennest_cpp/build/Release/nfp_nest.dll') " SourceFiles="../opennest_cpp/build/Release/nfp_nest.dll" DestinationFolder="$(TargetDir)" />
     <!-- Copy the nest_spectral 3D FFT solver DLL next to the .gha for OpenNest3DComponent -->
@@ -71,6 +75,16 @@
     <Copy Condition=" '$(OS)' != 'Windows_NT' AND Exists('../opennest_cpp/build/nfp_nest.dylib') " SourceFiles="../opennest_cpp/build/nfp_nest.dylib" DestinationFolder="$(TargetDir)" />
     <Copy Condition=" '$(OS)' != 'Windows_NT' AND Exists('../nest_physics_cpp/build/nest_physics.dylib') " SourceFiles="../nest_physics_cpp/build/nest_physics.dylib" DestinationFolder="$(TargetDir)" />
     <Copy Condition=" '$(OS)' != 'Windows_NT' AND Exists('../nest_spectral_cpp/build/nest_spectral.dylib') " SourceFiles="../nest_spectral_cpp/build/nest_spectral.dylib" DestinationFolder="$(TargetDir)" />
+    <!-- Every copy above is guarded by Exists(...), so a missing engine is a silent no-op and the .gha still
+         builds - the P/Invoke then throws DllNotFoundException the first time the component runs, inside
+         Rhino, far from the build. Say so at build time instead. CI builds all three engines first (see
+         publish.yml steps 3), so these never fire on a release run. -->
+    <Warning Condition=" ('$(OS)' == 'Windows_NT' AND !Exists('../opennest_cpp/build/Release/nfp_nest.dll')) OR ('$(OS)' != 'Windows_NT' AND !Exists('../opennest_cpp/build/nfp_nest.dylib')) "
+             Text="nfp_nest engine not built - OpenNest2 will fail at runtime. Build src/opennest_cpp (docs/developing.md)." />
+    <Warning Condition=" ('$(OS)' == 'Windows_NT' AND !Exists('../nest_physics_cpp/build/Release/nest_physics.dll')) OR ('$(OS)' != 'Windows_NT' AND !Exists('../nest_physics_cpp/build/nest_physics.dylib')) "
+             Text="nest_physics engine not built - OpenNestCollision will fail at runtime. Build src/nest_physics_cpp (docs/developing.md)." />
+    <Warning Condition=" ('$(OS)' == 'Windows_NT' AND !Exists('../nest_spectral_cpp/build/Release/nest_spectral.dll')) OR ('$(OS)' != 'Windows_NT' AND !Exists('../nest_spectral_cpp/build/nest_spectral.dylib')) "
+             Text="nest_spectral engine not built - OpenNest3D will fail at runtime. Build src/nest_spectral_cpp (docs/developing.md)." />
   </Target>
 
   <!-- OpenNest3D component icon: embedded so OpenNest3DComponent.Icon finds it by manifest-resource suffix. -->

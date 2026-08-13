@@ -71,7 +71,10 @@ namespace opennest_gh2.components
             {
                 if (brep == null) continue;
                 var loops = ComponentGeoUtil.BrepLoops(brep);
-                var pls = loops.Where(c => c != null && c.IsClosed).Select(c => helper.curve_to_polyline(c, 0)).Where(p => p != null && p.Count >= 4).ToList();
+                // sheet_to_polylines, not curve_to_polyline per loop: a SHEET is a container, so its outer ring
+                // must be INSCRIBED in the real sheet and its inner loops (voids) must CONTAIN the real void —
+                // the opposite roles from a part, and only knowable once one sheet's loops are sorted together.
+                var pls = helper.sheet_to_polylines(loops.Where(c => c != null && c.IsClosed), 0, false);
                 if (pls.Count > 0) plinesList.Add(pls);
             }
             if (plinesList.Count == 0) return;

@@ -114,8 +114,12 @@ namespace opennest_commands
             { RhinoApp.WriteLine("OpenNest: no closed part boundaries detected."); return Result.Failure; }
 
             var helper = new nest_geo();
+            // 0 + keep_all = exact sheet outline. sheet_to_polylines (not curve_to_polyline per loop) because a
+            // SHEET is a container: its outer ring has to be INSCRIBED in the real sheet and its voids have to
+            // CONTAIN the real void — the opposite roles from a part, and only knowable once the loops of one
+            // sheet are sorted together. It returns them largest-first, the order nest_sheets sorts into.
             var plinesList = sheetObjs
-                .Select(o => o.Select(c => helper.curve_to_polyline(c, 0, false, true)).Where(pl => pl != null && pl.Count >= 4).ToList())   // 0 + keep_all = exact sheet outline
+                .Select(o => helper.sheet_to_polylines(o))
                 .Where(l => l.Count > 0).ToList();
             if (plinesList.Count == 0) { RhinoApp.WriteLine("OpenNest: no valid sheet outlines."); return Result.Failure; }
             double gap = diag * 0.03;

@@ -91,6 +91,18 @@ namespace opennest_2
         // ---- scratch read from the input ports ----
         private double x = 0;
         private double spacing = 1;
+        // The sheet outlines EXACTLY as the user fed them, captured in process_sheets before the Spacing
+        // inset. Index-aligned 1:1 with nest_sheets.sheets (and therefore with nest.output_sheets), so the
+        // Sheets output / viewport / bake can report the user's real sheet instead of the shrunken nesting
+        // container the solver ran on. Written on the UI thread in the IDLE launch pass and read on the UI
+        // thread in the PASS-2 publish; a Computing pass never re-enters process_sheets, so no race.
+        private List<List<Polyline>> sheets_unoffset;
+        // Sticky warning naming the rings whose Spacing offset FAILED. Spacing is applied only upstream (the
+        // native solver is handed spacing 0 in RunSolve), so a failed offset means those parts/sheets get a
+        // ZERO gap with no other symptom — the McNeel 221208 report. Built in the IDLE launch pass; Grasshopper
+        // wipes runtime messages on every expire and the result publishes one or two passes later, so it is
+        // held here and re-raised by RaiseOffsetWarning in the Computing and PASS-2 passes.
+        private string _offsetWarning;
         private int placement = 1;
         private double tolerance = 0.1;
         private int rotations = 2;
@@ -127,8 +139,8 @@ namespace opennest_2
 
         protected override void RegisterOutputParams(GH_Component.GH_OutputParamManager pManager)
         {
-            pManager.AddCurveParameter("Sheets", "Sheets", "Sheet outlines used for nesting.", GH_ParamAccess.list);
-            pManager.AddGeometryParameter("Geo", "Geo", "Nested parts placed on the sheets.", GH_ParamAccess.tree);
+            pManager.AddCurveParameter("Sheets", "Sheets", "The sheets that got used, as supplied — Spacing insets the nesting container internally but never the reported outline.", GH_ParamAccess.list);
+            pManager.AddGeometryParameter("Geo", "Geo", "The ORIGINAL parts moved onto the sheets (same curves in, same curves out — only the position changes). Spacing is applied to a SEPARATE nesting outline, so it shows up as the gap BETWEEN parts and never as a fatter curve.\nCurved boundaries are nested through a polygon that circumscribes them, so the real gap is Spacing or a little more — never less.\nIf a part or sheet outline cannot be offset (degenerate ring, or an inset that consumes it) the component raises a WARNING naming how many: those get NO gap.", GH_ParamAccess.tree);
             pManager.AddIntegerParameter("ID", "ID", "Polygon id number", GH_ParamAccess.list);
             pManager.AddTransformParameter("Transform", "Transform", "Placement transform per part.", GH_ParamAccess.list);
             pManager.AddIntegerParameter("IDS", "IDS", "Sheet id number", GH_ParamAccess.list);
@@ -147,6 +159,10 @@ namespace opennest_2
             DA.GetData(7, ref seed);
             if (iterations < 1) iterations = 1;
             if (rotations < 1) rotations = 1;
+            // Spacing is a GAP, so a negative value has no meaning: shrinking the parts / growing the sheet
+            // would let placements overlap. Clamp to 0 here (not at the two offset call sites) so the value
+            // that lands in the params list — and therefore in the change signature — is the one used.
+            if (spacing < 0) spacing = 0;
 
             return new List<double>
             {
@@ -224,7 +240,7 @@ namespace opennest_2
         // Wipe the whole runtime state (used by Reset).
         private void HardClear()
         {
-            nest = null; nest_geo = null;
+            nest = null; nest_geo = null; sheets_unoffset = null; _offsetWarning = null;
             _hasResult = false; _lastSig = null;
             _out_sheets = null; _out_borders = null; _out_elemid = null; _out_xforms = null; _out_sheetid = null;
             _previewBorders = new List<Polyline>();
@@ -247,6 +263,20 @@ namespace opennest_2
         private void ReleaseEngineIfHeld()
         {
             if (_haveEngine) { _haveEngine = false; EngineGate.Nfp.Release(); }
+        }
+
+        // Collect one more reason the Spacing offset produced no gap (see _offsetWarning).
+        private void NoteOffsetFailure(string text)
+        {
+            _offsetWarning = string.IsNullOrEmpty(_offsetWarning) ? text : (_offsetWarning + "  " + text);
+        }
+
+        // Re-raise the sticky Spacing-offset warning. Called from every pass that does NOT rebuild the inputs,
+        // so the warning stays on the component from the launch pass right through to the published result.
+        private void RaiseOffsetWarning()
+        {
+            if (!string.IsNullOrEmpty(_offsetWarning))
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, _offsetWarning);
         }
 
         private void StartClocks() { try { _timer.Start(); } catch { } }
@@ -308,6 +338,7 @@ namespace opennest_2
                 // Superseded by a Reset (or removal) after the worker committed -> drop it, stay cleared.
                 if (_readyGen != _solveGen) return;
 
+                RaiseOffsetWarning();   // the launch pass computed it; this is the pass the user reads
                 nest = _bestNest; nest_geo = _bestGeo;
                 ResetDisplayLists();
                 if (nest != null && nest_geo != null)
@@ -336,18 +367,21 @@ namespace opennest_2
                 {
                     try { if (ComputeSig(DA, parameters) != _lastSig) _restartRequested = true; } catch { }
                 }
+                RaiseOffsetWarning();
                 EmitCachedOutputs(DA);
                 return;
             }
 
             // ===== IDLE, Run ON (Run OFF is handled above). Build the inputs (needed to compute the change
             // signature and to solve). =====
+            _offsetWarning = null;   // rebuilt by process_sheets / process_geometry below
             var sheets = process_sheets(DA);
             var template = process_geometry(DA);
             if (sheets == null || template == null)
             {
                 _hasResult = false; ResetDisplayLists(); this.Message = "missing Sheets / Geo"; return;
             }
+            RaiseOffsetWarning();
 
             string sig = ComputeSig(DA, parameters);
             bool rising = !_prevRun;   // Run just turned on
@@ -619,9 +653,33 @@ namespace opennest_2
             var rots = new List<int> { 4 };
             int place = 0;
             var ns = new nest_rhino_lib.nest_sheets(sheetSets, gaps, rots, place);
+
+            // Snapshot the outlines BEFORE the inset, straight off ns.sheets so the copy is 1:1 with the
+            // solver's sheet indices (the ctor sorts each set largest-ring-first and lays the auto-overflow
+            // copies out). The inset below is an internal nesting container: it must never leak out of the
+            // Sheets output, the viewport or a bake, or the user's sheet silently comes back spacing/2 small.
+            this.sheets_unoffset = new List<List<Polyline>>(ns.sheets.Length);
+            for (int s = 0; s < ns.sheets.Length; s++)
+            {
+                var set = new List<Polyline>();
+                if (ns.sheets[s] != null)
+                    foreach (var pl in ns.sheets[s]) if (pl != null) set.Add(new Polyline(pl));
+                this.sheets_unoffset.Add(set);
+            }
+
             // Spacing also insets the sheet boundary by spacing/2 (outer shrinks, holes grow) so parts keep the
             // same clearance from the sheet edge as from each other — mirrors the Sheets component's offset.
-            if (this.spacing > 0) ns.offset_sheet_boundary(this.spacing * 0.5);
+            // A ring the offset cannot handle keeps its ORIGINAL size, i.e. that sheet silently contributes no
+            // setback at all, so say so out loud instead of shipping a zero gap (McNeel 221208).
+            if (this.spacing > 0)
+            {
+                ns.offset_sheet_boundary(this.spacing * 0.5);
+                if (ns.last_offset_failures > 0)
+                    NoteOffsetFailure(ns.last_offset_failures + " of " + ns.last_offset_rings +
+                        " sheet outline(s) could not be inset by Spacing/2 — those sheets give parts NO setback from the edge. " +
+                        "Usually a degenerate ring, or an inset that consumes it; try a smaller Spacing or a cleaner sheet. " +
+                        "(The sheet set is auto-copied for overflow, so one bad sheet is counted once per copy.)");
+            }
             return ns;
         }
 
@@ -774,7 +832,17 @@ namespace opennest_2
                 // with the sheet inset in process_sheets) so placed parts keep a `spacing` gap. The native solver
                 // spacing is then forced to 0 (see RunSolve) so the gap is applied ONCE. The Geo output stays the
                 // ORIGINAL geometry; only the nesting boundary (Borders) carries the offset — same as OpenNest2.
-                if (this.spacing > 0) ng.offset_nesting_boundary(this.spacing * 0.5);
+                // A ring the offset cannot handle keeps its ORIGINAL size — that part then gets a ZERO gap and
+                // nothing else in the pipeline notices, so report it (McNeel 221208 "spacing wont transform").
+                if (this.spacing > 0)
+                {
+                    ng.offset_nesting_boundary(this.spacing * 0.5);
+                    if (ng.last_offset_failures > 0)
+                        NoteOffsetFailure(ng.last_offset_failures + " of " + ng.last_offset_rings +
+                            " part outline(s) could not be grown by Spacing/2 — those parts get NO gap. " +
+                            "Usually a ring with fewer than 3 corners, or a hole small enough that Spacing/2 closes it; " +
+                            "try a smaller Spacing or clean up the outline.");
+                }
                 return ng;
             }
             catch (Exception ex)
@@ -787,12 +855,23 @@ namespace opennest_2
         // Assemble + publish outputs from the finished solve (PASS 2, UI thread), and cache them for re-emit.
         private void AssembleOutputs(IGH_DataAccess DA)
         {
+            // Report the sheets the USER supplied, not the spacing/2-inset copies the solver nested into.
+            // nest.output_sheets holds the first N USED sheets of nest_sheets.sheets, so sheets_unoffset[i]
+            // is the same sheet un-inset; fall back to the solver's copy if the snapshot is missing/short.
             List<Polyline> output_sheets = new List<Polyline>();
+            var sheets_out = new List<List<Polyline>>(nest.output_sheets.Count);
             for (int i = 0; i < nest.output_sheets.Count; i++)
-                for (int j = 0; j < nest.output_sheets[i].Count; j++)
-                    output_sheets.Add(new Polyline(nest.output_sheets[i][j]));
+            {
+                var src = (this.sheets_unoffset != null && i < this.sheets_unoffset.Count && this.sheets_unoffset[i] != null
+                           && this.sheets_unoffset[i].Count == nest.output_sheets[i].Count)
+                        ? this.sheets_unoffset[i] : nest.output_sheets[i];
+                var set = new List<Polyline>(src.Count);
+                foreach (var pl in src) set.Add(new Polyline(pl));
+                sheets_out.Add(set);
+                output_sheets.AddRange(set);
+            }
             DA.SetDataList(0, output_sheets);
-            this.sheets_display.AddRange(nest.output_sheets);
+            this.sheets_display.AddRange(sheets_out);
 
             GH_Structure<GH_Curve> borders = new GH_Structure<GH_Curve>();
             GH_Structure<IGH_GeometricGoo> all_geo_groups = new GH_Structure<IGH_GeometricGoo>();
@@ -805,9 +884,19 @@ namespace opennest_2
                 element_id.Append(new GH_Integer(i), new GH_Path(i));
                 for (int j = 0; j < nest_geo.boundary_sorted[i].Count; j++)
                 {
+                    // Item4 (the ORIGINAL input curve), NOT Item2. Item2 is the NESTING outline, which this
+                    // component grows by spacing/2 in process_geometry — emitting it here is what made the
+                    // Geo output come back bloated and edge-to-edge (McNeel 221208 "spacing wont transform"):
+                    // the placements DO carry the gap, but each curve had eaten spacing/2 of it on every side.
+                    // Item4 is in the same world frame as Item2, so nest_geo.xforms places it identically.
+                    // (OpenNest2 emits Item2 on a port literally named "Borders" and the original geometry on
+                    // its own "All Geo" port; OpenNest1 has ONE geometry port, so it must carry the original.)
+                    var tup = nest_geo.boundary_sorted[i][j];
+                    Curve src_crv = tup.Item4 ?? (tup.Item2 != null ? tup.Item2.ToPolylineCurve() : null);
+                    if (src_crv == null) continue;
                     for (int k = 0; k < nest_geo.xforms[i].Count; k++)
                     {
-                        Curve crv_temp = nest_geo.boundary_sorted[i][j].Item2.Duplicate().ToNurbsCurve();
+                        Curve crv_temp = src_crv.DuplicateCurve();
                         crv_temp.Transform(nest_geo.xforms[i][k]);
                         borders.Append(new GH_Curve(crv_temp), new GH_Path(i, k));
                     }

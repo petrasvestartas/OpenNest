@@ -114,6 +114,62 @@ inline BenchData makeRects(uint32_t seed) {
     return d;
 }
 
+// 24 identical 400x300 rectangles on 1000x1000 sheets — six fit per sheet, so a correct layout
+// MUST span four sheets. This is the McNeel Discourse 221362 regression ("OpenNest2 objects only
+// nesting on 1 sheet"): every part AND every sheet is an axis-aligned rectangle, which is exactly
+// the input that takes the MaxRects fast path in nfp_nest_capi.cpp. Run with --sheets 6 and assert
+// the bench reports sheets>1 and overlap=0; the fast path used to report every part on sheet 0
+// (all four sheets' layouts stacked on one). Adding one non-rectangular part — the workaround the
+// forum users found — falls back to the GA path and was never affected.
+inline BenchData makeMultiSheet(uint32_t /*seed*/) {
+    BenchData d;
+    d.name = "multisheet";
+    d.sheetW = 1000;
+    d.sheetH = 1000;
+    BenchPart p;
+    p.xy = rectXY(400, 300);
+    p.qty = 24;
+    d.parts.push_back(p);
+    return d;
+}
+
+// Same 24x 400x300 job on 1000x1000 sheets, but sized so it is only solvable with a GAP: at
+// spacing 5 the footprints are 405x305 and still six fit per sheet (2*405=810, 3*305=915), so the
+// optimum is again FOUR sheets. This is the rectangle-fast-path DENSITY regression: BSSF used to
+// prefer a rotated third placement whose 290-unit leftover band was narrower than the part itself,
+// wasting the sixth slot, so a job took 5 sheets with rotation enabled and 4 with it disabled —
+// more freedom producing a strictly worse pack. Pin it with:
+//
+//   nfp_bench --dataset multisheetgap --sheets 6 --spacing 5 --rotations 4 --expectSheets 4
+//
+// and the same at --rotations 1 and 2; all three must report sheets=4, placed=24, overlap=0, oob=0.
+// (The generator is deliberately identical to `multisheet` — the regression lives in the flags,
+// and a named dataset keeps the documented command line self-describing.)
+inline BenchData makeMultiSheetGap(uint32_t /*seed*/) {
+    BenchData d = makeMultiSheet(0);
+    d.name = "multisheetgap";
+    return d;
+}
+
+// 600 axis-aligned rectangle instances on large sheets — the fast path's SCALE case. `rects` and
+// `multisheet` are far too small (28 / 24 parts, ~0.2 ms) to notice a wall-time regression in the
+// packer; this one runs in the 8-20 ms range, where a slowdown is visible, and is the dataset to
+// quote when changing packMaxRects. Use --sheets 6 (three or four sheets are needed).
+inline BenchData makeManyRects(uint32_t seed) {
+    BenchData d;
+    d.name = "manyrects";
+    d.sheetW = 4000;
+    d.sheetH = 3000;
+    auto& g = rng(seed);
+    for (int i = 0; i < 120; i++) {
+        BenchPart p;
+        p.xy = rectXY(frand(g, 60, 420), frand(g, 60, 420));
+        p.qty = 5;
+        d.parts.push_back(p);
+    }
+    return d;
+}
+
 // ~40 concave/mixed instances: L/T/U, triangles, trapezoids, one star.
 // The main density benchmark.
 inline BenchData makeConcave(uint32_t seed) {
@@ -318,6 +374,12 @@ inline BenchData loadFile(const std::string& path) {
 
 inline BenchData makeDataset(const std::string& name, uint32_t seed) {
     if (name == "rects")   return makeRects(seed);
+    // multisheet: all-rectangle job that needs 4 sheets (rectangle-fast-path multi-sheet regression).
+    if (name == "multisheet") return makeMultiSheet(seed);
+    // multisheetgap: same job run WITH spacing — the fast-path density regression (see above).
+    if (name == "multisheetgap") return makeMultiSheetGap(seed);
+    // manyrects: 600 axis-aligned rectangles — the fast path's SCALE benchmark (wall-time guard).
+    if (name == "manyrects") return makeManyRects(seed);
     if (name == "concave") return makeConcave(seed);
     if (name == "rings")   return makeRings(seed);
     if (name == "blobs")   return makeBlobs(seed);
@@ -331,7 +393,8 @@ inline BenchData makeDataset(const std::string& name, uint32_t seed) {
     if (name == "blobshiq") return makeBlobs(seed, 25, 95, 70, 1.15, 48, 96, 0.8, 3);
     if (name.rfind("file:", 0) == 0) return loadFile(name.substr(5));
     throw std::runtime_error("unknown dataset: " + name +
-                             " (use rects|concave|rings|blobs[q|hi|hiq]|file:<path>)");
+                             " (use rects|multisheet|multisheetgap|manyrects|concave|rings|"
+                             "blobs[q|hi|hiq]|file:<path>)");
 }
 
 } // namespace bench

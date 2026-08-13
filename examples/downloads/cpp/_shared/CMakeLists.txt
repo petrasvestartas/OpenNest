@@ -4,7 +4,9 @@ project(opennest_example LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Fetch OpenNest and build its two native engines from source (works on Windows, macOS, Linux).
+# Fetch OpenNest and build the two 2D engines (nfp_nest, nest_physics) from source — works on Windows,
+# macOS and Linux. OpenNest's third engine, nest_spectral (3D mesh packing), is not needed by these
+# examples, so it is not fetched here.
 include(FetchContent)
 FetchContent_Declare(opennest
     GIT_REPOSITORY https://github.com/petrasvestartas/OpenNest.git

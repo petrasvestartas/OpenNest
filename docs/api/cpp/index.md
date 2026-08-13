@@ -1,6 +1,10 @@
 # C++ Examples
 
-Two native engines through a plain **C ABI**. You give part + sheet polygons; you get back, per
+Three native engines through a plain **C ABI**: `nfp_nest` (no-fit-polygon + genetic algorithm, with
+a rectangle fast path), `nest_physics` (collision / overlap-relaxation) and `nest_spectral` (3D mesh
+packing). The examples below cover the two 2D engines.
+
+You give part + sheet polygons; you get back, per
 part, *move by (tx, ty)*, *rotate by an angle*, and *which sheet*. Angle is **degrees** for
 `nfp_nest`, **radians** for `np_nest`; `sheet_id == -1` means the part didn't fit.
 

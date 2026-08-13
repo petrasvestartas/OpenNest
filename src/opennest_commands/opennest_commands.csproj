@@ -6,9 +6,14 @@
        (NpRun, nest_geo/nest_sheets, rhino_example, the P/Invoke wrappers).
        MULTI-SDK: a .rhp's load is gated by Rhino on the RhinoCommon SDK it was built against (unlike a .gha,
        which loads cross-version), so we build BOTH:
-         - net48 / net7  -> RhinoCommon 8  -> ships in the "OpenNest" package (Rhino 7/8)
-         - net8          -> RhinoCommon 9  -> ships in the "OpenNest_GH2" package (Rhino 9)
-       A net7/RC8 .rhp throws "cannot load .rhp" on Rhino 9, which is why R9 needs its own build. -->
+         - net48 / net7  -> RhinoCommon 8  -> ships in the rh8_0 distributions of the "OpenNest" package
+         - net8          -> RhinoCommon 9  -> ships in the rh9_0 distributions of the SAME "OpenNest" package
+       A net7/RC8 .rhp throws "cannot load .rhp" on Rhino 9, which is why R9 needs its own build.
+       NOT a Rhino 7 story: publish.yml builds exactly four distributions - rh8_0/rh9_0 x win/mac - so the
+       Rhino 7 Package Manager can never offer OpenNest. The net48 TFM exists because Rhino 8 on Windows can
+       run on .NET Framework 4.8 (_SetDotNetRuntime), and it is the payload of the rh8_0-win package's net48/
+       folder. There is also no separate "OpenNest_GH2" Yak package any more (the GH2 .rhp rides along in each
+       package's manual-load grasshopper2/ subfolder) - see docs/developing.md "How publishing works". -->
 
   <PropertyGroup>
     <TargetFrameworks>net8.0-windows;net8.0;net7.0-windows;net7.0;net48</TargetFrameworks>
@@ -28,7 +33,8 @@
     <PackageReference Include="RhinoCommon" Version="9.0.26160.12305-wip" ExcludeAssets="runtime" />
   </ItemGroup>
 
-  <!-- Rhino 7/8 build (net48/net7): RhinoCommon 8 (via the Grasshopper package, same version as opennest_2). -->
+  <!-- Rhino 8 build (net48 = .NET Framework runtime, net7 = .NET Core runtime): RhinoCommon 8 (via the
+       Grasshopper package, same version as opennest_2). Both TFMs are Rhino 8; neither targets Rhino 7. -->
   <ItemGroup Condition="!$(TargetFramework.StartsWith('net8'))">
     <PackageReference Include="Grasshopper" Version="8.0.23304.9001" ExcludeAssets="runtime" />
   </ItemGroup>

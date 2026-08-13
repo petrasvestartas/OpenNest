@@ -47,10 +47,21 @@ def main():
             out = os.path.join(ROOT, "docs", "api", lang, slug + ".md")
             with open(out, "w", encoding="utf-8", newline="\n") as f:
                 f.write(page(num, slug, title, desc, fname, fence, code))
-    cpp_blurb = ("Two native engines through a plain **C ABI**. You give part + sheet polygons; you get back, per\n"
+    # NOTE: this file is the source of truth for docs/api/{cpp,csharp}/index.md — main() rewrites both
+    # pages unconditionally, so editing the generated .md by hand is reverted by the next run
+    # (docs/developing.md tells maintainers to run this script). Edit the blurbs HERE.
+    # The repo has THREE native engines: nfp_nest (NFP + GA + rectangle fast path), nest_physics
+    # (collision / overlap-relaxation) and nest_spectral (3D mesh packing); the examples cover the two 2D ones.
+    cpp_blurb = ("Three native engines through a plain **C ABI**: `nfp_nest` (no-fit-polygon + genetic algorithm, with\n"
+                 "a rectangle fast path), `nest_physics` (collision / overlap-relaxation) and `nest_spectral` (3D mesh\n"
+                 "packing). The examples below cover the two 2D engines.\n\n"
+                 "You give part + sheet polygons; you get back, per\n"
                  "part, *move by (tx, ty)*, *rotate by an angle*, and *which sheet*. Angle is **degrees** for\n"
                  "`nfp_nest`, **radians** for `np_nest`; `sheet_id == -1` means the part didn't fit.")
-    cs_blurb = ("Two native engines via P/Invoke. You give part + sheet polygons; you get back, per part, *move by\n"
+    cs_blurb = ("Three native engines via P/Invoke: `nfp_nest` (no-fit-polygon + genetic algorithm, with a rectangle\n"
+                "fast path), `nest_physics` (collision / overlap-relaxation) and `nest_spectral` (3D mesh packing).\n"
+                "The examples below cover the two 2D engines.\n\n"
+                "You give part + sheet polygons; you get back, per part, *move by\n"
                 "(tx, ty)*, *rotate by an angle*, and *which sheet*. The native libraries are resolved by bare name,\n"
                 "so `nfp_nest`/`nest_physics` (`.dll`/`.dylib`/`.so`) must sit next to the executable.")
     with open(os.path.join(ROOT, "docs", "api", "cpp", "index.md"), "w", encoding="utf-8", newline="\n") as f:

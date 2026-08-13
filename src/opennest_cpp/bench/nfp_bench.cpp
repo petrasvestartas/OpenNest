@@ -7,8 +7,23 @@
 //   nfp_bench --dataset concave --seed 7 --mode 1 --placement 1 --gens 20 --pop 30 \
 //             [--rotations 4] [--tryAllRotations [0|1]] [--edgeSamples N] [--compaction N] \
 //             [--spacing X] [--timeBudget S] [--seeds N] [--geomSeed N] [--exactNfp 0|1] \
-//             [--sheetOffset DX DY] [--dumpPlacements] \
+//             [--sheetOffset DX DY] [--dumpPlacements] [--sheets N] [--expectSheets N] \
 //             --tag baseline [--csv out/results.csv] [--svg out/]
+//
+// --expectSheets N turns a run into a REGRESSION ASSERTION: exit code 3 unless every part is
+// placed on at most N sheets with overlap_area and oob_area both ~0. The pinned cases are
+//   nfp_bench --dataset multisheet    --sheets 6                       --expectSheets 4
+//   nfp_bench --dataset multisheetgap --sheets 6 --spacing 5 --rotations 1|2|4 --expectSheets 4
+// (24x 400x300 on 1000x1000: six fit per sheet with or without a 5-unit gap, so 4 is optimal —
+// and it must stay 4 whether or not rotation is allowed.)
+//   nfp_bench --dataset multisheet --sheetW 805 --sheetH 605 --sheets 6 --spacing 5 \
+//             --rotations 1|4 --expectSheets 6
+// (EXACT-GAP FIT, the rectangle fast path's usable-region convention. 805 = 2*400 + 1*5 and
+// 605 = 2*300 + 1*5, so a sheet holds exactly 2x2 = 4 of the parts and 24 parts need exactly 6
+// sheets at 98.6% utilisation. The fast path packs each part as a (w+spacing) footprint, so the
+// BIN must carry the same +spacing — k parts need k*w + (k-1)*spacing, the gaps BETWEEN them and
+// no phantom gap past the last one. Without it the bin was one whole gap too small in each
+// direction and this job placed 6 of 24 (one part per sheet) instead of 24 of 24.)
 //
 // Metrics (CSV row):
 //   tag,dataset,seed,mode,placement,gens,pop,wall_ms,placed,total,n_sheets,
@@ -61,6 +76,9 @@ struct Args {
                                          // the validator keeps the documented sheet-relative
                                          // frame, so any drift here exposes a readOutputs
                                          // coordinate-contract bug as oob_area > 0.
+    int expectSheets = 0;   // >0 => assert n_sheets <= this (and placed == total, overlap/oob ~ 0)
+                            // and exit(3) otherwise, so a density regression fails a script run
+                            // instead of quietly costing a sheet.
     bool dumpPlacements = false;
     bool dumpDataset = false;
     bool packDemo = false;
@@ -102,6 +120,7 @@ Args parseArgs(int argc, char** argv) {
         else if (k == "--geomSeed") a.geomSeed = (unsigned)std::strtoul(need(i), nullptr, 10);
         else if (k == "--sheetVoid") a.sheetVoid = need(i);
         else if (k == "--sheets") a.nSheets = std::atoi(need(i));
+        else if (k == "--expectSheets") a.expectSheets = std::atoi(need(i));
         else if (k == "--sheetW") a.sheetW = std::atof(need(i));
         else if (k == "--sheetH") a.sheetH = std::atof(need(i));
         else if (k == "--sheetOffset") { a.sheetOffX = std::atof(need(i)); a.sheetOffY = std::atof(need(i)); }
@@ -591,6 +610,20 @@ int main(int argc, char** argv) try {
         if (r.overlap_area > 1e-3 || r.oob_area > 1e-3)
             std::fprintf(stderr, "WARNING: overlap_area=%.6f oob_area=%.6f — invalid layout!\n",
                          r.overlap_area, r.oob_area);
+        // --expectSheets pins a layout whose optimal sheet count is known. Checking placement and
+        // validity alongside it stops the assertion being "passed" by simply dropping parts.
+        if (a.expectSheets > 0) {
+            bool bad = r.n_sheets > a.expectSheets || r.placed != r.total ||
+                       r.overlap_area > 1e-3 || r.oob_area > 1e-3;
+            if (bad) {
+                std::fprintf(stderr,
+                             "FAIL --expectSheets %d: got sheets=%d placed=%d/%d overlap=%.6f "
+                             "oob=%.6f (dataset %s seed %d)\n",
+                             a.expectSheets, r.n_sheets, r.placed, r.total, r.overlap_area,
+                             r.oob_area, a.dataset.c_str(), seed);
+                return 3;
+            }
+        }
         utils.push_back(r.util_strip);
         walls.push_back(r.wall_ms);
     }

@@ -5,8 +5,10 @@ Python route into the same OpenNest engines. The examples here are written for *
 straight into the **Script Editor** (Python 3). The `# r: compas_nest` header installs the package on the first
 **Run**, and a COMPAS `Scene` draws the result into your Rhino document.
 
-There are **two engines**, same API — `opennest_collision()` (physics / overlap‑relaxation, dense, nests into
-holes) and `opennest()` (NFP + genetic algorithm). Every nest is **3 steps**: build the parts + sheets, nest, draw.
+`compas_nest` wraps OpenNest's **two 2D engines**, same API — `opennest_collision()` (physics / overlap‑relaxation,
+dense, nests into holes) and `opennest()` (NFP + genetic algorithm). The third engine, `nest_spectral` (3D mesh
+packing), has no Python wrapper — it is reached through the `OpenNest3D` Grasshopper component. Every nest is
+**3 steps**: build the parts + sheets, nest, draw.
 
 ![compas_nest nesting results in COMPAS](../../assets/compas_nest.png)
 
@@ -93,7 +95,7 @@ Read it with `result.placed_polylines()` (grouped per sheet) or `result.transfor
         origins() -> list[tuple[float, float]]          # each sheet's world origin
     ```
 
-??? info "the two engines"
+??? info "the two 2D engines"
 
     ```python
     class opennest_collision(iterations=4000, num_rotations=3600, spacing=0.0, seed=100,

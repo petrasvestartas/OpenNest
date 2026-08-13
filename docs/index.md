@@ -67,7 +67,7 @@ hide:
 
     ---
 
-    Two native engines through a plain C ABI; build from source with CMake. Eight self‑contained examples.
+    Three native engines through a plain C ABI; build from source with CMake. Eight self‑contained examples.
 
     [:octicons-arrow-right-24: C++ examples](api/cpp/index.md)
 
@@ -99,7 +99,7 @@ hide:
 
 -   __Native C++ speed__
 
-    Two self‑contained C++ engines — NFP + genetic algorithm, and a physics/collision solver — with no heavy dependencies.
+    Three self‑contained C++ engines — `nfp_nest` (no‑fit‑polygon + genetic algorithm, with a rectangle fast path), `nest_physics` (collision / overlap‑relaxation) and `nest_spectral` (3D mesh packing) — with no heavy dependencies.
 
 -   __Carries your data__
 
@@ -118,6 +118,8 @@ hide:
     In Rhino: run `_PackageManager` → search OpenNest → Install, then restart Rhino.
 
     Works on Rhino 8 and 9, Windows and macOS — delivers the Grasshopper 1 components and the `OpenNest` command.
+
+    On Rhino 8 for Windows it loads under **both** .NET runtimes, .NET Core and .NET Framework 4.8 — you never need `_SetDotNetRuntime`.
 
 -   :material-numeric-2-circle: &nbsp; __Grasshopper&nbsp;2 (Rhino&nbsp;9&nbsp;WIP)__
 

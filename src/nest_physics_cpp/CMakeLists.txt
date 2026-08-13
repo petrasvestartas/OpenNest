@@ -46,6 +46,31 @@ if(MINGW OR (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND WIN32))
     target_link_options(nest_physics PRIVATE -static -static-libgcc -static-libstdc++)
 endif()
 
+# Optional Rhino-free regression harness for the SHIPPED C ABI (bench/np_bench.cpp). It P/Invokes the DLL
+# the same way the Grasshopper component does and reassembles world placements host-side, so it catches
+# host-visible defects the solver's internal checks cannot see — e.g. parts reported on a sheet they don't
+# fit. Off by default; it links nothing (the DLL is loaded at runtime by path).
+#
+# Turning it ON also compiles the DEFECT-INJECTION SEAMS (NP_TEST_POKE / NP_TEST_SHIFT) into the library,
+# because the only way to regression-test the quality GATE through the real shipped ABI is to hand it a
+# broken layout. Those seams make the library emit provably interpenetrating / out-of-sheet geometry on
+# demand, so a build meant for Rhino must NOT enable this option — the plain
+#     cmake -S . -B build -A x64 && cmake --build build --config Release
+# release build leaves NP_TEST_SEAMS undefined and the seams do not exist in the binary at all.
+option(NEST_PHYSICS_BUILD_BENCH "Build the np_bench C-ABI regression harness (also arms the DLL's defect-injection seams — NOT for release)" OFF)
+if(NEST_PHYSICS_BUILD_BENCH)
+    target_compile_definitions(nest_physics PRIVATE NP_TEST_SEAMS)
+    add_executable(np_bench bench/np_bench.cpp)
+    set_target_properties(np_bench PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+    if(MSVC)
+        target_compile_options(np_bench PRIVATE /O2)
+    else()
+        target_compile_options(np_bench PRIVATE -O2)
+        find_package(Threads REQUIRED)
+        target_link_libraries(np_bench PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+    endif()
+endif()
+
 # Optional standalone CLI (the original `g++ nest_physics.cpp -o nest_physics`); off by default.
 option(NEST_PHYSICS_BUILD_CLI "Build the nest_physics command-line tool" OFF)
 if(NEST_PHYSICS_BUILD_CLI)

@@ -7,4 +7,41 @@ description: >
   2D Polygonal Nesting.
   Attention: download examples from food4rhino.
 url: https://ko-fi.com/petrasvestartas
+# ASCII only below - by convention, not because anything is currently corrupting it. Every release the
+# publish workflow rewrites this file: Get-Content -Raw, a regex swap of the release number on line 3, then
+# Set-Content -NoNewline (publish.yml, under `shell: pwsh`). Measured on a copy of this file: that round-trip
+# is byte-identical - equal length, zero differing bytes, with an em dash, a curly quote, an e-acute and
+# U+2001 added to these comments - even under Windows PowerShell 5.1, where Get-Content/Set-Content both
+# default to the ANSI code page (read-cp1252 + write-cp1252 is an identity on this machine). PowerShell 7,
+# which is what the workflow actually runs, defaults both cmdlets to UTF-8 without BOM per its own docs
+# (not measured here - no pwsh on the machine this was checked on). What DOES break it is a UTF-8 BOM: same
+# file, same 5.1 pipeline, BOM added -> 14 non-ASCII bytes in, 3 out. So keep the rule; it costs nothing and
+# keeps the file independent of which shell default is in force - but it is belt-and-braces, not a live bug.
+# One thing that IS load-bearing: never write a digit-or-dot run straight after the word "version" plus a
+# colon anywhere in this file. The workflow's regex is unanchored and global, so a second match in a comment
+# would get rewritten too.
+# Package Restore in Grasshopper (developer.rhino3d.com/guides/yak/package-restore-in-grasshopper): opening a
+# .gh whose components are missing looks the package up by plug-in NAME first and by plug-in ID as the backup.
+# Our name never matches ("opennest_2" vs package "OpenNest"), so the ID keyword is the ONLY restore path -
+# and it must be declared HERE, by hand, for two reasons:
+#   1. yak derives the guid keyword from the package ROOT only - it never takes one out of a framework
+#      subfolder. The rh8-win package is multi-targeted (net48/ + net7.0/, nothing loadable in the root, per
+#      RH-76604), so `yak build` has no root .gha to read and emits `keywords: []` - silently, exit code 0.
+#      Re-checked against BOTH yak builds that matter: the one the publish workflow downloads (0.12.14, which
+#      also prints "WARNING: No files found that could be inspected") and the much newer one Rhino 8 bundles
+#      (0.15.2, which DOES recurse far enough to inspect net48/opennest_commands.rhp - and still derives no
+#      guid from that tree). The root-only rule for the GUID is unchanged; only the inspection around it grew.
+#   2. Even in the flat packages the auto-added keyword is never the pair we need, and WHICH single one you
+#      get depends on the yak build. 0.12.14 reads GH_AssemblyInfo only from a net48 .gha and falls back to
+#      the assembly guid 73f7a328-... for the .NET Core .gha we actually ship; 0.15.2 reads GH_AssemblyInfo
+#      out of the .NET Core .gha too and adds 69663e7d-... instead. Neither ever adds both. Declaring both
+#      here is what makes the shipped metadata independent of which yak built the package.
+# 69663e7d-... is opennest_2Info.Id (src/opennest_2/opennest_2Info.cs) - the id Grasshopper actually writes
+# into documents (every saved .ghx carries it as Library/Id and as each object's "Lib") and therefore the one
+# restore searches for. 73f7a328-... is the assembly-guid fallback every published version has carried;
+# keeping it preserves `yak search guid:73f7a328-...`. Both are OpenNest's own ids - no collision risk.
+# publish.yml re-checks both are present in every built .yak ("Verify Yak package contents").
+keywords:
+- guid:69663e7d-f412-4b90-ba83-520c906eaeec
+- guid:73f7a328-a594-3f93-c813-5f3cfb67e447
 icon: icon.png

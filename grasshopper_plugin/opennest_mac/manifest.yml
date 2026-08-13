@@ -5,4 +5,15 @@ authors:
 - Petras Vestartas
 description: 2D Polygonal Nesting
 url: https://ko-fi.com/petrasvestartas
+# ASCII only below: the publish workflow rewrites this file every release with a regex + Set-Content.
+# Grasshopper's Package Restore looks a missing plug-in up by name, then by plug-in ID. Our name never matches
+# ("opennest_2" vs package "OpenNest"), so the ID keyword is the only restore path. Declared by hand because
+# `yak build` auto-adds the id from the ROOT .gha only, and for a .NET Core .gha it cannot read
+# GH_AssemblyInfo and falls back to the assembly guid 73f7a328-... - an id no .gh file ever contains.
+# Full write-up in grasshopper_plugin/opennest_win/manifest.yml.
+# 69663e7d-... = opennest_2Info.Id, what Grasshopper writes into documents and restores by.
+# 73f7a328-... = assembly-guid fallback shipped by every published version; kept so old searches still hit.
+keywords:
+- guid:69663e7d-f412-4b90-ba83-520c906eaeec
+- guid:73f7a328-a594-3f93-c813-5f3cfb67e447
 icon: icon.png

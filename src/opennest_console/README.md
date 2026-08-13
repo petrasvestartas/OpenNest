@@ -1,7 +1,7 @@
 # opennest_console
 
-A standalone, **Rhino-free** demonstration of the two OpenNest nesting engines, driven directly through
-their C ABIs — no Grasshopper, no RhinoCommon, no `nest_geo`/`nest_sheets` (those need `RhinoDoc.ActiveDoc`).
+A standalone, **Rhino-free** demonstration of OpenNest's two **2D** nesting engines, driven directly through
+their C ABIs (the third engine, `nest_spectral`, does 3D mesh packing and is not exercised here) — no Grasshopper, no RhinoCommon, no `nest_geo`/`nest_sheets` (those need `RhinoDoc.ActiveDoc`).
 
 | Workflow | Native DLL | C entry | Algorithm |
 |---|---|---|---|
@@ -35,15 +35,27 @@ cd bin/Release/net9.0
 
 ## Native DLLs
 
-The build's post-build step copies whichever solver DLLs exist next to the exe.
-`nest_physics.dll` ships pre-built under `opennest_2/`. To enable the OpenNest2 path, build `nfp_nest.dll`:
+The build's post-build step copies whichever solver DLLs exist next to the exe. **Neither is pre-built in
+the repo** — build both engines first (from the repo root, one shot):
 
 ```powershell
-cmake -S opennest_cpp -B opennest_cpp/build
-cmake --build opennest_cpp/build --config Release
+cmake -S . -B build -A x64
+cmake --build build --config Release
 ```
 
-Then rebuild this project (the post-build picks up `opennest_cpp/build/Release/nfp_nest.dll`).
+or just the two this console needs, one folder at a time:
+
+```powershell
+cmake -S src/nest_physics_cpp -B src/nest_physics_cpp/build -A x64
+cmake --build src/nest_physics_cpp/build --config Release
+
+cmake -S src/opennest_cpp -B src/opennest_cpp/build -A x64
+cmake --build src/opennest_cpp/build --config Release
+```
+
+Then rebuild this project; the post-build picks up `nest_physics_cpp/build/Release/nest_physics.dll` and
+`opennest_cpp/build/Release/nfp_nest.dll`. Each copy is `Exists()`-guarded, so a missing engine just
+disables its workflow instead of failing the build.
 
 ## Transform contract (per placed part)
 
