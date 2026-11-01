@@ -320,24 +320,35 @@ pub async fn cancel(State(state): State<Arc<AppState>>, ConnectInfo(addr): Conne
     Ok(Json(json!({"status": "cancelling"})))
 }
 
-async fn file_response(path: std::path::PathBuf, content_type: &'static str) -> ApiResult<Response> {
+/// A response with an ETag, answering 304 when the client already has these bytes (session_viewer's
+/// live mode polls every couple of seconds with If-None-Match).
+fn bytes_response(headers: &HeaderMap, body: Vec<u8>, content_type: &'static str) -> Response {
+    let etag = format!("\"{}\"", &hex::encode(Sha256::digest(&body))[..32]);
+    if headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()).map(|v| v.split(',').any(|t| t.trim() == etag)).unwrap_or(false) {
+        let mut r = StatusCode::NOT_MODIFIED.into_response();
+        r.headers_mut().insert(header::ETAG, HeaderValue::from_str(&etag).unwrap());
+        return r;
+    }
+    let mut r = body.into_response();
+    r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    r.headers_mut().insert(header::ETAG, HeaderValue::from_str(&etag).unwrap());
+    r
+}
+
+async fn file_response(headers: &HeaderMap, path: std::path::PathBuf, content_type: &'static str) -> ApiResult<Response> {
     match tokio::fs::read(&path).await {
-        Ok(b) => {
-            let mut r = b.into_response();
-            r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
-            r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-            Ok(r)
-        }
+        Ok(b) => Ok(bytes_response(headers, b, content_type)),
         Err(_) => Err(ApiError(StatusCode::NOT_FOUND, "not available (yet)".into())),
     }
 }
 
-pub async fn result(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> ApiResult<Response> {
+pub async fn result(State(state): State<Arc<AppState>>, headers: HeaderMap, Path(id): Path<String>) -> ApiResult<Response> {
     load_job(&state, &id).await?;
-    file_response(job_dir(&state.cfg.data_dir, &id).join("result.json"), "application/json").await
+    file_response(&headers, job_dir(&state.cfg.data_dir, &id).join("result.json"), "application/json").await
 }
 
-pub async fn job_file(State(state): State<Arc<AppState>>, Path((id, file)): Path<(String, String)>) -> ApiResult<Response> {
+pub async fn job_file(State(state): State<Arc<AppState>>, headers: HeaderMap, Path((id, file)): Path<(String, String)>) -> ApiResult<Response> {
     load_job(&state, &id).await?;
     let (name, ct) = match file.as_str() {
         "view.yaml" => ("view.yaml", "application/yaml"),
@@ -348,7 +359,7 @@ pub async fn job_file(State(state): State<Arc<AppState>>, Path((id, file)): Path
         "solver.log" => ("solver.log", "text/plain; charset=utf-8"),
         _ => return Err(ApiError(StatusCode::NOT_FOUND, "no such file".into())),
     };
-    file_response(job_dir(&state.cfg.data_dir, &id).join(name), ct).await
+    file_response(&headers, job_dir(&state.cfg.data_dir, &id).join(name), ct).await
 }
 
 /// Progress as Server-Sent Events: one event per line of the worker's events.ndjson, then a final
@@ -411,7 +422,7 @@ pub async fn events(
 }
 
 /// The latest finished result, for a session_viewer tab left open on `?live=`.
-pub async fn latest_manifest(State(state): State<Arc<AppState>>, Path(token): Path<String>) -> ApiResult<Response> {
+pub async fn latest_manifest(State(state): State<Arc<AppState>>, headers: HeaderMap, Path(token): Path<String>) -> ApiResult<Response> {
     if !ct_eq(token.as_bytes(), view_token(&state.cfg.password).as_bytes()) {
         return Err(ApiError(StatusCode::NOT_FOUND, "unknown view link".into()));
     }
@@ -437,9 +448,6 @@ pub async fn latest_manifest(State(state): State<Arc<AppState>>, Path(token): Pa
     // viewer's live poll reloads the scene.
     let file = format!("../../api/jobs/{}/result.pb", job.id);
     let body = crate::preview::manifest(&format!("OpenNest latest ({})", job.id), &file, &texts);
-    let mut r = body.into_response();
-    r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/yaml"));
-    r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-    Ok(r)
+    Ok(bytes_response(&headers, body.into_bytes(), "application/yaml"))
 }
 

@@ -99,9 +99,10 @@ async fn run_one(state: &Arc<AppState>, job: Job) -> Result<(), String> {
     let started = std::time::Instant::now();
     // Live scene for session_viewer: every LIVE_EVERY the newest progress layout becomes live.pb and
     // view.yaml points at it (with a version query, so the viewer's live poll sees a change).
-    const LIVE_EVERY: Duration = Duration::from_secs(3);
+    const LIVE_EVERY: Duration = Duration::from_secs(5);
     let mut ev_offset = 0usize;
     let mut latest_layout: Option<String> = None;
+    let mut last_written: Option<String> = None;   // the layout part of the last live scene, to skip no-change rewrites
     let mut last_live = std::time::Instant::now() - LIVE_EVERY;
     let mut live_version = 0u32;
     let mut live_task: Option<tokio::task::JoinHandle<()>> = None;
@@ -123,6 +124,11 @@ async fn run_one(state: &Arc<AppState>, job: Job) -> Result<(), String> {
                 let idle = live_task.as_ref().map(|t| t.is_finished()).unwrap_or(true);
                 if idle && last_live.elapsed() >= LIVE_EVERY {
                     if let (Some(line), Some(jj)) = (latest_layout.take(), job_json.as_ref().clone()) {
+                        let layout_part = line.find("\"layout\":").map(|i| line[i..].to_string()).unwrap_or_default();
+                        if last_written.as_deref() == Some(layout_part.as_str()) {
+                            continue;   // nothing moved: do not make the viewer reload the scene
+                        }
+                        last_written = Some(layout_part);
                         live_version += 1;
                         last_live = std::time::Instant::now();
                         let (d2, id2, v) = (dir.clone(), job.id.clone(), live_version);
