@@ -81,6 +81,14 @@ service must start the worker with a clean environment and never pass user-suppl
 * `rotations`: `0` = free continuous rotation, `N > 0` = only N orientations (360/N degree steps,
   `1` = fixed).
 * Part `holes` may receive other parts when `part_holes_mode` is 1. Sheet `holes` are keep-out regions.
+* A sheet `outer` may be any simple polygon (offcuts, L-shapes): the solver works on its bounding box
+  and the runner adds the area outside the outline as keep-outs. An island of sheet enclosed by a
+  cut-out cannot be expressed; split such a sheet into separate sheets.
+* Coordinates may be anywhere (a part drawn 50 m from the origin is fine): every ring is solved in its
+  own local frame and the transforms are reported in the input coordinates.
+* An outline that cannot be made solver-safe (its edges still touch at float32 precision after
+  simplification) fails the job with the ring named; set `OPENNEST_JOB_GEOMETRY_LOG=1` to see which
+  rings needed simplification retries.
 * Unknown keys are rejected, so a typo cannot silently fall back to a default.
 
 `params` are the `NpParams` fields of `nest_physics_capi.h`; defaults are the Grasshopper component's
