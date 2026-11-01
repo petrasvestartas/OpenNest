@@ -671,13 +671,15 @@ struct Options {
     bool quiet = false;
     double interval = 2.0;
     double max_wall = 0.0;   // operator cap; the job's limits.wall_seconds can only lower it
+    double grace = 120.0;    // after a cancel, how long the solver may take to return before the best
+                             // polled layout is written and the process exits anyway
 };
 
 [[noreturn]] void usage(const char* msg) {
     if (msg) std::fprintf(stderr, "opennest_job: %s\n", msg);
     std::fprintf(stderr,
         "usage: opennest_job <job.json|-> <result.json|-> [--events <file>] [--events-layout]\n"
-        "                    [--interval <s>] [--max-wall <s>] [--cancel-file <path>] [--quiet] | --version\n");
+        "                    [--interval <s>] [--max-wall <s>] [--grace <s>] [--cancel-file <path>] [--quiet] | --version\n");
     std::exit(2);
 }
 
@@ -700,6 +702,7 @@ Options parse_args(int argc, char** argv) {
         else if (a == "--events-layout") o.events_layout = true;
         else if (a == "--interval") o.interval = next_num();
         else if (a == "--max-wall") o.max_wall = next_num();
+        else if (a == "--grace") o.grace = next_num();
         else if (a == "--quiet") o.quiet = true;
         else if (a == "--version") {
             std::printf("opennest_job %s (%s, %s)\n", OPENNEST_JOB_VERSION, platform_id().c_str(), compiler_id().c_str());
@@ -803,6 +806,50 @@ int main(int argc, char** argv) {
     std::vector<int> sid(n, -1);
     int n_sheets = 0;
 
+    // The opennest.result/1 document. Placements are expected already folded back to input coordinates.
+    auto result_doc = [&](const std::string& status, const std::string& reason, const std::string& error, double wall,
+                          long long rounds, int nsh, bool clean, int q_overlap, int q_oob, int q_unplaced, int q_demoted,
+                          const std::vector<double>& tx, const std::vector<double>& ty, const std::vector<double>& ang,
+                          const std::vector<int>& sid) {
+        std::string o;
+        o.reserve(256 + size_t(n) * 160);
+        o += "{\n \"schema\": " + js::quote(kResultSchema) + ",\n";
+        o += " \"status\": " + js::quote(status) + ",\n";
+        if (!error.empty()) o += " \"error\": " + js::quote(error) + ",\n";
+        if (!reason.empty()) o += " \"cancel_reason\": " + js::quote(reason) + ",\n";
+        o += " \"engine\": {\"name\": \"nest_physics\", \"runner\": " + js::quote(std::string("opennest_job ") + OPENNEST_JOB_VERSION) +
+             ", \"platform\": " + js::quote(platform_id()) + ", \"compiler\": " + js::quote(compiler_id()) + "},\n";
+        o += " \"wall_s\": " + js::number(wall) + ",\n";
+        o += " \"rounds\": " + std::to_string(rounds) + ",\n";
+        std::vector<int> used;
+        for (int k = 0; k < n; ++k)
+            if (sid[k] >= 0 && std::find(used.begin(), used.end(), sid[k]) == used.end()) used.push_back(sid[k]);
+        std::sort(used.begin(), used.end());
+        o += " \"n_sheets\": " + std::to_string(nsh > 0 ? nsh : int(used.size())) + ",\n";
+        o += " \"sheets_used\": [";
+        for (size_t k = 0; k < used.size(); ++k) o += (k ? "," : "") + std::to_string(used[k]);
+        o += "],\n";
+        o += " \"quality\": {\"clean\": " + std::string(clean ? "true" : "false") + ", \"overlap_pairs\": " +
+             std::to_string(q_overlap) + ", \"out_of_bounds\": " + std::to_string(q_oob) + ", \"unplaced\": " +
+             std::to_string(q_unplaced) + ", \"demoted\": " + std::to_string(q_demoted) + "},\n";
+        o += " \"frame\": " + js::quote(kFrame) + ",\n";
+        o += " \"clearance\": {\"spacing\": " + js::number(job.spacing) + ", \"margin\": " + js::number(job.margin) + "},\n";
+        o += " \"placements\": [\n";
+        for (int k = 0; k < n; ++k) {
+            const auto& pc = f.part_copies[size_t(k)];
+            o += "  {\"part\": " + js::dump(job.parts[pc.spec].id) + ", \"copy\": " + std::to_string(pc.copy) +
+                 ", \"sheet\": " + std::to_string(sid[k] >= 0 && sid[k] < ns ? sid[k] : -1);
+            if (sid[k] >= 0 && sid[k] < ns) {
+                const auto& sc = f.sheet_copies[size_t(sid[k])];
+                o += ", \"sheet_id\": " + js::dump(job.sheets[sc.spec].id) + ", \"sheet_copy\": " + std::to_string(sc.copy);
+            }
+            o += ", \"tx\": " + js::number(tx[k]) + ", \"ty\": " + js::number(ty[k]) + ", \"angle\": " + js::number(ang[k]) + "}";
+            o += (k + 1 < n ? ",\n" : "\n");
+        }
+        o += " ]\n}\n";
+        return o;
+    };
+
     // Monitor thread: progress events, the wall cap, and re-issuing a signal's cancel (np_nest clears the
     // cancel flag on entry, so a signal that lands just before the solve starts must be repeated).
     std::mutex mu;
@@ -815,12 +862,31 @@ int main(int argc, char** argv) {
         std::vector<int> psid(n);
         double next_event = opt.interval;
         unsigned file_checks = 0;
+        double cancel_at = -1.0;   // when the first cancel was issued
         std::unique_lock<std::mutex> lk(mu);
         while (!done) {
             cv.wait_for(lk, std::chrono::milliseconds(50), [&] { return done; });
             if (done) break;
             double t = elapsed();
             if (g_signal_stop.load()) np_cancel();
+            if (cancel_at < 0 && (g_signal_stop.load() || file_stop.load() || cap_hit.load())) cancel_at = t;
+            // A solver phase that does not look at the cancel flag for a long time (group-and-fill on a slow
+            // machine) must not turn a budget overrun into a lost result: after `grace`, write the best
+            // layout polled so far and leave without waiting for np_nest to return.
+            if (cancel_at >= 0 && t - cancel_at >= opt.grace) {
+                int pns = 0;
+                int placed = np_poll_layout(n, ptx.data(), pty.data(), pang.data(), psid.data(), &pns);
+                for (int k = 0; k < n; ++k) fold_back(job, f, k, ptx[k], pty[k], pang[k], psid[k]);
+                std::string reason = g_signal_stop.load() ? "signal" : file_stop.load() ? "cancel_file" : "wall_cap";
+                std::string o = result_doc("cancelled", reason + " (solver did not stop within the grace period; layout is the last polled snapshot, unverified)",
+                                           "", t, np_progress(), pns, false, -1, -1, n - placed, -1, ptx, pty, pang, psid);
+                try { write_atomic(opt.out, o); } catch (...) {}
+                events->line("{\"event\":\"done\",\"t\":" + js::number(t) + ",\"status\":\"cancelled\",\"n_sheets\":" +
+                             std::to_string(pns) + ",\"unplaced\":" + std::to_string(n - placed) + ",\"forced\":true}");
+                if (!opt.quiet) std::fprintf(stderr, "[opennest_job] cancelled: solver unresponsive for %.0fs after the cancel; wrote the polled layout (%d placed) and exiting\n", opt.grace, placed);
+                std::fflush(stderr);
+                std::_Exit(124);
+            }
             if (!opt.cancel_file.empty() && !file_stop.load() && ++file_checks % 5 == 0) {
                 std::error_code ec;
                 if (std::filesystem::exists(opt.cancel_file, ec)) {
@@ -868,44 +934,9 @@ int main(int argc, char** argv) {
     // "partial" = the solve finished but some parts fit on no sheet (too big, or too few sheets given).
     std::string status = rc != 0 ? "error" : cancelled ? "cancelled" : (q_unplaced > 0 ? "partial" : "ok");
 
-    // ---- result document ----
-    std::string o;
-    o.reserve(256 + size_t(n) * 160);
-    o += "{\n \"schema\": " + js::quote(kResultSchema) + ",\n";
-    o += " \"status\": " + js::quote(status) + ",\n";
-    if (rc != 0) o += " \"error\": " + js::quote("np_nest returned " + std::to_string(rc)) + ",\n";
-    if (cancelled) o += std::string(" \"cancel_reason\": ") + (g_signal_stop.load() ? "\"signal\"" : file_stop.load() ? "\"cancel_file\"" : cap_hit.load() ? "\"wall_cap\"" : "\"solver\"") + ",\n";
-    o += " \"engine\": {\"name\": \"nest_physics\", \"runner\": " + js::quote(std::string("opennest_job ") + OPENNEST_JOB_VERSION) +
-         ", \"platform\": " + js::quote(platform_id()) + ", \"compiler\": " + js::quote(compiler_id()) + "},\n";
-    o += " \"wall_s\": " + js::number(wall) + ",\n";
-    o += " \"rounds\": " + std::to_string(rounds) + ",\n";
-    std::vector<int> used;
-    for (int k = 0; k < n; ++k)
-        if (sid[k] >= 0 && std::find(used.begin(), used.end(), sid[k]) == used.end()) used.push_back(sid[k]);
-    std::sort(used.begin(), used.end());
-    o += " \"n_sheets\": " + std::to_string(n_sheets > 0 ? n_sheets : int(used.size())) + ",\n";
-    o += " \"sheets_used\": [";
-    for (size_t k = 0; k < used.size(); ++k) o += (k ? "," : "") + std::to_string(used[k]);
-    o += "],\n";
-    o += " \"quality\": {\"clean\": " + std::string(clean ? "true" : "false") + ", \"overlap_pairs\": " +
-         std::to_string(q_overlap) + ", \"out_of_bounds\": " + std::to_string(q_oob) + ", \"unplaced\": " +
-         std::to_string(q_unplaced) + ", \"demoted\": " + std::to_string(q_demoted) + "},\n";
-    o += " \"frame\": " + js::quote(kFrame) + ",\n";
-    o += " \"clearance\": {\"spacing\": " + js::number(job.spacing) + ", \"margin\": " + js::number(job.margin) + "},\n";
-    o += " \"placements\": [\n";
-    for (int k = 0; k < n; ++k) {
-        const auto& pc = f.part_copies[size_t(k)];
-        o += "  {\"part\": " + js::dump(job.parts[pc.spec].id) + ", \"copy\": " + std::to_string(pc.copy) +
-             ", \"sheet\": " + std::to_string(sid[k] >= 0 && sid[k] < ns ? sid[k] : -1);
-        if (sid[k] >= 0 && sid[k] < ns) {
-            const auto& sc = f.sheet_copies[size_t(sid[k])];
-            o += ", \"sheet_id\": " + js::dump(job.sheets[sc.spec].id) + ", \"sheet_copy\": " + std::to_string(sc.copy);
-        }
-        o += ", \"tx\": " + js::number(tx[k]) + ", \"ty\": " + js::number(ty[k]) + ", \"angle\": " + js::number(ang[k]) + "}";
-        o += (k + 1 < n ? ",\n" : "\n");
-    }
-    o += " ]\n}\n";
-
+    std::string reason = g_signal_stop.load() ? "signal" : file_stop.load() ? "cancel_file" : cap_hit.load() ? "wall_cap" : "solver";
+    std::string o = result_doc(status, cancelled ? reason : "", rc != 0 ? "np_nest returned " + std::to_string(rc) : "",
+                               wall, rounds, n_sheets, clean != 0, q_overlap, q_oob, q_unplaced, q_demoted, tx, ty, ang, sid);
     try { write_atomic(opt.out, o); } catch (const std::exception& e) { return fail_result(e.what()); }
     events->line("{\"event\":\"done\",\"t\":" + js::number(wall) + ",\"status\":" + js::quote(status) +
                  ",\"n_sheets\":" + std::to_string(n_sheets) + ",\"unplaced\":" + std::to_string(q_unplaced) + "}");

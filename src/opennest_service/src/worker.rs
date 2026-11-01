@@ -70,6 +70,8 @@ async fn run_one(state: &Arc<AppState>, job: Job) -> Result<(), String> {
         .arg("1")
         .arg("--max-wall")
         .arg(format!("{}", job.wall_cap))
+        .arg("--grace")
+        .arg("180")
         .arg("--cancel-file")
         .arg(&cancel_file)
         .arg("--quiet")
@@ -91,7 +93,9 @@ async fn run_one(state: &Arc<AppState>, job: Job) -> Result<(), String> {
         Arc::new(tokio::fs::read(&job_file).await.ok().and_then(|b| serde_json::from_slice(&b).ok()));
 
     let mut child = cmd.spawn().map_err(|e| format!("cannot start {}: {e}", state.cfg.job_bin.display()))?;
-    let hard_limit = Duration::from_secs_f64(job.wall_cap + 60.0);
+    // the worker writes its best polled layout and exits 180 s after the cap at the latest (--grace);
+    // this outer kill is only for a worker that is wedged altogether
+    let hard_limit = Duration::from_secs_f64(job.wall_cap + 300.0);
     let started = std::time::Instant::now();
     // Live scene for session_viewer: every LIVE_EVERY the newest progress layout becomes live.pb and
     // view.yaml points at it (with a version query, so the viewer's live poll sees a change).
@@ -131,7 +135,7 @@ async fn run_one(state: &Arc<AppState>, job: Job) -> Result<(), String> {
                 }
                 if started.elapsed() > hard_limit {
                     let _ = child.kill().await;
-                    break Err("killed: exceeded the wall cap by more than 60 s".to_string());
+                    break Err("killed: exceeded the wall cap by more than 5 minutes".to_string());
                 }
                 let wants_cancel = {
                     let c = state.db.lock().await;
