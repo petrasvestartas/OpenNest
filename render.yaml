@@ -8,17 +8,19 @@ services:
   - type: web
     name: opennest
     runtime: docker
-    plan: 0.5c-512mb             # TEST size (~$7/month): slow nests, small jobs only.
-                                 # For selling: 8c-16g (8 CPUs) and set OPENNEST_THREADS_PER_JOB to 6.
+    plan: free                   # TEST: 0.1 CPU, sleeps after 15 min idle, NO disk (see below).
+                                 # For selling: 8c-16g (8 CPUs), add the disk back, THREADS_PER_JOB 6.
     region: frankfurt
     dockerfilePath: ./src/opennest_service/deploy/Dockerfile
     dockerContext: .
     healthCheckPath: /healthz
     autoDeployTrigger: commit
-    disk:                        # one disk = one instance; a deploy restarts it (running jobs are refunded)
-      name: opennest-data
-      mountPath: /data
-      sizeGB: 1
+    # The free plan allows no persistent disk, so /data (SQLite: accounts, credits, results) is wiped
+    # whenever the service sleeps, restarts or redeploys. On a paid plan, put this back:
+    # disk:                      # one disk = one instance; a deploy restarts it (running jobs are refunded)
+    #   name: opennest-data
+    #   mountPath: /data
+    #   sizeGB: 1
     envVars:
       - key: PORT                # the Dockerfile listens on 8080
         value: "8080"
