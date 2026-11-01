@@ -27,6 +27,22 @@ pub struct AppState {
     pub limiter: Mutex<HashMap<String, Vec<Instant>>>,
 }
 
+/// Ctrl+C, or SIGTERM from a platform restart (Render, docker stop, systemd). Jobs still running at that
+/// moment are closed and refunded by `db::recover_interrupted` on the next start.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = term.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = tokio::signal::ctrl_c().await;
+    tracing::info!("shutting down");
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -86,9 +102,7 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(&cfg.bind).await.expect("cannot bind");
     let server = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        });
+        .with_graceful_shutdown(shutdown_signal());
     if let Err(e) = server.await {
         tracing::error!("server: {e}");
     }

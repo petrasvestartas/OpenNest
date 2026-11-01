@@ -1,0 +1,43 @@
+# Render Blueprint for the OpenNest web service (src/opennest_service).
+# Render: New > Blueprint > this repository. Render builds src/opennest_service/deploy/Dockerfile,
+# terminates HTTPS itself (no Caddy here) and keeps the SQLite database and job files on the disk.
+#
+# The plan sets the compute every customer job gets: nesting quality grows with the threads a job has,
+# so pick CPUs, not RAM (the solver needs well under 1 GB for typical jobs).
+services:
+  - type: web
+    name: opennest
+    runtime: docker
+    plan: 8c-16g                 # 8 CPUs; 12c-24g is the next step up
+    region: frankfurt
+    dockerfilePath: ./src/opennest_service/deploy/Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    disk:                        # one disk = one instance; a deploy restarts it (running jobs are refunded)
+      name: opennest-data
+      mountPath: /data
+      sizeGB: 5
+    envVars:
+      - key: PORT                # the Dockerfile listens on 8080
+        value: "8080"
+      - key: OPENNEST_TRUST_PROXY
+        value: "1"
+      - key: OPENNEST_SLOTS
+        value: "1"
+      - key: OPENNEST_THREADS_PER_JOB
+        value: "6"               # ~75% of the plan's 8 CPUs; change together with `plan`
+      - key: OPENNEST_SIGNUP_CREDITS
+        value: "600"
+      - key: OPENNEST_ANON_PREVIEW
+        value: "1"
+      - key: OPENNEST_ADMIN_TOKEN
+        generateValue: true      # read it in the dashboard (Environment)
+      - key: OPENNEST_PUBLIC_URL
+        sync: false              # https://opennest.onrender.com or your custom domain, no trailing slash
+      - key: OPENNEST_PADDLE_SECRET
+        sync: false
+      - key: OPENNEST_PADDLE_CLIENT_TOKEN
+        sync: false
+      - key: OPENNEST_PADDLE_PRICES
+        sync: false
