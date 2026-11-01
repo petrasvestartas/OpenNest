@@ -132,8 +132,13 @@ pub fn build(job: &Value, result: &Value, title: &str) -> Result<Preview, String
             let b = bbox(o);
             b[2] - b[0]
         })
-        .fold(0.0, f64::max)
-        .max(1.0);
+        .fold(0.0, f64::max);
+    // a parts-only scene (nothing placed): size the row by the widest part instead
+    let widest = if widest > 0.0 {
+        widest
+    } else {
+        parts.iter().filter_map(|p| ring(&p["outer"])).map(|r| { let b = bbox(&r); b[2] - b[0] }).fold(0.0, f64::max).max(1.0)
+    };
     let gap = 0.1 * widest;
 
     let mut session = Session::new(title);
@@ -201,6 +206,11 @@ pub fn build(job: &Value, result: &Value, title: &str) -> Result<Preview, String
         texts.push((format!("{} unplaced", unplaced.len()), [0.0, top - 1.5 * hgt, 0.0], hgt));
     }
     Ok(Preview { pb: session.pb_dumps(), texts, sheets: summaries })
+}
+
+/// A manifest with nothing in it yet (a queued job): the viewer keeps polling until items appear.
+pub fn empty_manifest(name: &str) -> String {
+    format!("name: {}\nlive: true\ngrid: false\nitems: []\n", serde_json::to_string(name).unwrap_or_else(|_| "\"\"".into()))
 }
 
 /// Scene manifest for session_viewer. `file` is resolved against the manifest's own folder.

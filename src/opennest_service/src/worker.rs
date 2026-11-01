@@ -87,13 +87,48 @@ async fn run_one(state: &Arc<AppState>, job: Job) -> Result<(), String> {
         }
     }
 
+    let job_json: Arc<Option<Value>> =
+        Arc::new(tokio::fs::read(&job_file).await.ok().and_then(|b| serde_json::from_slice(&b).ok()));
+
     let mut child = cmd.spawn().map_err(|e| format!("cannot start {}: {e}", state.cfg.job_bin.display()))?;
     let hard_limit = Duration::from_secs_f64(job.wall_cap + 60.0);
     let started = std::time::Instant::now();
+    // Live scene for session_viewer: every LIVE_EVERY the newest progress layout becomes live.pb and
+    // view.yaml points at it (with a version query, so the viewer's live poll sees a change).
+    const LIVE_EVERY: Duration = Duration::from_secs(3);
+    let mut ev_offset = 0usize;
+    let mut latest_layout: Option<String> = None;
+    let mut last_live = std::time::Instant::now() - LIVE_EVERY;
+    let mut live_version = 0u32;
+    let mut live_task: Option<tokio::task::JoinHandle<()>> = None;
     let status = loop {
         tokio::select! {
             s = child.wait() => break s.map_err(|e| e.to_string()),
             _ = tokio::time::sleep(Duration::from_millis(500)) => {
+                if let Ok(bytes) = tokio::fs::read(&events_file).await {
+                    if bytes.len() > ev_offset {
+                        if let Some(last_nl) = bytes[ev_offset..].iter().rposition(|b| *b == b'\n') {
+                            let text = String::from_utf8_lossy(&bytes[ev_offset..ev_offset + last_nl]).to_string();
+                            if let Some(line) = text.lines().rev().find(|l| l.contains("\"layout\":")) {
+                                latest_layout = Some(line.to_string());
+                            }
+                            ev_offset += last_nl + 1;
+                        }
+                    }
+                }
+                let idle = live_task.as_ref().map(|t| t.is_finished()).unwrap_or(true);
+                if idle && last_live.elapsed() >= LIVE_EVERY {
+                    if let (Some(line), Some(jj)) = (latest_layout.take(), job_json.as_ref().clone()) {
+                        live_version += 1;
+                        last_live = std::time::Instant::now();
+                        let (d2, id2, v) = (dir.clone(), job.id.clone(), live_version);
+                        live_task = Some(tokio::task::spawn_blocking(move || {
+                            if let Err(e) = write_live(&jj, &line, &d2, &id2, v) {
+                                tracing::debug!(job = %id2, "live preview: {e}");
+                            }
+                        }));
+                    }
+                }
                 if started.elapsed() > hard_limit {
                     let _ = child.kill().await;
                     break Err("killed: exceeded the wall cap by more than 60 s".to_string());
@@ -110,6 +145,9 @@ async fn run_one(state: &Arc<AppState>, job: Job) -> Result<(), String> {
     };
     let elapsed = started.elapsed().as_secs_f64();
 
+    if let Some(t) = live_task.take() {
+        let _ = t.await;
+    }
     let result: Option<Value> =
         tokio::fs::read(&result_file).await.ok().and_then(|b| serde_json::from_slice(&b).ok());
     let mut fin = Finish { status: "failed", n_sheets: None, unplaced: None, wall_s: Some(elapsed), error: None, has_preview: false };
@@ -124,9 +162,7 @@ async fn run_one(state: &Arc<AppState>, job: Job) -> Result<(), String> {
             fin.n_sheets = r["n_sheets"].as_i64();
             fin.unplaced = r["quality"]["unplaced"].as_i64();
             fin.wall_s = Some(r["wall_s"].as_f64().unwrap_or(elapsed));
-            let job_json: Option<Value> =
-                tokio::fs::read(&job_file).await.ok().and_then(|b| serde_json::from_slice(&b).ok());
-            if let Some(jj) = job_json {
+            if let Some(jj) = job_json.as_ref().clone() {
                 let (r2, d2, id2) = (r.clone(), dir.clone(), job.id.clone());
                 match tokio::task::spawn_blocking(move || write_preview(&jj, &r2, &d2, &id2)).await {
                     Ok(Ok(())) => fin.has_preview = true,
@@ -143,6 +179,36 @@ async fn run_one(state: &Arc<AppState>, job: Job) -> Result<(), String> {
     db::finish_job(&c, &job.id, &fin).map_err(|e| e.to_string())?;
     tracing::info!(job = %job.id, status = fin.status, wall = elapsed, "done");
     Ok(())
+}
+
+/// The in-progress layout as a scene: one `progress` event line with `layout: [[sheet, tx, ty, angle], ...]`
+/// per part copy in job order (part-major, qty copies), the same order the result's placements use.
+fn write_live(job: &Value, event_line: &str, dir: &Path, id: &str, version: u32) -> Result<(), String> {
+    let ev: Value = serde_json::from_str(event_line).map_err(|e| e.to_string())?;
+    let layout = ev["layout"].as_array().ok_or("no layout")?;
+    let mut placements = Vec::with_capacity(layout.len());
+    let mut k = 0usize;
+    for (i, p) in job["parts"].as_array().ok_or("no parts")?.iter().enumerate() {
+        let qty = p.get("qty").and_then(|q| q.as_u64()).unwrap_or(1) as usize;
+        for c in 0..qty {
+            let l = layout.get(k).and_then(|l| l.as_array()).ok_or("layout shorter than the part list")?;
+            placements.push(serde_json::json!({
+                "part": p.get("id").cloned().unwrap_or(Value::from(i as u64)), "copy": c,
+                "sheet": l.first().and_then(|v| v.as_i64()).unwrap_or(-1),
+                "tx": l.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0),
+                "ty": l.get(2).and_then(|v| v.as_f64()).unwrap_or(0.0),
+                "angle": l.get(3).and_then(|v| v.as_f64()).unwrap_or(0.0),
+            }));
+            k += 1;
+        }
+    }
+    let result = serde_json::json!({"placements": placements});
+    let p = preview::build(job, &result, &format!("opennest {id} (running)"))?;
+    let tmp = dir.join("live.pb.tmp");
+    std::fs::write(&tmp, &p.pb).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, dir.join("live.pb")).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join("view.yaml"), preview::manifest(&format!("OpenNest job {id} (running)"), &format!("live.pb?v={version}"), &p.texts))
+        .map_err(|e| e.to_string())
 }
 
 fn write_preview(job: &Value, result: &Value, dir: &Path, id: &str) -> Result<(), String> {

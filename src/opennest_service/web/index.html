@@ -44,7 +44,7 @@
       </label>
     </div>
     <p id="partsInfo" class="muted">No parts loaded.</p>
-    <svg id="partsView" class="drawing" aria-label="parts preview"></svg>
+    <iframe id="partsFrame" class="viewer" title="loaded parts (session viewer)" hidden></iframe>
   </section>
 
   <section class="card">
@@ -96,8 +96,8 @@
     <div id="progress" hidden>
       <div class="bar"><div id="barFill"></div></div>
       <p id="progressText" class="muted"></p>
-      <svg id="liveView" class="drawing" aria-label="layout so far"></svg>
     </div>
+    <iframe id="jobFrame" class="viewer tall" title="nesting (session viewer)" hidden></iframe>
   </section>
 
   <section id="resultCard" class="card" hidden>
@@ -110,7 +110,6 @@
       <button id="dlJson" type="button">Download result JSON</button>
       <a id="dlLog" class="button" target="_blank" rel="noopener">Solver log</a>
     </div>
-    <svg id="resultView" class="drawing tall" aria-label="nesting result"></svg>
   </section>
 
   <section class="card">

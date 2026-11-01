@@ -64,7 +64,9 @@ unguessable UUID and works as a read-only link, so a result or viewer link can b
 | GET | `/api/jobs/{id}` | status, queue position, links, per-sheet utilisation |
 | GET | `/api/jobs/{id}/events` | Server-Sent Events: `start`, `progress` (with `layout`), `cap`, `cancel`, `done`, final `status` |
 | GET | `/api/jobs/{id}/result` | `opennest.result/1` |
-| GET | `/api/jobs/{id}/job.json`, `/solver.log`, `/view.yaml`, `/result.pb` | the job's files |
+| GET | `/api/jobs/{id}/job.json`, `/solver.log`, `/view.yaml`, `/live.pb`, `/result.pb` | the job's files |
+| POST | `/api/preview` `{"parts": [...]}` | a parts-only session_viewer scene of what was loaded |
+| GET | `/api/previews/{id}/view.yaml`, `/parts.pb` | that scene's files |
 | POST | `/api/jobs/{id}/cancel` | stop; the best layout so far is kept |
 | GET | `/live/{view_token}/view.yaml` | the latest finished result (stable link; token derived from the password) |
 
@@ -76,8 +78,10 @@ curl "$URL/api/jobs/$ID/result" > result.json
 
 ## session_viewer preview
 
-Each finished job gets `result.pb` (sheets in a row along +x, millimetres, one group per sheet with
-its outline, keep-outs and parts) and `view.yaml`. The viewer opens it with its `?live=` mode, which
+The page shows everything in session_viewer frames: the loaded parts (`/api/preview`), then the job's
+scene, whose `view.yaml` points at `live.pb` (rewritten every 3 s from the solver's in-progress
+layout) while it runs and at `result.pb` (sheets in a row along +x, millimetres, one group per sheet
+with its outline, keep-outs and parts) when it is done. The viewer opens it with its `?live=` mode, which
 polls the scene, so a tab left on the latest-result link shows each new result as it finishes:
 
 ```

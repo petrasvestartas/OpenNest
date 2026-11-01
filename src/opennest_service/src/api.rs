@@ -198,6 +198,8 @@ pub async fn submit(
     tokio::fs::write(dir.join("job.json"), serde_json::to_vec(&job).unwrap_or_default())
         .await
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    // an empty scene from the first second, so a viewer opened on the job's link just waits
+    let _ = tokio::fs::write(dir.join("view.yaml"), crate::preview::empty_manifest(&format!("OpenNest job {id} (queued)"))).await;
     let j = Job {
         id: id.clone(),
         name,
@@ -295,6 +297,7 @@ pub async fn job_file(State(state): State<Arc<AppState>>, Path((id, file)): Path
     let (name, ct) = match file.as_str() {
         "view.yaml" => ("view.yaml", "application/yaml"),
         "result.pb" => ("result.pb", "application/octet-stream"),
+        "live.pb" => ("live.pb", "application/octet-stream"),
         "job.json" => ("job.json", "application/json"),
         "solver.log" => ("solver.log", "text/plain; charset=utf-8"),
         _ => return Err(ApiError(StatusCode::NOT_FOUND, "no such file".into())),
@@ -392,4 +395,55 @@ pub async fn latest_manifest(State(state): State<Arc<AppState>>, Path(token): Pa
     r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/yaml"));
     r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     Ok(r)
+}
+
+// ---------------------------------------------------------------------------------------------------
+// parts-only scene: what was loaded, before nesting (the page shows it in session_viewer)
+// ---------------------------------------------------------------------------------------------------
+pub async fn preview(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> ApiResult<Json<Value>> {
+    let ip = client_ip(&state, &headers, &addr);
+    require_password(&state, &headers, &ip).await?;
+    let job: Value = serde_json::from_slice(&body).map_err(|e| bad(format!("invalid JSON: {e}")))?;
+    let parts = job["parts"].as_array().ok_or_else(|| bad("job.parts must be an array"))?;
+    if parts.is_empty() || parts.len() > 20_000 {
+        return Err(bad("between 1 and 20000 parts"));
+    }
+    let mut placements = Vec::new();
+    for (i, p) in parts.iter().enumerate() {
+        let id = p.get("id").cloned().unwrap_or(Value::from(i as u64));
+        placements.push(json!({"part": id, "copy": 0, "sheet": -1, "tx": 0.0, "ty": 0.0, "angle": 0.0}));
+    }
+    let scene = json!({"parts": parts, "sheets": []});
+    let result = json!({"placements": placements});
+    let id = uuid::Uuid::new_v4().to_string();
+    let dir = state.cfg.data_dir.join("previews").join(&id);
+    let (d2, id2) = (dir.clone(), id.clone());
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let p = crate::preview::build(&scene, &result, &format!("parts {id2}"))?;
+        std::fs::create_dir_all(&d2).map_err(|e| e.to_string())?;
+        std::fs::write(d2.join("parts.pb"), &p.pb).map_err(|e| e.to_string())?;
+        std::fs::write(d2.join("view.yaml"), crate::preview::manifest("loaded parts", "parts.pb", &p.texts)).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(bad)?;
+    let base = format!("{}/api/previews/{}", state.cfg.public_url, id);
+    Ok(Json(json!({"id": id, "links": {"view_yaml": format!("{base}/view.yaml"), "viewer": viewer_link(&state, &format!("{base}/view.yaml"))}})))
+}
+
+pub async fn preview_file(State(state): State<Arc<AppState>>, Path((id, file)): Path<(String, String)>) -> ApiResult<Response> {
+    if uuid::Uuid::parse_str(&id).is_err() {
+        return Err(ApiError(StatusCode::NOT_FOUND, "no such preview".into()));
+    }
+    let (name, ct) = match file.as_str() {
+        "view.yaml" => ("view.yaml", "application/yaml"),
+        "parts.pb" => ("parts.pb", "application/octet-stream"),
+        _ => return Err(ApiError(StatusCode::NOT_FOUND, "no such file".into())),
+    };
+    file_response(state.cfg.data_dir.join("previews").join(id).join(name), ct).await
 }

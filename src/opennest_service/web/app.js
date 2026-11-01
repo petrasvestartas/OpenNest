@@ -339,34 +339,6 @@ function parseSvg(text, tol) {
 const NS = "http://www.w3.org/2000/svg";
 function hue(i) { return `hsl(${(i * 137.508) % 360} 60% 45%)`; }
 function pathD(r) { return "M" + r.map((p) => p[0].toFixed(3) + "," + (-p[1]).toFixed(3)).join("L") + "Z"; }
-function drawInto(svg, groups) {   // groups: [{rings:[{r, stroke, fill, w}]}] already laid out, y up
-  svg.innerHTML = "";
-  const all = groups.flatMap((g) => g.rings.map((x) => x.r));
-  if (!all.length) return;
-  const b = bbox(all), pad = 0.03 * Math.max(b[2] - b[0], b[3] - b[1], 1);
-  svg.setAttribute("viewBox", `${b[0] - pad} ${-b[3] - pad} ${b[2] - b[0] + 2 * pad} ${b[3] - b[1] + 2 * pad}`);
-  const unit = Math.max(b[2] - b[0], b[3] - b[1]) / 800;
-  for (const g of groups) for (const x of g.rings) {
-    const p = document.createElementNS(NS, "path");
-    p.setAttribute("d", pathD(x.r));
-    p.setAttribute("fill", x.fill || "none");
-    p.setAttribute("fill-rule", "evenodd");
-    p.setAttribute("stroke", x.stroke);
-    p.setAttribute("stroke-width", String((x.w || 1) * unit));
-    svg.appendChild(p);
-  }
-}
-function drawParts() {
-  const groups = [];
-  let xoff = 0;
-  PARTS.slice(0, 400).forEach((p, i) => {
-    const b = bbox([p.outer]);
-    const sh = (r) => r.map(([x, y]) => [x - b[0] + xoff, y - b[1]]);
-    groups.push({ rings: [{ r: sh(p.outer), stroke: hue(i), fill: "none" }, ...p.holes.map((h) => ({ r: sh(h), stroke: hue(i) }))] });
-    xoff += (b[2] - b[0]) * 1.08;
-  });
-  drawInto($("partsView"), groups);
-}
 function place(r, a, tx, ty) {
   const c = Math.cos(a), s = Math.sin(a);
   return r.map(([x, y]) => [c * x - s * y + tx, s * x + c * y + ty]);
@@ -475,7 +447,7 @@ async function refreshJobs() {
         td.append(a, " · ", v);
       } else if (["queued", "running"].includes(j.status)) {
         const a = document.createElement("a"); a.href = "#"; a.textContent = "follow";
-        a.onclick = (ev) => { ev.preventDefault(); CURRENT = { job: null, jobRecord: j, result: null }; $("progress").hidden = false; $("cancel").hidden = false; follow(j); };
+        a.onclick = (ev) => { ev.preventDefault(); CURRENT = { job: null, jobRecord: j, result: null }; $("progress").hidden = false; $("cancel").hidden = false; showJobFrame(j); follow(j); };
         td.appendChild(a);
       }
       tr.appendChild(td); tb.appendChild(tr);
@@ -520,7 +492,24 @@ async function loadFiles() {
   const holes = PARTS.reduce((s, p) => s + p.holes.length, 0);
   $("partsInfo").textContent = PARTS.length ? `${PARTS.length} part outline(s), ${holes} hole(s).` : "No parts loaded.";
   $("run").disabled = !PARTS.length;
-  drawParts();
+  showParts();
+}
+
+// The loaded parts, laid out in a row, in session_viewer.
+async function showParts() {
+  const frame = $("partsFrame");
+  if (!PARTS.length) { frame.hidden = true; return; }
+  try {
+    const r = await api("/api/preview", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ parts: PARTS.map((p, i) => ({ id: p.name || `part ${i + 1}`, outer: p.outer, holes: p.holes })) }) });
+    frame.src = r.links.viewer; frame.hidden = false;
+  } catch (e) { msg("Parts preview failed: " + e.message, true); }
+}
+
+function showJobFrame(rec) {
+  const frame = $("jobFrame");
+  if (frame.src !== rec.links.viewer) frame.src = rec.links.viewer;
+  frame.hidden = false;
 }
 
 function buildJob() {
@@ -554,7 +543,6 @@ async function run() {
   try { job = buildJob(); } catch (e) { msg(e.message, true); return; }
   $("run").disabled = true; $("resultCard").hidden = true;
   $("progress").hidden = false; $("barFill").style.width = "0"; $("progressText").textContent = "Submitting…";
-  $("liveView").innerHTML = "";
   let rec;
   try {
     rec = await api("/api/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(job) });
@@ -562,32 +550,20 @@ async function run() {
   CURRENT = { job, jobRecord: rec, result: null };
   $("cancel").hidden = false;
   $("progressText").textContent = rec.queue_position ? `Queued (${rec.queue_position} ahead)…` : "Starting…";
+  showJobFrame(rec);
   refreshJobs();
   follow(rec);
-}
-
-// Draw the solver's in-progress layout: [[sheet, tx, ty, angle], ...] per part copy, in job order.
-function drawLive(layout) {
-  const job = CURRENT && CURRENT.job;
-  if (!job) return;
-  const copies = [];
-  job.parts.forEach((p, i) => { for (let c = 0; c < (p.qty ?? 1); c++) copies.push({ part: p.id ?? i, copy: c }); });
-  if (layout.length !== copies.length) return;
-  const result = { placements: layout.map((l, k) => ({ ...copies[k], sheet: l[0], tx: l[1], ty: l[2], angle: l[3] })) };
-  try { drawInto($("liveView"), layoutResult(job, result).sheets); } catch { /* partial data */ }
 }
 
 function follow(rec) {
   if (SOURCE) SOURCE.close();
   SOURCE = new EventSource(rec.links.events);
   const cap = rec.wall_cap;
-  let lastDraw = 0;
   SOURCE.addEventListener("progress", (e) => {
     const p = JSON.parse(e.data);
     $("barFill").style.width = Math.min(100, (100 * p.t) / cap) + "%";
     $("progressText").textContent = `Running · ${p.t.toFixed(0)} s of at most ${cap.toFixed(0)} s · ${p.rounds.toLocaleString()} solver rounds` +
       (p.placed ? ` · ${p.placed} placed on ${p.n_sheets} sheet(s) so far` : "");
-    if (p.layout && p.placed && Date.now() - lastDraw > 1500) { lastDraw = Date.now(); drawLive(p.layout); }
   });
   SOURCE.addEventListener("cap", () => { $("progressText").textContent = "Time budget reached, keeping the best layout…"; });
   SOURCE.addEventListener("status", async (e) => {
@@ -617,7 +593,7 @@ function showResult() {
     (jobRecord.status === "cancelled" ? " · stopped early" : "");
   $("openViewer").href = jobRecord.links.viewer;
   $("dlLog").href = `/api/jobs/${jobRecord.id}/solver.log`;
-  drawInto($("resultView"), L.sheets);
+  showJobFrame(jobRecord);
 }
 
 async function cancelJob() {

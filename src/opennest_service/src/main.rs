@@ -84,6 +84,8 @@ async fn main() {
         .route("/api/jobs/{id}/events", get(api::events))
         .route("/api/jobs/{id}/result", get(api::result))
         .route("/api/jobs/{id}/{file}", get(api::job_file))
+        .route("/api/preview", post(api::preview))
+        .route("/api/previews/{id}/{file}", get(api::preview_file))
         .route("/live/{token}/view.yaml", get(api::latest_manifest))
         .fallback_service(ServeDir::new(&cfg.web_dir))
         .layer(RequestBodyLimitLayer::new(cfg.max_body_bytes))
