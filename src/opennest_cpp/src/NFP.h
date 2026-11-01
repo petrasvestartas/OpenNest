@@ -23,6 +23,11 @@ public:
     // (360/N step). 0 = inherit the global config.rotations (the default for all parts).
     // 1 = fixed at 0° (no rotation, e.g. grain direction).
     int rotationCount = 0;
+    // Smart-rotation own orientation set (degrees in [0,360), rounded to 1e-4 so every copy
+    // produces identical rotation-cache keys): min-area-bounding-rectangle and longest-edge
+    // alignments with quarter turns. Computed once per SOURCE part at context init; empty when
+    // NestConfig::smartRotations is off. Travels with the part like rotationCount.
+    std::vector<float> ownAngles;
 
     std::vector<Point> Points;
     std::vector<bool> exactFlags;  // per-vertex "exact" flag (lazy: empty = all exact)

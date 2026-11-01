@@ -6,6 +6,7 @@
 #include <thread>
 #include <atomic>
 #include <unordered_set>
+#include <limits>
 
 namespace nest {
 
@@ -285,6 +286,19 @@ namespace {
         double bArea = std::fabs(Clipper2Lib::Area(bAt));
         return interArea <= 1e-4 * std::min(aArea, bArea);
     }
+    /// Brunn-Minkowski plausibility of an OUTER pair NFP: A (+) (-B) of two connected shapes is one
+    /// region of area >= (sqrt|A| + sqrt|B|)^2. The Boost convolution used for parts WITH holes
+    /// (Process2) occasionally returns a degenerate sliver instead (measured: a 35-vertex plate with
+    /// 11 slit/sliver holes @177.59 deg vs a small part @180 deg gave a 15-point blob far from A ->
+    /// the engine placed the small part ON the plate, 110320 mm^2 overlap). Such a result must
+    /// never be trusted.
+    bool outerNfpPlausible(const std::vector<std::shared_ptr<NFP>>& nfp, const NFP& A, const NFP& B) {
+        if (nfp.empty() || !nfp.front() || nfp.front()->length() < 3) return false;
+        const double aA = std::fabs(GeometryUtil::polygonArea(A));
+        const double aB = std::fabs(GeometryUtil::polygonArea(B));
+        const double lb = (std::sqrt(aA) + std::sqrt(aB)) * (std::sqrt(aA) + std::sqrt(aB));
+        return std::fabs(GeometryUtil::polygonArea(*nfp.front())) >= 0.98 * lb;
+    }
 } // anonymous namespace
 
 // --- Static member initialization ---
@@ -384,6 +398,216 @@ std::shared_ptr<NFP> NfpWorker::getHull(const NFP& polygon) {
         hull->AddPoint(Point(hullpoints[i][0], hullpoints[i][1]));
     }
     return hull;
+}
+
+// =============================================================================
+// Smart rotations — per-part own orientations + candidate ordering
+// =============================================================================
+
+namespace {
+    inline double circularDistDeg(double a, double b) {
+        double d = std::fmod(std::fabs(a - b), 360.0);
+        return d > 180.0 ? 360.0 - d : d;
+    }
+    // Append `a` unless an angle within 0.5 deg is already present.
+    inline void addAngleDedup(std::vector<float>& list, float a) {
+        for (float b : list)
+            if (circularDistDeg(a, b) < 0.5) return;
+        list.push_back(a);
+    }
+}
+
+float NfpWorker::normalizeOwnAngle(double degrees) {
+    double a = std::fmod(degrees, 360.0);
+    if (a < 0) a += 360.0;
+    a = std::round(a * 1e4) / 1e4;
+    if (a >= 360.0) a -= 360.0;
+    return static_cast<float>(a);
+}
+
+std::vector<float> NfpWorker::computeOwnAngles(const NFP& polygon) {
+    std::vector<float> out;
+    const int n = polygon.length();
+    if (n < 3) return out;
+
+    // theta_mrr: rotating calipers. The min-area enclosing rectangle has a side collinear with a
+    // hull edge; for every hull edge (direction phi) rotate the hull by -phi and measure its
+    // axis-aligned bbox. Rotating the PART by -phi then aligns that rectangle with the sheet.
+    double thetaMrr = 0;
+    bool haveMrr = false;
+    auto hull = getHull(polygon);
+    const int hn = hull ? hull->length() : 0;
+    if (hn >= 3) {
+        double bestArea = std::numeric_limits<double>::infinity();
+        for (int e = 0; e < hn; e++) {
+            const Point& p0 = (*hull)[e];
+            const Point& p1 = (*hull)[(e + 1) % hn];
+            const double dx = p1.x - p0.x, dy = p1.y - p0.y;
+            if (dx * dx + dy * dy < 1e-18) continue;
+            const double phi = std::atan2(dy, dx);
+            const double c = std::cos(-phi), s = std::sin(-phi);
+            double mnx = std::numeric_limits<double>::infinity(), mny = mnx;
+            double mxx = -mnx, mxy = -mnx;
+            for (int k = 0; k < hn; k++) {
+                const double x = (*hull)[k].x * c - (*hull)[k].y * s;
+                const double y = (*hull)[k].x * s + (*hull)[k].y * c;
+                mnx = std::min(mnx, x); mxx = std::max(mxx, x);
+                mny = std::min(mny, y); mxy = std::max(mxy, y);
+            }
+            const double area = (mxx - mnx) * (mxy - mny);
+            if (area < bestArea * (1.0 - 1e-9)) {
+                bestArea = area;
+                thetaMrr = -phi * 180.0 / M_PI;
+                haveMrr = true;
+            }
+        }
+    }
+
+    // theta_le: make the longest OUTLINE edge horizontal.
+    double thetaLe = 0, bestLen2 = -1;
+    for (int e = 0; e < n; e++) {
+        const Point& p0 = polygon[e];
+        const Point& p1 = polygon[(e + 1) % n];
+        const double dx = p1.x - p0.x, dy = p1.y - p0.y;
+        const double l2 = dx * dx + dy * dy;
+        if (l2 > bestLen2) {
+            bestLen2 = l2;
+            thetaLe = -std::atan2(dy, dx) * 180.0 / M_PI;
+        }
+    }
+
+    if (haveMrr)
+        for (int j = 0; j < 4; j++) addAngleDedup(out, normalizeOwnAngle(thetaMrr + 90.0 * j));
+    if (bestLen2 > 0)
+        for (int j = 0; j < 4; j++) addAngleDedup(out, normalizeOwnAngle(thetaLe + 90.0 * j));
+    return out;
+}
+
+std::vector<float> NfpWorker::smartCandidateAngles(float geneAngle, const std::vector<float>& own,
+                                                   const NestConfig& config) {
+    std::vector<float> list;
+    list.push_back(geneAngle);
+    for (float a : own) addAngleDedup(list, a);
+    if (config.rotationTiltDeg > 0) {
+        for (float a : own) {
+            addAngleDedup(list, normalizeOwnAngle(static_cast<double>(a) - config.rotationTiltDeg));
+            addAngleDedup(list, normalizeOwnAngle(static_cast<double>(a) + config.rotationTiltDeg));
+        }
+    }
+    const int nSensible = static_cast<int>(list.size());   // gene + own + tilts (never trimmed)
+
+    // Grid fill-ins, nearest the gene first. Same float expression as the GA's genes
+    // (k * (360/N)) so grid angles hit the same cache keys the GA population uses.
+    const int N = config.rotations > 0 ? config.rotations : 1;
+    const float step = 360.0f / N;
+    std::vector<std::pair<double, int>> grid;
+    grid.reserve(N);
+    for (int k = 0; k < N; k++)
+        grid.push_back({circularDistDeg(static_cast<float>(k) * step, geneAngle), k});
+    std::stable_sort(grid.begin(), grid.end(),
+                     [](const std::pair<double, int>& a, const std::pair<double, int>& b) {
+                         return a.first < b.first;
+                     });
+
+    int cap = std::max(8, (nSensible - 1) + 4);                       // max(8, |S|+4)
+    cap = std::min(cap, std::max(config.rotationCandidateCap, nSensible));
+    for (auto& g : grid) {
+        if (static_cast<int>(list.size()) >= cap) break;
+        addAngleDedup(list, static_cast<float>(g.second) * step);
+    }
+    return list;
+}
+
+// =============================================================================
+// Fit-angle rescue — rotations at which a part's bounding box fits the sheet's
+// =============================================================================
+
+std::vector<float> NfpWorker::computeFitAngles(const NFP& part, const NFP& sheet, int maxAngles) {
+    std::vector<float> out;
+    if (part.length() < 3 || sheet.length() < 3 || maxAngles <= 0) return out;
+    const auto sb = GeometryUtil::getPolygonBounds(sheet);
+    const double W = sb.width, H = sb.height;
+    if (!(W > 0 && H > 0)) return out;
+
+    // The axis-aligned bbox of a rotated part equals that of its rotated convex hull.
+    auto hull = getHull(part);
+    const NFP& hp = (hull && hull->length() >= 3) ? *hull : part;
+    const int hn = hp.length();
+    const double tol = 1e-9 * std::max(W, H);
+
+    // slack(theta) = max(bboxW - W, bboxH - H) of the part rotated by theta degrees (same
+    // convention as rotatePolygon). slack < 0  <=>  the bbox fits strictly inside the sheet's.
+    auto slack = [&](double deg) {
+        const double a = deg * M_PI / 180.0, c = std::cos(a), s = std::sin(a);
+        double mnx = std::numeric_limits<double>::infinity(), mny = mnx;
+        double mxx = -mnx, mxy = -mnx;
+        for (int k = 0; k < hn; k++) {
+            const double x = hp[k].x * c - hp[k].y * s;
+            const double y = hp[k].x * s + hp[k].y * c;
+            mnx = std::min(mnx, x); mxx = std::max(mxx, x);
+            mny = std::min(mny, y); mxy = std::max(mxy, y);
+        }
+        return std::max((mxx - mnx) - W, (mxy - mny) - H);
+    };
+    auto feasible = [&](double deg) { return slack(deg) < -tol; };
+
+    // Coarse scan of [0,360) at 0.25 deg, then bisection-refine every interval boundary.
+    const int N = 1440;
+    const double step = 360.0 / N;
+    std::vector<char> ok(N);
+    std::vector<double> sl(N);
+    int nOk = 0, kBest = 0;
+    for (int k = 0; k < N; k++) {
+        sl[k] = slack(k * step);
+        ok[k] = sl[k] < -tol;
+        nOk += ok[k];
+        if (sl[k] < sl[kBest]) kBest = k;
+    }
+    if (nOk == N) return out;   // fits at every angle: the bbox cannot explain a failure
+
+    if (nOk == 0) {
+        // A window narrower than the scan step: golden-section minimise slack around the best
+        // sample (slack is piecewise smooth, locally unimodal at this scale).
+        double lo = (kBest - 1) * step, hi = (kBest + 1) * step;
+        const double g = 0.5 * (std::sqrt(5.0) - 1.0);
+        double x1 = hi - g * (hi - lo), x2 = lo + g * (hi - lo);
+        double f1 = slack(x1), f2 = slack(x2);
+        for (int it = 0; it < 80; it++) {
+            if (f1 < f2) { hi = x2; x2 = x1; f2 = f1; x1 = hi - g * (hi - lo); f1 = slack(x1); }
+            else         { lo = x1; x1 = x2; f1 = f2; x2 = lo + g * (hi - lo); f2 = slack(x2); }
+        }
+        const double xm = 0.5 * (lo + hi);
+        if (slack(xm) < -tol) out.push_back(normalizeOwnAngle(xm));
+        return out;
+    }
+
+    // Walk the circle from an infeasible sample so that every feasible run is closed.
+    int k0 = 0;
+    while (ok[k0]) k0++;
+    auto refine = [&](double bad, double good) {   // boundary between an infeasible and a feasible angle
+        for (int it = 0; it < 40; it++) {
+            const double mid = 0.5 * (bad + good);
+            if (feasible(mid)) good = mid; else bad = mid;
+        }
+        return good;
+    };
+    struct Run { double lo, hi; };
+    std::vector<Run> runs;
+    double runLo = 0;
+    for (int t = 1; t <= N; t++) {
+        const int prev = (k0 + t - 1) % N, cur = (k0 + t) % N;
+        const double aPrev = (k0 + t - 1) * step, aCur = (k0 + t) * step;   // unwrapped
+        if (ok[cur] && !ok[prev]) runLo = refine(aPrev, aCur);
+        else if (!ok[cur] && ok[prev]) runs.push_back({runLo, refine(aCur, aPrev)});
+    }
+    std::stable_sort(runs.begin(), runs.end(), [](const Run& a, const Run& b) {
+        return (a.hi - a.lo) > (b.hi - b.lo);
+    });
+    for (const auto& r : runs) {
+        if (static_cast<int>(out.size()) >= maxAngles) break;
+        addAngleDedup(out, normalizeOwnAngle(0.5 * (r.lo + r.hi)));
+    }
+    return out;
 }
 
 NFP NfpWorker::getFrame(const NFP& A) {
@@ -622,9 +846,18 @@ std::shared_ptr<NFP> NfpWorker::getOuterNfp(NFP& A, NFP& B, int type, bool insid
     }
 
     // not found in cache
-    if (inside || !A.children.empty()) {
+    bool useClipper = !inside && A.children.empty();
+    if (!useClipper) {
         nfp = Process2(A, B, type);
-    } else {
+        // Part WITH holes: if the Boost convolution returned a degenerate outer loop, fall back to
+        // the Clipper2 outer NFP below. It ignores A's holes (no part-in-part pocket for this pair)
+        // which is conservative — never an overlap.
+        if (!inside && !outerNfpPlausible(nfp, A, B)) {
+            nfp.clear();
+            useClipper = true;
+        }
+    }
+    if (useClipper) {
         // Outer NFP (no holes) via Clipper2 Minkowski sum. This matches the C# engine's split
         // (Clipper for the no-holes path, Boost.Polygon only for the holes/inner path) and is the
         // correct, well-tested boundary selection for concave parts — routing this through the Boost
@@ -966,6 +1199,11 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
     int i, j, k, m, n;
     double totalsheetarea = 0;
 
+    // Smart-rotation and fit-angle candidates rotate from the UNROTATED part by an absolute angle
+    // (keyed by instance Id, unique per GA individual), not cumulatively from the gene-rotated copy.
+    std::unordered_map<int, std::shared_ptr<NFP>> unrotatedById;
+    for (auto& p : parts) unrotatedById[p->Id] = p;
+
     // rotate parts by given rotation
     std::vector<std::shared_ptr<NFP>> rotated;
     for (i = 0; i < static_cast<int>(parts.size()); i++) {
@@ -985,6 +1223,7 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
         r->source = parts[i]->source;
         r->Id = parts[i]->Id;
         r->rotationCount = parts[i]->rotationCount;
+        r->ownAngles = parts[i]->ownAngles;
         rotated.push_back(r);
     }
     parts = rotated;
@@ -1029,6 +1268,51 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
             std::vector<RotationCandidate> rotationCandidates;
             {
                 auto trialPart = part; // don't modify part/parts[i] yet
+                // Returns true when trialPart fits the sheet (and was added as a candidate).
+                auto tryCandidate = [&](const std::shared_ptr<NFP>& cand) -> bool {
+                    auto innerNfp = getInnerNfp(*sheet, *cand, 0, config);
+                    if (innerNfp.empty()) return false;
+                    if (innerNfp[0]->length() == 0) {
+                        throw std::runtime_error("sheetNfp[0] has 0 points");
+                    }
+                    // Memoize the clipper conversion of the sheet IFP per (source,
+                    // rotation) — it is recomputed identically for every duplicate
+                    // part / repeated rotation otherwise. Populated HERE (serial
+                    // Phase A) so the candidate threads only read the map.
+                    uint64_t ck = makeClipKey(cand->source.value_or(-1), cand->Rotation);
+                    if (!sheetNfpClipperCache.count(ck)) {
+                        sheetNfpClipperCache[ck] = innerNfpToClipperCoordinates(innerNfp, config);
+                    }
+                    rotationCandidates.push_back({cand, innerNfp});
+                    return true;
+                };
+
+                // SMART ROTATIONS (opt-in): the fixed sweep below steps 360/8 from the gene
+                // angle, so a long plate that only fits within a few degrees of 0/180 is left
+                // UNPLACED whenever the gene is off-grid of that window (rotations >= 12) —
+                // and tilted parts are never tried. Instead try the part's OWN orientations
+                // (min-area-rectangle / longest-edge alignment + quarter turns, optional tilts)
+                // ahead of grid angles nearest the gene. Grain-constrained parts
+                // (rotationCount > 0) keep the legacy path: they must stay on their N-grid.
+                auto origIt = unrotatedById.end();
+                if (config.smartRotations && part->rotationCount == 0 && !part->ownAngles.empty())
+                    origIt = unrotatedById.find(part->Id);
+                if (origIt != unrotatedById.end()) {
+                    const auto angles = smartCandidateAngles(part->Rotation, part->ownAngles, config);
+                    for (size_t ai = 0; ai < angles.size(); ai++) {
+                        std::shared_ptr<NFP> cand = trialPart;   // ai == 0: the gene-rotated part
+                        if (ai > 0) {
+                            cand = std::make_shared<NFP>(rotatePolygon(*origIt->second, angles[ai]));
+                            cand->Rotation = angles[ai];
+                            cand->source = part->source;
+                            cand->Id = part->Id;
+                            cand->rotationCount = part->rotationCount;
+                            cand->ownAngles = part->ownAngles;
+                        }
+                        if (tryCandidate(cand) && !config.tryAllRotations) break;
+                    }
+                }
+
                 // SAFETY CAP (tryAllRotations only): with All-Rotations on we evaluate EVERY
                 // orientation of EVERY part at EVERY placement, so cost/cache grow ~ rotations x parts^2.
                 // A large "Rotations" value (e.g. 360/3600) then explodes the NFP cache -> OOM, which
@@ -1042,25 +1326,10 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
                 // at 4 while freeform parts roam the global setting). 0 = global default.
                 int effRotations = part->rotationCount > 0 ? part->rotationCount : config.rotations;
                 if (config.tryAllRotations && effRotations > 8) effRotations = 8;
-                const float rotStep = 360.0f / effRotations;
+                if (origIt != unrotatedById.end()) effRotations = 0;   // smart path handled it
+                const float rotStep = 360.0f / std::max(1, effRotations);
                 for (j = 0; j < effRotations; j++) {
-                    auto innerNfp = getInnerNfp(*sheet, *trialPart, 0, config);
-
-                    if (!innerNfp.empty()) {
-                        if (innerNfp[0]->length() == 0) {
-                            throw std::runtime_error("sheetNfp[0] has 0 points");
-                        }
-                        // Memoize the clipper conversion of the sheet IFP per (source,
-                        // rotation) — it is recomputed identically for every duplicate
-                        // part / repeated rotation otherwise. Populated HERE (serial
-                        // Phase A) so the candidate threads only read the map.
-                        uint64_t ck = makeClipKey(trialPart->source.value_or(-1), trialPart->Rotation);
-                        if (!sheetNfpClipperCache.count(ck)) {
-                            sheetNfpClipperCache[ck] = innerNfpToClipperCoordinates(innerNfp, config);
-                        }
-                        rotationCandidates.push_back({trialPart, innerNfp});
-                        if (!config.tryAllRotations) break;
-                    }
+                    if (tryCandidate(trialPart) && !config.tryAllRotations) break;
 
                     // Rotate to next step
                     auto r = std::make_shared<NFP>(rotatePolygon(*trialPart, rotStep));
@@ -1068,6 +1337,7 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
                     r->source = trialPart->source;
                     r->Id = trialPart->Id;
                     r->rotationCount = trialPart->rotationCount;
+                    r->ownAngles = trialPart->ownAngles;
                     // >= so 360 normalizes to 0 — a float key of 360 is a DIFFERENT bit
                     // pattern than 0 and silently misses every rotation-keyed cache
                     // (DbCacheKey, clipCache).
@@ -1076,9 +1346,33 @@ SheetPlacement NfpWorker::placeParts(std::vector<std::shared_ptr<NFP>> sheets, s
                     }
                     trialPart = r;
                 }
+
+                // FIT-ANGLE RESCUE: the part fits the empty sheet at NONE of its discrete
+                // candidate angles (e.g. a 1250x100 plate on a 1200x800 sheet only fits in a
+                // ~14 deg window around 27.5 deg, which a 45 deg grid never hits). Compute the
+                // rotation intervals in which its convex hull's bounding box fits the sheet's
+                // bounding rectangle and try the centres of the widest ones, for THIS part only.
+                // The exact IFP in tryCandidate still decides containment (irregular sheets,
+                // sheet holes). Costs nothing for parts that fit at a grid angle. Grain-
+                // constrained parts (rotationCount > 0) are never rotated off their grid.
+                if (rotationCandidates.empty() && part->rotationCount == 0) {
+                    auto it = unrotatedById.find(part->Id);
+                    if (it != unrotatedById.end()) {
+                        for (float a : computeFitAngles(*it->second, *sheet)) {
+                            auto cand = std::make_shared<NFP>(rotatePolygon(*it->second, a));
+                            cand->Rotation = a;
+                            cand->source = part->source;
+                            cand->Id = part->Id;
+                            cand->rotationCount = part->rotationCount;
+                            cand->ownAngles = part->ownAngles;
+                            if (tryCandidate(cand) && !config.tryAllRotations) break;
+                        }
+                    }
+                }
             }
 
-            // part unplaceable at any rotation
+            // part unplaceable at any rotation: leave it unplaced (fitness penalty below)
+            // and keep nesting the remaining parts.
             if (rotationCandidates.empty()) continue;
 
             hasPosition = false;

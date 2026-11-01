@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace nest_rhino_lib
 {
@@ -33,13 +34,13 @@ namespace nest_rhino_lib
     {
         // FIRST GUESS at the chord count: max turn allowed per chord. This is the scale-free form of a sagitta
         // budget (sagitta/radius = 1 - cos(step/2)), so it behaves the same on a 2 mm fillet and a 2 m arc:
-        // 12 deg => 30 chords for a full circle and a deviation of 0.55% of the radius. Deliberately WIDER
-        // than the 10 deg MergeColinearSegments threshold used in curve_to_polyline, or the merge pass would
-        // immediately swallow the samples we just added.
+        // 12 deg => 30 chords for a full circle and a deviation of 0.55% of the radius. (It was chosen wider
+        // than the old 10 deg MergeColinearSegments pass so that pass would not swallow the samples; that
+        // pass is now rdp_closed below, whose epsilon is the chord cap, so it no longer constrains this.)
         public const double step_angle_fine = 12.0 * Math.PI / 180.0;
 
         // Simplify < 0 is the caller explicitly ASKING for a coarse outline ("max 3 points per sub-segment"),
-        // so halve the density there: 24 deg => 15 chords per circle, 2.2% of the radius, still > 10 deg.
+        // so halve the density there: 24 deg => 15 chords per circle, 2.2% of the radius.
         public const double step_angle_coarse = 24.0 * Math.PI / 180.0;
 
         // ABSOLUTE sagitta budget, as a fraction of the bounding-box diagonal of the SUB-SEGMENT being sampled
@@ -59,6 +60,55 @@ namespace nest_rhino_lib
         public const double sagitta_fraction_fine = 0.004;
         public const double sagitta_fraction_coarse = 0.012;
 
+        // CHORD CAP on that budget, as a fraction of a REFERENCE diagonal:
+        //     budget = max(mtol, min(frac * sub_segment_diag, chord_fraction_of_ring * ref_diag))
+        // (see sagitta_budget below). ref_diag is the LARGEST ring bounding-box diagonal of the BATCH being
+        // converted (all part curves of one Geometry input, or all loops of one sheet input), so a small hole
+        // on a big part gets the same absolute cap as the part's hull arcs instead of falling to the mtol
+        // floor and the division ceiling; a caller that knows no batch passes null and the curve's OWN
+        // diagonal is used. The per-sub-segment fraction alone is unbounded in ABSOLUTE terms: a
+        // long shallow hull arc (R = 1937, sub-segment diagonal ~1500) got a budget of ~6, its chords sat
+        // 5.94 off the curve, and role_allowance then grew the WHOLE part outline by 6.24 to stay safe —
+        // measured on a customer job: 69 of 197 rings grown by up to 6.2, which made a commercial reference
+        // layout with 10 gaps infeasible (27 clearance violations, min distance 2.99). Capping the deviation
+        // at a fixed fraction of the batch's size keeps the rule unit-free (5.7 m plate batch -> 0.02, a batch
+        // of 500 parts -> 0.00175, tiny parts fall to the mtol floor) and makes the allowance negligible.
+        //
+        // WHY 3.5e-6 and not 5e-6: TWO neighbouring parts each carry their allowance, so a gap shrinks by the
+        // SUM. Measured on that job (tools/bench3dm reference_eval, clearance slack 0.05): at 5e-6 (cap 0.0285,
+        // allowance 0.030) the commercial 10 mm layout shows 4 clearance violations at 9.930 once every ring
+        // shares the batch cap; at 3.5e-6 (cap 0.0199, allowance <= 0.021) it is clean at ~9.957. Vertex cost
+        // relative to the old rule: ~2.3x (ring-relative 5e-6 was 6.4x: every small circular hole sat on the
+        // 256 ceiling).
+        //
+        // The same cap is the epsilon of rdp_closed, which replaced the 10 deg MergeColinearSegments pass on
+        // every non-keep_all ring (Simplify < 0 in particular): an angle-based merge decimates any chord that
+        // turns < 10 deg, i.e. ALL of the capped samples, and put a 45 deg R=1937 hull arc back at 4 vertices
+        // and a +29.7 allowance. Coarse uses the SAME fraction (a 2x coarse fraction doubles the allowance and
+        // breaks that layout); it still differs by its 24 deg seed, 1.2% sub-segment fraction, 128 ceiling and
+        // by the RDP pass over its straight runs.
+        public const double chord_fraction_of_ring_fine = 3.5e-6;
+        public const double chord_fraction_of_ring_coarse = 3.5e-6;
+
+        /// <summary>
+        /// Chord-deviation budget for ONE curved sub-segment: max(mtol, min(frac * seg_diag, ring_frac *
+        /// ring_diag)). seg_diag is that sub-segment's bounding-box diagonal, ring_diag the whole closed
+        /// curve's; ring_diag &lt;= 0 (unknown) drops the ring cap. This is the dev_tol that
+        /// divisions_for_sagitta then refines against, so the cap holds inside the refinement loop too
+        /// (up to the division ceiling).
+        /// </summary>
+        public static double sagitta_budget(double seg_diag, double ring_diag, double frac, double ring_frac,
+                                            double mtol)
+        {
+            double b = frac * seg_diag;
+            if (ring_diag > 0.0 && ring_frac > 0.0)
+            {
+                double cap = ring_frac * ring_diag;
+                if (cap < b) b = cap;
+            }
+            return Math.Max(mtol, b);
+        }
+
         // Interior probes per chord when measuring its sagitta. 3 (the quarter points) catches an S-shaped
         // chord, which a single mid-point probe can read as zero. It can still under-read a chord whose peak
         // is narrow and off-centre (a lobe tip near one end), which is why this is only the DENSITY rule:
@@ -71,8 +121,11 @@ namespace nest_rhino_lib
         // splits a NURBS only at C1 discontinuities, so a smooth closed spline arrives as ONE sub-segment and
         // its ceiling is the ceiling for the whole ring: a 16-lobe scallop needs ~16 chords per lobe, which
         // 64 (4 per lobe) cannot express at all. NFP cost scales with vertex count, so ordinary shapes must
-        // not get near this — they don't: the turn rule alone puts a circle at 30, a half-disc at 16 and a
-        // stadium at 32, and only the scallop asks for more than 256 (388).
+        // not get near this. Before the ring cap (chord_fraction_of_ring above) the turn rule alone put a
+        // circle at 30, a half-disc at 16 and a stadium at 32. With the cap the count is set by the absolute
+        // budget instead (tools/nest_geo_harness section I, Simplify 0): circle R=100 -> 256 (ON this
+        // ceiling), half-disc -> 257 (its 180 deg arc wants ~332 and is capped at 256, + the line), stadium
+        // 120/50 -> 376 (188 per end, under the ceiling), R=1937 45 deg hull segment -> 143.
         public const int max_divisions_fine = 256;
         public const int max_divisions_coarse = 128;
 
@@ -185,6 +238,67 @@ namespace nest_rhino_lib
                 n = bumped > cap ? cap : bumped;
             }
             return n;
+        }
+
+        /// <summary>
+        /// Ramer-Douglas-Peucker on a CLOSED ring (x/y, n vertices, no closing duplicate): the indices (in
+        /// order) of the vertices to keep so that no dropped vertex is more than `eps` from the chord that
+        /// replaces it. ANCHORS — vertex 0, the vertex farthest from it (first maximum wins) and every
+        /// `locked` vertex — are always kept and RDP runs on each span between consecutive anchors, which
+        /// makes the result deterministic and identical to the Python mirror (tools/bench3dm/rhino_sampling.py
+        /// rdp_closed). Exactly colinear vertices (distance 0) are always dropped, so this also does the
+        /// exact-colinear merge of straight polylines. Returns all indices when fewer than 3 would survive.
+        ///
+        /// `locked` is how nest_geo keeps the bound at `eps`: it locks every CURVE sample (and the vertex that
+        /// ends a curved sub-segment). Those chords already sit at the sagitta budget, and a chord that skipped
+        /// a curve sample would deviate by up to eps PLUS that sagitta, because RDP measures only at the
+        /// vertices; unlocked, the coarse job ring measured 0.039 against a 0.0285 cap. So RDP only ever
+        /// removes vertices of STRAIGHT runs (polyline input), where the vertices are the whole truth.
+        /// </summary>
+        public static int[] rdp_closed(double[] x, double[] y, int n, double eps, bool[] locked = null)
+        {
+            var all = new int[Math.Max(0, n)];
+            for (int i = 0; i < all.Length; i++) all[i] = i;
+            if (x == null || y == null || n <= 3 || !(eps > 0.0)) return all;
+            var keep = new bool[n];
+            keep[0] = true;
+            int far = 0; double fd = -1.0;
+            for (int i = 1; i < n; i++)
+            {
+                double dx = x[i] - x[0], dy = y[i] - y[0], d = dx * dx + dy * dy;
+                if (d > fd) { fd = d; far = i; }
+            }
+            keep[far] = true;
+            if (locked != null)
+                for (int i = 0; i < n && i < locked.Length; i++) if (locked[i]) keep[i] = true;
+            var anchors = new List<int>();
+            for (int i = 0; i < n; i++) if (keep[i]) anchors.Add(i);
+            // spans [a, b] over indices; b == n stands for vertex 0 again (the ring wraps)
+            var stack = new Stack<int[]>();
+            for (int k = anchors.Count - 1; k >= 0; k--)
+                stack.Push(new int[] { anchors[k], k + 1 < anchors.Count ? anchors[k + 1] : n });
+            while (stack.Count > 0)
+            {
+                int[] s = stack.Pop();
+                int a = s[0], b = s[1];
+                if (b - a < 2) continue;
+                int bi = b % n;
+                double worst = -1.0; int at = -1;
+                for (int i = a + 1; i < b; i++)
+                {
+                    double d = dist_to_segment(x[i], y[i], x[a], y[a], x[bi], y[bi]);
+                    if (d > worst) { worst = d; at = i; }
+                }
+                if (worst > eps)
+                {
+                    keep[at] = true;
+                    stack.Push(new int[] { at, b });
+                    stack.Push(new int[] { a, at });
+                }
+            }
+            var res = new List<int>(n);
+            for (int i = 0; i < n; i++) if (keep[i]) res.Add(i);
+            return res.Count >= 3 ? res.ToArray() : all;
         }
 
         /// <summary>Distance from (px,py) to the segment (ax,ay)-(bx,by).</summary>

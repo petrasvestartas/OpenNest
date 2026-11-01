@@ -1,6 +1,8 @@
 // Implementation of the nest_physics C ABI (see nest_physics_capi.h). Drives the SAME solver as the
 // CLI exe via solver/driver.hpp (penetration-depth overlap proxy, USE_DEPTH_PROXY=1 by default).
 #include "solver/driver.hpp"
+#include "solver/bin_driver.hpp"
+#include "solver/group_fill.hpp"
 #include "nest_physics_capi.h"
 #include <vector>
 #include <cmath>
@@ -625,11 +627,100 @@ static void fill_sheet_gaps(Sheets& res, const std::vector<std::pair<Part, usize
     res.n_sheets = next > 0 ? next : res.n_sheets;
 }
 
-extern "C" NP_EXPORT int np_nest(
+// FINAL VERIFICATION of a layout (exact brute force on the collision outlines): overlapping pairs on the same
+// sheet (contact skin + legitimate hole-nesting excused, see real_overlap / contained_in_hole) and parts that are
+// off their sheet or on one of its keep-outs. `res` color_ids index `parts`. Used for the published verdict and,
+// in fit_mode 3, to vet every portfolio candidate before it may win.
+static void verify_layout(const Sheets& res, const std::vector<std::pair<Part, usize>>& parts,
+                          const std::vector<std::vector<Polygon>>& part_holes_centered,
+                          const std::vector<std::vector<Polygon>>& holes_arg, const SheetDims& sheet_dims,
+                          f32 sheet_w, f32 sheet_h, int& q_ovl, int& q_oob) {
+    std::vector<std::vector<usize>> by_sheet;
+    for (usize i = 0; i < res.placements.size(); ++i) {
+        int s = res.placements[i].sheet;
+        if (s < 0) continue;
+        if ((int)by_sheet.size() <= s) by_sheet.resize((usize)s + 1);
+        by_sheet[(usize)s].push_back(i);
+    }
+    // Same index-clamping rule the demotion pass uses, so the two agree on which holes belong to
+    // which sheet.
+    auto voids_of = [&](int s) -> const std::vector<Polygon>* {
+        if (holes_arg.empty()) return nullptr;
+        usize hi = (s >= 0 && s < (int)holes_arg.size()) ? (usize)s : holes_arg.size() - 1;
+        return &holes_arg[hi];
+    };
+    q_ovl = 0; q_oob = 0;
+    for (usize s = 0; s < by_sheet.size(); ++s) {
+        auto [bw, bh] = dims_for(&sheet_dims, (int)s, sheet_w, sheet_h);
+        const std::vector<Polygon>* svoids = voids_of((int)s);
+        std::vector<Polygon> shp;
+        std::vector<usize> shp_pl;      // placement index behind shp[k] (some placements are skipped)
+        // Contact-skin copy of each shape, computed ONCE per part and reused across every pair and
+        // by the hole-containment exemption, so both speak the same "touching is not overlapping".
+        std::vector<std::optional<Polygon>> shr;
+        shp.reserve(by_sheet[s].size());
+        shp_pl.reserve(by_sheet[s].size());
+        shr.reserve(by_sheet[s].size());
+        for (usize k : by_sheet[s]) {
+            usize c = res.placements[k].color_id;
+            if (c >= parts.size() || !parts[c].first.collision_shape) continue;
+            shp.push_back(parts[c].first.collision_shape->transform_clone(res.placements[k].d_transf.compose()));
+            shp_pl.push_back(k);
+            shr.push_back(shrink_verified(shp.back()));
+        }
+        for (const auto& p : shp) {
+            // Tolerance is per-part and RELATIVE (driver.hpp bounds_tol) — the absolute 1.0 model
+            // units this used to be made the whole check a no-op in a metre-unit document.
+            const f32 BTOL = bounds_tol(bw, bh, p.diameter);
+            if (p.bbox.x_min < -BTOL || p.bbox.y_min < -BTOL ||
+                p.bbox.x_max > bw + BTOL || p.bbox.y_max > bh + BTOL) { q_oob++; continue; }
+            // ...and a part sitting on the sheet's KEEP-OUT is exactly as uncuttable as one
+            // hanging off the edge. This is the safety net for the sheet-id renumbering: the
+            // demotion pass tests holes BEFORE its own renumber, so before sheets_interchangeable
+            // was made hole-aware a part could be relabelled onto a keep-out it was never checked
+            // against and this verification would still call the layout clean.
+            if (svoids)
+                for (const auto& h : *svoids)
+                    if (bbox_overlap(p.bbox, h.bbox) && brute_overlap(p, h)) { q_oob++; break; }
+        }
+        // "does one of b's placed holes hold the whole of a?" — the legitimate hole-nesting the
+        // two hole passes produce. shp[] carries SOLID outer rings, so an in-cavity child reads
+        // as an overlap until it is excused here; see contained_in_hole for why this cannot also
+        // excuse a child that has poked out through the hole wall.
+        auto hole_nested = [&](usize a, usize b) -> bool {
+            usize cb = res.placements[shp_pl[b]].color_id;
+            if (cb >= part_holes_centered.size() || part_holes_centered[cb].empty()) return false;
+            AffineTransform bT = res.placements[shp_pl[b]].d_transf.compose();
+            for (const auto& h : part_holes_centered[cb])
+                if (contained_in_hole(shp[a], shr[a] ? &*shr[a] : nullptr, h.transform_clone(bT))) return true;
+            return false;
+        };
+        for (usize i = 0; i < shp.size(); ++i)
+            for (usize j = i + 1; j < shp.size(); ++j) {
+                if (!bbox_overlap(shp[i].bbox, shp[j].bbox)) continue;
+                if (!real_overlap(shp[i], shp[j], shr[i] ? &*shr[i] : nullptr, shr[j] ? &*shr[j] : nullptr)) continue;
+                if (hole_nested(i, j) || hole_nested(j, i)) continue;   // one sits inside the other's hole
+                q_ovl++;
+            }
+    }
+}
+
+// ---- E1 priority verdict of the LAST completed solve (see np_last_prio). Same process-global contract as
+// the g_q_* counters above.
+static std::atomic<int> g_p_mandatory{0};
+static std::atomic<int> g_p_missing{0};
+static std::atomic<double> g_p_placed_area{0.0};
+static std::atomic<double> g_p_offered_area{0.0};
+
+// Shared body of np_nest (part_priority == NULL: the original behaviour, byte for byte) and np_nest_prio.
+struct NpWarmSeed { const int* present; const double *tx, *ty, *angle; };
+
+static int np_nest_impl(
     int           part_count,
     const int*    part_vertex_counts,
     const double* part_xy,
     const int*    part_rotations,
+    const int*    part_priority,
     int           sheet_count,
     const int*    sheet_outer_vertex_counts,
     const double* sheet_outer_xy,
@@ -644,7 +735,7 @@ extern "C" NP_EXPORT int np_nest(
     double*       out_ty,
     double*       out_angle,
     int*          out_sheet_id,
-    int*          out_n_sheets)
+    int*          out_n_sheets, const NpWarmSeed* warm = nullptr)
 {
     try {
         if (out_n_sheets) *out_n_sheets = 0;
@@ -654,10 +745,58 @@ extern "C" NP_EXPORT int np_nest(
             if (out_angle) out_angle[i] = 0.0;
             if (out_sheet_id) out_sheet_id[i] = -1;
         }
+        {   // E1 verdict: every mandatory input part counts as missing until the final placements say otherwise
+            int nm = 0;
+            if (part_priority) for (int i = 0; i < part_count; ++i) if (part_priority[i] > 0) ++nm;
+            g_p_mandatory.store(nm, std::memory_order_relaxed);
+            g_p_missing.store(nm, std::memory_order_relaxed);
+            g_p_placed_area.store(0.0, std::memory_order_relaxed);
+            g_p_offered_area.store(0.0, std::memory_order_relaxed);
+        }
         if (!params || part_count <= 0 || sheet_count <= 0) return 0;
 
         NpParams P = *params;
         ROT_N_SAMPLES = (usize)(P.num_rotations < 1 ? 1 : P.num_rotations);
+        // Smart orientation candidates (dev env for A/B; off => byte-identical). Must be set before
+        // build_part, which builds each part's smart set.
+        // DEFAULTS (2026-10): the levers measured neutral-or-better are ON by default; NP_LEGACY=1 restores every
+        // old default at once (byte-identical to the pre-change engine), and each lever's own env var still
+        // switches it off (=0) or sets it. See README "Defaults".
+        bool legacy = false;
+        if (const char* e = std::getenv("NP_LEGACY")) legacy = (std::atoi(e) != 0);
+        g_smart_rot = !legacy;
+        if (const char* e = std::getenv("NP_SMART_ROT")) g_smart_rot = (std::atoi(e) != 0);
+        // NP_SIMPL_MAXDEV (model units): cap the collision-outline simplification error (shape.hpp). Must be
+        // set before build_part and before any container/hole is converted. Unset/<=0 => off (byte-identical).
+        // Upstream-sync switches (README "Upstream sync"); all default off => byte-identical.
+        //   NP_SIMPL_BBOX=1       simplification never moves a vertex outside the source bbox (before build_part)
+        //   NP_MIN_WIDTH_STOP=1|2 conservative minimum strip width stops exploration / compression
+        //   NP_LOSS_GUARD=1       cap GLS weights (NP_LOSS_GUARD_CAP, default 1e20) so weighted losses stay finite
+        g_simpl_bbox = !legacy;
+        if (const char* e = std::getenv("NP_SIMPL_BBOX")) g_simpl_bbox = (std::atoi(e) != 0);
+        g_min_width_stop = 0;
+        if (const char* e = std::getenv("NP_MIN_WIDTH_STOP")) { int v = std::atoi(e); if (v > 0) g_min_width_stop = v; }
+        g_loss_guard = false;
+        if (const char* e = std::getenv("NP_LOSS_GUARD")) g_loss_guard = (std::atoi(e) != 0);
+        g_gls_weight_cap = 1e20f;
+        if (const char* e = std::getenv("NP_LOSS_GUARD_CAP")) { float v = (float)std::atof(e); if (v >= 1.0f) g_gls_weight_cap = v; }
+        g_gls_overflows.store(0, std::memory_order_relaxed);
+        g_gls_nan_hazards.store(0, std::memory_order_relaxed);
+        // Outline deviation cap: default 1e-4 x the diagonal of sheet 0's bounding box (0.63 mm on a 6 x 2 m
+        // sheet, 0.14 mm on 1 x 1 m) - relative, so it means the same in a mm and in a m document.
+        g_simpl_maxdev = 0.0f;
+        if (!legacy && sheet_count > 0 && sheet_outer_vertex_counts && sheet_outer_xy && sheet_outer_vertex_counts[0] > 0) {
+            double mnx = 1e300, mny = 1e300, mxx = -1e300, mxy = -1e300;
+            for (int k = 0; k < sheet_outer_vertex_counts[0]; ++k) {
+                mnx = std::min(mnx, sheet_outer_xy[2 * k]); mxx = std::max(mxx, sheet_outer_xy[2 * k]);
+                mny = std::min(mny, sheet_outer_xy[2 * k + 1]); mxy = std::max(mxy, sheet_outer_xy[2 * k + 1]);
+            }
+            double diag = std::sqrt((mxx - mnx) * (mxx - mnx) + (mxy - mny) * (mxy - mny));
+            if (std::isfinite(diag) && diag > 0.0) g_simpl_maxdev = (float)(1e-4 * diag);
+        }
+        if (const char* e = std::getenv("NP_SIMPL_MAXDEV")) { float v = (float)std::atof(e); g_simpl_maxdev = v > 0.0f ? v : 0.0f; }
+        g_smart_rot_p = 0.5f;
+        if (const char* e = std::getenv("NP_SMART_ROT_P")) { float v = (float)std::atof(e); if (v >= 0.0f && v <= 1.0f) g_smart_rot_p = v; }
         g_iter_mode = (P.iter_mode != 0);
         g_iter_count = 0;
         g_iter_pub.store(0, std::memory_order_relaxed);   // reset the host-facing progress sum
@@ -695,9 +834,24 @@ extern "C" NP_EXPORT int np_nest(
         // the limiter there is the arrangement/basin, not the width-step — so it is NOT a component option).
         g_expl_bisect = false;
         if (const char* e = std::getenv("NP_BISECT")) g_expl_bisect = (std::atoi(e) != 0);
+        // Diagnostic exploration/compression trace on stderr (print-only, layout byte-identical).
+        // Cheaper failed widths in the strip exploration (fit 0/1): default 2 / 50 (0 = the old 3 / 200).
+        g_expl_strikes = legacy ? 0 : 2; g_expl_noimpr = legacy ? 0 : 50;
+        if (const char* e = std::getenv("NP_EXPL_STRIKES")) { int v = std::atoi(e); g_expl_strikes = v > 0 ? (usize)v : 0; }
+        if (const char* e = std::getenv("NP_EXPL_NOIMPR")) { int v = std::atoi(e); g_expl_noimpr = v > 0 ? (usize)v : 0; }
+        g_expl_target_on = false;
+        if (const char* e = std::getenv("NP_EXPL_TARGET")) g_expl_target_on = (std::atoi(e) != 0);
+        g_expl_trace = false;
+        if (const char* e = std::getenv("NP_EXPL_VERBOSE")) g_expl_trace = (std::atoi(e) != 0);
 
         bool preview = g_iter_mode && P.iter_budget > 0 && P.iter_budget < 500;
         g_n_workers = preview ? 4u : 0u;   // 0 => resolve to ~75% of cores
+        if (warm) {
+            if (const char* e = std::getenv("NP_WARM_WORKERS")) {
+                int workers = std::atoi(e);
+                if (workers > 0) g_n_workers = (unsigned)workers;
+            }
+        }
         // Surrogate pole cap: preview => 12 (fast rough look); else the component's "poles" option
         // (P.pole_max>0, ~16 is ~2.7x faster per round and not worse), else default 48. NP_POLES env overrides.
         g_pole_max  = preview ? 12u : (P.pole_max > 0 ? (unsigned)P.pole_max : 0u);
@@ -709,6 +863,24 @@ extern "C" NP_EXPORT int np_nest(
         // stub is never reached. P.spacing is accepted for ABI stability but intentionally ignored.
         ShapeModifyConfig mc = part_modify();
         if (P.simplify_tolerance > 0.0) mc.simplify_tolerance = (f32)P.simplify_tolerance;
+
+        int fit_mode_in = P.fit_mode;
+        if (const char* e = std::getenv("NP_FIT_MODE")) fit_mode_in = std::atoi(e);   // dev override
+        const int fit_mode = fit_mode_in;
+        // E1 priority path (fit 1 only): mandatory parts first, then max placed AREA. On when np_nest_prio got a
+        // priority array, or forced by NP_PRIO_AREA=1 (area objective without mandatory parts, for A/B).
+        // np_nest (NULL array) with NP_PRIO_AREA unset never takes it: byte-identical.
+        bool prio_env = false;
+        if (const char* e = std::getenv("NP_PRIO_AREA")) prio_env = (std::atoi(e) != 0);
+        const bool prio_fit1 = (fit_mode == 1) && (part_priority != nullptr || prio_env);
+        // Drop-policy knobs of the priority path (driver.hpp prio_fill_one): budget of every retry run as a
+        // fraction of the plain run's budget (default 1.0) and the retry cap per start (default 6).
+        g_prio_retry_frac = 1.0;
+        if (const char* e = std::getenv("NP_PRIO_RETRY_BUDGET")) { double v = std::atof(e); if (v > 0.0) g_prio_retry_frac = v; }
+        g_prio_max_retries = 6;
+        if (const char* e = std::getenv("NP_PRIO_MAX_RETRIES")) { int v = std::atoi(e); if (v >= 0) g_prio_max_retries = v; }
+        g_prio_retries.store(0, std::memory_order_relaxed);
+        g_prio_runs.store(0, std::memory_order_relaxed);
 
         // Build parts. Degenerate parts are skipped and stay unplaced (sheet id -1). `craw`/`orig_index`
         // stay parallel to the solver parts list (whose ids are the greedy_fill color_id).
@@ -741,6 +913,9 @@ extern "C" NP_EXPORT int np_nest(
             // (RotationRange::discrete_of); 0/NULL keeps free continuous rotation as before.
             int rot_n = (part_rotations && part_rotations[i] > 0) ? part_rotations[i] : 0;
             auto p = build_part(parts.size(), std::move(pts), &cc, &mc, rot_n);
+            // E1: mandatory flag (np_nest_prio). Only the fit-1 priority path reads it (see prio_mode below);
+            // set only there, so fit modes 0 / 2 never see a non-zero priority.
+            if (p && part_priority && part_priority[i] > 0 && prio_fit1) p->priority = 1;
             if (p) {
                 parts.emplace_back(std::move(*p), 1); craw.push_back(cc); orig_index.push_back(i);
                 // Centered part-holes (input hole - input centroid) kept in a SIDE-TABLE parallel to
@@ -760,6 +935,23 @@ extern "C" NP_EXPORT int np_nest(
         }
         if (parts.empty()) return 0;
 
+        // NP_SIMPL_REPORT=1 (print-only): per part, exact vs collision-outline vertex count, the one-sided
+        // outline deviation of the collision outline from the exact one, and how far it leaves the exact bbox.
+        if (const char* e = std::getenv("NP_SIMPL_REPORT")) if (std::atoi(e) != 0) {
+            for (usize k = 0; k < parts.size(); ++k) {
+                const Part& pt = parts[k].first;
+                Polygon exact = pt.source_shape->shape.transform_clone(pt.source_shape->pre_transform.compose());
+                const Polygon& cs = *pt.collision_shape;
+                f32 step = max_f(0.5f, exact.diameter * 1e-4f);
+                f32 dev = outline_deviation(cs, exact, step);
+                f32 exc = max_f(max_f(exact.bbox.x_min - cs.bbox.x_min, cs.bbox.x_max - exact.bbox.x_max),
+                                max_f(exact.bbox.y_min - cs.bbox.y_min, cs.bbox.y_max - exact.bbox.y_max));
+                std::fprintf(stderr, "[np] simpl part %d: verts %zu -> %zu, max outline dev %.3f, bbox excursion %.3f, area +%.4f%%\n",
+                             orig_index[k], exact.n_vertices(), cs.n_vertices(), (double)dev, (double)max_f(exc, 0.0f),
+                             100.0 * ((double)cs.area - (double)exact.area) / (double)exact.area);
+            }
+        }
+
         // Publish the centering/index mapping + open the live-preview channel for np_poll_layout.
         {
             std::lock_guard<std::mutex> lk(g_live.mtx);
@@ -767,6 +959,7 @@ extern "C" NP_EXPORT int np_nest(
             g_poll_craw = craw;
             g_live.items.clear();
             g_live.gen = 0;
+            g_live.col_pitch = 0.0f;   // greedy bands by sheet_w; bin_pack_columns sets its own pitch
             g_live.active = true;
         }
 
@@ -803,16 +996,37 @@ extern "C" NP_EXPORT int np_nest(
             }
         }
 
+        // NP_SMART_ROT_BIG (needs NP_SMART_ROT): parts whose convex hull covers >= NP_SMART_ROT_BIG_FRAC
+        // (default 0.08) of sheet 0's area rotate only to their smart angles +- NP_SMART_ROT_TILT degrees.
+        // Unset => no part is flagged => byte-identical.
+        g_smart_tilt = 3.0f * PI_F / 180.0f;
+        if (const char* e = std::getenv("NP_SMART_ROT_TILT")) { float v = (float)std::atof(e); if (v >= 0.0f) g_smart_tilt = v * PI_F / 180.0f; }
+        if (g_smart_rot) if (const char* e = std::getenv("NP_SMART_ROT_BIG")) if (std::atoi(e) != 0) {
+            f32 frac = 0.08f;
+            if (const char* f = std::getenv("NP_SMART_ROT_BIG_FRAC")) { float v = (float)std::atof(f); if (v > 0.0f) frac = v; }
+            const f32 thr = frac * sheet_w * sheet_h;
+            int n_big = 0;
+            for (auto& pr : parts)
+                if (pr.first.smart_rots && !pr.first.smart_rots->empty() &&
+                    pr.first.collision_shape->surrogate_ref().convex_hull_area >= thr) { pr.first.smart_only = true; ++n_big; }
+            if (const char* v = std::getenv("NP_BIN_VERBOSE")) if (std::atoi(v) != 0)
+                std::fprintf(stderr, "[np] smart_rot_big: %d of %zu parts rotate only to smart angles +-%.1f deg\n",
+                             n_big, parts.size(), (double)(g_smart_tilt * 180.0f / PI_F));
+        }
+
         CollisionConfig engine;
         engine.quadtree_depth = 4; engine.cd_threshold = 16;
+        // NP_CD_THRESHOLD=<n> (sparrow PR #156 retuned jagua-rs from 16 to 64): a quadtree node with at most
+        // n active edges is collision-checked directly instead of descending further. Unset => 16 (today).
+        if (const char* e = std::getenv("NP_CD_THRESHOLD")) { int v = std::atoi(e); if (v >= 1 && v <= 255) engine.cd_threshold = (uint8_t)v; }
         engine.part_surrogate_config = surrogate_config();
 
         double budget = g_iter_mode ? (double)P.iter_budget : P.time_budget_secs;
         int max_bins = P.max_sheets > 0 ? P.max_sheets : 6;
-        const int fit_mode = P.fit_mode;
         if (fit_mode == 1) max_bins = 1;   // one-sheet max-fill: never open a 2nd sheet; overflow stays unplaced
         uint64_t seed = (uint64_t)(P.seed >= 0 ? P.seed : 0);
         int n_starts = P.n_starts > 0 ? P.n_starts : 1;
+        if (warm) n_starts = 1;
         const std::vector<std::vector<Polygon>> empty_holes;
         const std::vector<std::vector<Polygon>>& holes_arg = any_hole ? per_sheet_holes : empty_holes;
 
@@ -840,6 +1054,7 @@ extern "C" NP_EXPORT int np_nest(
             if (!oversized[(size_t)i] && !hf_deferred[(size_t)i]) { hf_keep.push_back(i); parts_reduced.push_back(parts[(size_t)i]); }
         bool reduced = ((int)hf_keep.size() != NP_all);
         const std::vector<std::pair<Part, usize>>& nest_parts = reduced ? parts_reduced : parts;
+        if (warm && (reduced || parts.size() != (usize)part_count || g_holes_first)) return 2;
 
         // Multi-start: run n_starts independent seeds (each at the given budget) and keep the densest
         // (fewest sheets, then smallest last-sheet width). Robust against this instance's run-to-run
@@ -856,11 +1071,104 @@ extern "C" NP_EXPORT int np_nest(
             double pen = r.ok ? 0.0 : 1e15;            // unplaced parts => very bad
             return pen + (double)r.n_sheets * 1e9 + w; // lower is better
         };
+        // E1 (prio_fit1): rank a start by (mandatory parts missing, placed AREA, used width) - a start that
+        // misses a mandatory part ranks below every start that has them all. Placement ids index nest_parts.
+        auto prio_score = [&](const Sheets& r) -> CutScore {
+            CutScore s;
+            int mand = 0, kept_mand = 0;
+            for (const auto& pr : nest_parts) if (pr.first.priority > 0) ++mand;
+            for (const auto& pl : r.placements) {
+                if ((usize)pl.color_id >= nest_parts.size()) continue;
+                const Part& pt = nest_parts[(usize)pl.color_id].first;
+                s.kept_area += pt.area();
+                if (pt.priority > 0) ++kept_mand;
+            }
+            s.missing = mand - kept_mand;
+            s.width = r.widths.empty() ? 0.0f : r.widths.back();
+            return s;
+        };
+        auto better = [&](const Sheets& a, const Sheets& b) -> bool {
+            if (prio_fit1) return cut_better(prio_score(a), prio_score(b));
+            return score(a) < score(b);
+        };
+        // fit_mode 2 = global bin packing (solver/bin_driver.hpp): all sheets as one k-column strip.
+        // Needs interchangeable sheet SIZES (per-sheet holes are fine) and a real budget; anything else
+        // falls back to the greedy sequential fill.
+        const bool use_bins = fit_mode == 2 && dims_uniform(&sheet_dims) && !preview;
+        if (fit_mode == 2 && !use_bins)
+            std::fprintf(stderr, "[np] fit_mode 2 -> greedy fallback (%s)\n",
+                         !dims_uniform(&sheet_dims) ? "mixed sheet sizes" : "preview budget");
+        // fit_mode 3 = group-and-fill portfolio (solver/group_fill.hpp). Preview budgets fall back to fit 0.
+        const bool use_group_fill = fit_mode == 3 && !preview && !warm;
+        if (fit_mode == 3 && !use_group_fill) std::fprintf(stderr, "[np] fit_mode 3 -> greedy fallback (preview budget)\n");
+        int n_threads = P.n_threads > 0 ? P.n_threads : 4;
+        if (const char* e = std::getenv("NP_FM3_THREADS")) { int v = std::atoi(e); if (v > 0) n_threads = v; }
+        // fit_mode 3 inputs: every sheet slot the job may use (sheets beyond the supplied set reuse the last one,
+        // like fit 0), the centered part holes in nest_parts order, the baseline member and the verifier.
+        std::vector<std::pair<f32, f32>> gf_dims;
+        std::vector<std::vector<Polygon>> gf_holes;
+        std::vector<std::vector<Polygon>> gf_part_holes;
+        if (use_group_fill) {
+            for (int s = 0; s < max_bins; ++s) {
+                gf_dims.push_back(dims_for(&sheet_dims, s, sheet_w, sheet_h));
+                if (!holes_arg.empty()) gf_holes.push_back(holes_arg[(usize)std::min<int>(s, (int)holes_arg.size() - 1)]);
+                else gf_holes.push_back({});
+            }
+            if (fill_holes)
+                for (usize i = 0; i < nest_parts.size(); ++i) {
+                    usize full = reduced ? (usize)hf_keep[i] : i;
+                    gf_part_holes.push_back(full < part_holes_centered.size() ? part_holes_centered[full] : std::vector<Polygon>{});
+                }
+        }
+        auto gf_defects = [&](const Sheets& cand) -> int {
+            Sheets c = cand;
+            if (reduced) for (auto& pl : c.placements) if ((usize)pl.color_id < hf_keep.size()) pl.color_id = (usize)hf_keep[(size_t)pl.color_id];
+            int o = 0, b = 0;
+            verify_layout(c, parts, part_holes_centered, holes_arg, sheet_dims, sheet_w, sheet_h, o, b);
+            return o + b;
+        };
+        auto run_one = [&](uint64_t s, bool pub) -> Sheets {
+            if (warm) {
+                std::vector<Placement> initial;
+                for (usize ci=0; ci<parts.size(); ++ci) {
+                    int oi=orig_index[ci];
+                    if (!warm->present[oi]) continue;
+                    double a=warm->angle[oi];
+                    double x=warm->tx[oi]+std::cos(a)*craw[ci].x-std::sin(a)*craw[ci].y;
+                    double y=warm->ty[oi]+std::sin(a)*craw[ci].x+std::cos(a)*craw[ci].y;
+                    initial.push_back({ci,RigidTransform((f32)a,(f32)x,(f32)y)});
+                }
+                const std::vector<Polygon>* hs=holes_arg.empty()?nullptr:&holes_arg[0];
+                return warm_repair_one(parts,engine,sheet_w,sheet_h,budget,s,initial,hs);
+            }
+
+            if (use_group_fill) {
+                auto base = [&]() -> Sheets {
+                    if (dims_uniform(&sheet_dims)) return bin_pack_columns(nest_parts, engine, sheet_w, sheet_h, budget, max_bins, holes_arg, s, pub);
+                    return greedy_fill(nest_parts, engine, sheet_w, sheet_h, budget, max_bins, holes_arg, s, pub, &sheet_dims);
+                };
+                return group_fill(nest_parts, engine, gf_dims, gf_holes, budget, s, n_threads, g_iter_mode,
+                                  fill_holes ? &gf_part_holes : nullptr, base, gf_defects,
+                                  [](const Polygon& q) { return shrink_verified(q); });
+            }
+            if (use_bins) return bin_pack_columns(nest_parts, engine, sheet_w, sheet_h, budget, max_bins, holes_arg, s, pub);
+            if (prio_fit1) return prio_fill_one(nest_parts, engine, sheet_w, sheet_h, budget, holes_arg, s, pub, &sheet_dims);
+            return greedy_fill(nest_parts, engine, sheet_w, sheet_h, budget, max_bins, holes_arg, s, pub, &sheet_dims);
+        };
         Sheets res;
         bool have = false;
         if (n_starts <= 1) {
-            res = greedy_fill(nest_parts, engine, sheet_w, sheet_h, budget, max_bins, holes_arg, seed,
-                              /*publish_live=*/true, &sheet_dims);
+            // Process-level cold portfolios can cap each native worker pool explicitly.
+            // Multi-start retains NP_STARTS_WORKERS; warm retains NP_WARM_WORKERS.
+            if (!warm) {
+                if (const char* e = std::getenv("NP_WORKERS")) {
+                    char* end = nullptr;
+                    const long workers = std::strtol(e, &end, 10);
+                    if (end != e && *end == '\0' && workers >= 1 && workers <= 256)
+                        g_n_workers = (unsigned)workers;
+                }
+            }
+            res = run_one(seed, /*publish_live=*/true);
             have = true;
         } else {
             // MULTI-START portfolio. DEFAULT = SEQUENTIAL full-worker starts: each start gets the FULL
@@ -875,10 +1183,17 @@ extern "C" NP_EXPORT int np_nest(
                 if (const char* e = std::getenv("NP_STARTS_WORKERS")) { int w = std::atoi(e); if (w > 0) g_n_workers = (unsigned)w; }
                 for (int s = 0; s < n_starts && !g_cancel.load(); ++s) {
                     uint64_t st_seed = seed + (uint64_t)s * 1009ull;
-                    Sheets r = greedy_fill(nest_parts, engine, sheet_w, sheet_h, budget, max_bins, holes_arg, st_seed,
-                                           /*publish_live=*/true, &sheet_dims);
+                    Sheets r = run_one(st_seed, /*publish_live=*/true);
                     int rn = r.n_sheets; double rw = r.widths.empty() ? 0.0 : r.widths.back();
-                    if (!have || score(r) < score(res)) { res = std::move(r); have = true; }
+                    CutScore rps; if (prio_fit1) rps = prio_score(r);
+                    if (!have || better(r, res)) { res = std::move(r); have = true; }
+                    if (prio_fit1) {   // E1: the priority verdict of this start and of the best so far
+                        CutScore bps = prio_score(res);
+                        const double sa = 100.0 / ((double)sheet_w * (double)sheet_h);
+                        std::fprintf(stderr, "[np] multistart %d/%d seed=%llu -> %d sheet(s) w=%.1f mandatory missing %d area %.1f%% (best so far: missing %d area %.1f%%)\n",
+                                     s + 1, n_starts, (unsigned long long)st_seed, rn, rw, rps.missing, (double)rps.kept_area * sa,
+                                     bps.missing, (double)bps.kept_area * sa);
+                    } else
                     std::fprintf(stderr, "[np] multistart %d/%d seed=%llu -> %d sheet(s) w=%.1f (best so far=%d)\n",
                                  s + 1, n_starts, (unsigned long long)st_seed, rn, rw, res.n_sheets);
                     // stop early when "done enough": all parts on one sheet (max-fill) or a single sheet (min-sheets)
@@ -903,15 +1218,14 @@ extern "C" NP_EXPORT int np_nest(
                         uint64_t st_seed = seed + (uint64_t)s * 1009ull;
                         bool pub = (s == 0);   // only the first start streams the live preview
                         ths.emplace_back([&, s, st_seed, pub]() {
-                            results[(size_t)s] = greedy_fill(nest_parts, engine, sheet_w, sheet_h, budget, max_bins,
-                                                             holes_arg, st_seed, pub, &sheet_dims);
+                            results[(size_t)s] = run_one(st_seed, pub);
                             done[(size_t)s] = 1;
                         });
                     }
                     for (auto& t : ths) t.join();
                     for (int s = base; s < hi; ++s) {           // fold in this wave, then early-exit on one sheet
                         if (!done[(size_t)s]) continue;
-                        if (!have || score(results[(size_t)s]) < score(res)) { res = results[(size_t)s]; have = true; }
+                        if (!have || better(results[(size_t)s], res)) { res = results[(size_t)s]; have = true; }
                     }
                     if (have && (fit_mode == 1 ? (res.placements.size() >= n_to_place) : (res.n_sheets <= 1))) break;
                 }
@@ -950,10 +1264,10 @@ extern "C" NP_EXPORT int np_nest(
         // FILL-HOLES: actively pull smaller parts into larger parts' cavities (the relaxation only does
         // so under width pressure). Verified collision-free moves only — cannot create overlaps.
         // (Skipped under holes-first: the pre-pairing above already seated the smalls in their holes.)
-        if (fill_holes && !g_holes_first) fill_cavities(res, parts, part_holes_centered, holes_arg, &sheet_dims);
+        if (!warm && fill_holes && !g_holes_first) fill_cavities(res, parts, part_holes_centered, holes_arg, &sheet_dims);
         // GAP-FILL: pull smaller parts FORWARD into earlier sheets' open gaps (so a small part isn't left
         // on a later sheet / outside while it fits where a bigger part couldn't). Verified moves only.
-        fill_sheet_gaps(res, parts, holes_arg, sheet_w, sheet_h, &sheet_dims);
+        if (!warm) fill_sheet_gaps(res, parts, holes_arg, sheet_w, sheet_h, &sheet_dims);
 #if defined(NP_TEST_SEAMS)
         // HARNESS SEAM (NP_TEST_SHIFT, default 0 = no-op): push the RIGHT-MOST placement further right by
         // a FRACTION of its sheet's width — the same relative defect at every model scale, which is the
@@ -985,74 +1299,8 @@ extern "C" NP_EXPORT int np_nest(
         // post-pass placements. Published through np_last_quality so the component can warn instead of
         // shipping a bad layout silently.
         {
-            std::vector<std::vector<usize>> by_sheet;
-            for (usize i = 0; i < res.placements.size(); ++i) {
-                int s = res.placements[i].sheet;
-                if (s < 0) continue;
-                if ((int)by_sheet.size() <= s) by_sheet.resize((usize)s + 1);
-                by_sheet[(usize)s].push_back(i);
-            }
-            // Same index-clamping rule the demotion pass uses, so the two agree on which holes belong to
-            // which sheet.
-            auto voids_of = [&](int s) -> const std::vector<Polygon>* {
-                if (holes_arg.empty()) return nullptr;
-                usize hi = (s >= 0 && s < (int)holes_arg.size()) ? (usize)s : holes_arg.size() - 1;
-                return &holes_arg[hi];
-            };
             int q_ovl = 0, q_oob = 0;
-            for (usize s = 0; s < by_sheet.size(); ++s) {
-                auto [bw, bh] = dims_for(&sheet_dims, (int)s, sheet_w, sheet_h);
-                const std::vector<Polygon>* svoids = voids_of((int)s);
-                std::vector<Polygon> shp;
-                std::vector<usize> shp_pl;      // placement index behind shp[k] (some placements are skipped)
-                // Contact-skin copy of each shape, computed ONCE per part and reused across every pair and
-                // by the hole-containment exemption, so both speak the same "touching is not overlapping".
-                std::vector<std::optional<Polygon>> shr;
-                shp.reserve(by_sheet[s].size());
-                shp_pl.reserve(by_sheet[s].size());
-                shr.reserve(by_sheet[s].size());
-                for (usize k : by_sheet[s]) {
-                    usize c = res.placements[k].color_id;
-                    if (c >= parts.size() || !parts[c].first.collision_shape) continue;
-                    shp.push_back(parts[c].first.collision_shape->transform_clone(res.placements[k].d_transf.compose()));
-                    shp_pl.push_back(k);
-                    shr.push_back(shrink_verified(shp.back()));
-                }
-                for (const auto& p : shp) {
-                    // Tolerance is per-part and RELATIVE (driver.hpp bounds_tol) — the absolute 1.0 model
-                    // units this used to be made the whole check a no-op in a metre-unit document.
-                    const f32 BTOL = bounds_tol(bw, bh, p.diameter);
-                    if (p.bbox.x_min < -BTOL || p.bbox.y_min < -BTOL ||
-                        p.bbox.x_max > bw + BTOL || p.bbox.y_max > bh + BTOL) { q_oob++; continue; }
-                    // ...and a part sitting on the sheet's KEEP-OUT is exactly as uncuttable as one
-                    // hanging off the edge. This is the safety net for the sheet-id renumbering: the
-                    // demotion pass tests holes BEFORE its own renumber, so before sheets_interchangeable
-                    // was made hole-aware a part could be relabelled onto a keep-out it was never checked
-                    // against and this verification would still call the layout clean.
-                    if (svoids)
-                        for (const auto& h : *svoids)
-                            if (bbox_overlap(p.bbox, h.bbox) && brute_overlap(p, h)) { q_oob++; break; }
-                }
-                // "does one of b's placed holes hold the whole of a?" — the legitimate hole-nesting the
-                // two hole passes produce. shp[] carries SOLID outer rings, so an in-cavity child reads
-                // as an overlap until it is excused here; see contained_in_hole for why this cannot also
-                // excuse a child that has poked out through the hole wall.
-                auto hole_nested = [&](usize a, usize b) -> bool {
-                    usize cb = res.placements[shp_pl[b]].color_id;
-                    if (cb >= part_holes_centered.size() || part_holes_centered[cb].empty()) return false;
-                    AffineTransform bT = res.placements[shp_pl[b]].d_transf.compose();
-                    for (const auto& h : part_holes_centered[cb])
-                        if (contained_in_hole(shp[a], shr[a] ? &*shr[a] : nullptr, h.transform_clone(bT))) return true;
-                    return false;
-                };
-                for (usize i = 0; i < shp.size(); ++i)
-                    for (usize j = i + 1; j < shp.size(); ++j) {
-                        if (!bbox_overlap(shp[i].bbox, shp[j].bbox)) continue;
-                        if (!real_overlap(shp[i], shp[j], shr[i] ? &*shr[i] : nullptr, shr[j] ? &*shr[j] : nullptr)) continue;
-                        if (hole_nested(i, j) || hole_nested(j, i)) continue;   // one sits inside the other's hole
-                        q_ovl++;
-                    }
-            }
+            verify_layout(res, parts, part_holes_centered, holes_arg, sheet_dims, sheet_w, sheet_h, q_ovl, q_oob);
             int q_unplaced = part_count;
             for (const auto& pl : res.placements) if (pl.sheet >= 0) q_unplaced--;
             if (q_unplaced < 0) q_unplaced = 0;
@@ -1060,6 +1308,27 @@ extern "C" NP_EXPORT int np_nest(
             g_q_out_of_bounds.store(q_oob, std::memory_order_relaxed);
             g_q_unplaced.store(q_unplaced, std::memory_order_relaxed);
             g_q_cancelled.store(g_cancel.load(std::memory_order_relaxed) ? 1 : 0, std::memory_order_relaxed);
+
+            // E1 verdict (np_last_prio), on the same final placements: mandatory INPUT parts that got no
+            // sheet (never built, oversized, cut off, demoted), and placed vs offered solve area.
+            double a_off = 0.0, a_pl = 0.0;
+            for (const auto& pr : parts) a_off += (double)pr.first.area();
+            int placed_mand = 0;
+            for (const auto& pl : res.placements) {
+                usize c = pl.color_id;
+                if (pl.sheet < 0 || c >= parts.size()) continue;
+                a_pl += (double)parts[c].first.area();
+                if (part_priority && part_priority[orig_index[c]] > 0) ++placed_mand;
+            }
+            int n_mand = g_p_mandatory.load(std::memory_order_relaxed);
+            g_p_missing.store(n_mand - placed_mand, std::memory_order_relaxed);
+            g_p_placed_area.store(a_pl, std::memory_order_relaxed);
+            g_p_offered_area.store(a_off, std::memory_order_relaxed);
+            if (prio_fit1)
+                std::fprintf(stderr, "[np] prio verdict: mandatory placed %d/%d (missing %d), placed area %.1f%% of sheet 0, %zu/%d parts, retries %d, strip runs %d\n",
+                             placed_mand, n_mand, n_mand - placed_mand, 100.0 * a_pl / ((double)sheet_w * (double)sheet_h),
+                             res.placements.size(), part_count, g_prio_retries.load(std::memory_order_relaxed),
+                             g_prio_runs.load(std::memory_order_relaxed));
         }
 
         for (const auto& pl : res.placements) {
@@ -1078,12 +1347,59 @@ extern "C" NP_EXPORT int np_nest(
             if (out_sheet_id) out_sheet_id[oi] = pl.sheet;
         }
         if (out_n_sheets) *out_n_sheets = res.n_sheets;
+        if (const char* e = std::getenv("NP_LOSS_TRACE")) if (std::atoi(e) != 0)   // print-only diagnostic
+            std::fprintf(stderr, "[np] gls weight updates ending at +inf: %lld, of them with zero loss (NaN without the guard): %lld (NP_LOSS_GUARD=%d)\n",
+                         (long long)g_gls_overflows.load(std::memory_order_relaxed),
+                         (long long)g_gls_nan_hazards.load(std::memory_order_relaxed), g_loss_guard ? 1 : 0);
         { std::lock_guard<std::mutex> lk(g_live.mtx); g_live.active = false; }
         return 0;
     } catch (...) {
         { std::lock_guard<std::mutex> lk(g_live.mtx); g_live.active = false; }
         return 1;
     }
+}
+
+extern "C" NP_EXPORT int np_nest(
+    int part_count, const int* part_vertex_counts, const double* part_xy, const int* part_rotations,
+    int sheet_count, const int* sheet_outer_vertex_counts, const double* sheet_outer_xy,
+    const int* sheet_hole_counts, const int* hole_vertex_counts, const double* hole_xy,
+    const int* part_hole_counts, const int* part_hole_vertex_counts, const double* part_hole_xy,
+    const NpParams* params,
+    double* out_tx, double* out_ty, double* out_angle, int* out_sheet_id, int* out_n_sheets)
+{
+    return np_nest_impl(part_count, part_vertex_counts, part_xy, part_rotations, /*part_priority=*/nullptr,
+                        sheet_count, sheet_outer_vertex_counts, sheet_outer_xy, sheet_hole_counts, hole_vertex_counts,
+                        hole_xy, part_hole_counts, part_hole_vertex_counts, part_hole_xy, params,
+                        out_tx, out_ty, out_angle, out_sheet_id, out_n_sheets);
+}
+
+// E1: np_nest + a per-part priority array (see nest_physics_capi.h). NULL == np_nest.
+extern "C" NP_EXPORT int np_nest_prio(
+    int part_count, const int* part_vertex_counts, const double* part_xy, const int* part_rotations,
+    const int* part_priority,
+    int sheet_count, const int* sheet_outer_vertex_counts, const double* sheet_outer_xy,
+    const int* sheet_hole_counts, const int* hole_vertex_counts, const double* hole_xy,
+    const int* part_hole_counts, const int* part_hole_vertex_counts, const double* part_hole_xy,
+    const NpParams* params,
+    double* out_tx, double* out_ty, double* out_angle, int* out_sheet_id, int* out_n_sheets)
+{
+    return np_nest_impl(part_count, part_vertex_counts, part_xy, part_rotations, part_priority,
+                        sheet_count, sheet_outer_vertex_counts, sheet_outer_xy, sheet_hole_counts, hole_vertex_counts,
+                        hole_xy, part_hole_counts, part_hole_vertex_counts, part_hole_xy, params,
+                        out_tx, out_ty, out_angle, out_sheet_id, out_n_sheets);
+}
+
+// E1 priority verdict of the last completed np_nest / np_nest_prio (see nest_physics_capi.h).
+extern "C" NP_EXPORT int np_last_prio(int* out_mandatory, int* out_mandatory_missing,
+                                      double* out_placed_area, double* out_offered_area, int* out_retries) {
+    int m = g_p_mandatory.load(std::memory_order_relaxed);
+    int miss = g_p_missing.load(std::memory_order_relaxed);
+    if (out_mandatory)         *out_mandatory = m;
+    if (out_mandatory_missing) *out_mandatory_missing = miss;
+    if (out_placed_area)       *out_placed_area = g_p_placed_area.load(std::memory_order_relaxed);
+    if (out_offered_area)      *out_offered_area = g_p_offered_area.load(std::memory_order_relaxed);
+    if (out_retries)           *out_retries = g_prio_retries.load(std::memory_order_relaxed);
+    return miss;
 }
 
 // --- Cooperative cancel + progress (for an interactive/async host like the Grasshopper component) ---
@@ -1130,6 +1446,9 @@ extern "C" NP_EXPORT int np_poll_layout(
     std::lock_guard<std::mutex> lk(g_live.mtx);
     if (!g_live.active || g_live.items.empty()) return 0;
     f32 sw = g_live.sheet_w > 0.0f ? g_live.sheet_w : 1.0f;
+    // Band pitch: bin_pack_columns lays sheets out as columns of width sheet_w separated by a keep-out
+    // gap, so a column starts every col_pitch; greedy_fill leaves col_pitch 0 => pitch == sheet_w.
+    if (g_live.col_pitch > 0.0f) sw = g_live.col_pitch;
     int base = g_live.sheet_base, maxb = g_live.max_bins;
     int max_sheet = 0, written = 0;
     for (const auto& it : g_live.items) {
@@ -1153,4 +1472,80 @@ extern "C" NP_EXPORT int np_poll_layout(
     }
     if (out_n_sheets) *out_n_sheets = max_sheet;
     return written;
+}
+
+extern "C" NP_EXPORT int np_nest_warm_one(
+    int           part_count,
+    const int*    part_vertex_counts,
+    const double* part_xy,
+    const int*    part_rotations,           // [part_count] per-part rotation override: 0 = free
+                                            //   continuous rotation (default), N>0 = this part may
+                                            //   only use N discrete orientations (360/N deg step;
+                                            //   1 = fixed at 0 deg). NULL = no overrides.
+    const int*    warm_present,
+    const double* warm_tx,
+    const double* warm_ty,
+    const double* warm_angle,
+    int           sheet_count,
+    const int*    sheet_outer_vertex_counts,
+    const double* sheet_outer_xy,
+    const int*    sheet_hole_counts,
+    const int*    hole_vertex_counts,
+    const double* hole_xy,
+    const int*    part_hole_counts,         // [part_count] holes per part (NULL => no part holes)
+    const int*    part_hole_vertex_counts,  // [sum(part_hole_counts)] vertex count per part-hole, part-major (NULL ok)
+    const double* part_hole_xy,             // interleaved x,y for all part holes, part-major (NULL ok)
+    const NpParams* params,
+    double*       out_tx,
+    double*       out_ty,
+    double*       out_angle,
+    int*          out_sheet_id,
+    int*          out_n_sheets)
+{
+    auto fallback = [&]() {
+        int count=0;
+        for (int i=0;i<part_count;++i) {
+            bool yes=warm_present && warm_present[i]==1 && warm_tx && warm_ty && warm_angle;
+            if(out_tx) out_tx[i]=yes?warm_tx[i]:0;
+            if(out_ty) out_ty[i]=yes?warm_ty[i]:0;
+            if(out_angle) out_angle[i]=yes?warm_angle[i]:0;
+            if(out_sheet_id) out_sheet_id[i]=yes?0:-1;
+            if(yes) ++count;
+        }
+        if(out_n_sheets) *out_n_sheets=count?1:0;
+        // Fallback seeds are caller input, not the candidate just verified. Unknown
+        // geometry counters prevent stale candidate diagnostics from claiming clean.
+        g_q_overlap_pairs.store(-1); g_q_out_of_bounds.store(-1);
+        g_q_unplaced.store(part_count-count); g_q_demoted.store(0);
+        g_q_cancelled.store(g_cancel.load()?1:0);
+    };
+    if(part_count<=0 || sheet_count!=1 || !warm_present || !warm_tx || !warm_ty || !warm_angle ||
+       !params || params->part_holes_mode>1 || !part_vertex_counts || !part_xy ||
+       !sheet_outer_vertex_counts || !sheet_outer_xy || !out_tx || !out_ty || !out_angle || !out_sheet_id) {
+        fallback(); return 2;
+    }
+    for(int i=0;i<part_count;++i) {
+        if((warm_present[i]!=0 && warm_present[i]!=1) || part_vertex_counts[i]<3) {fallback();return 2;}
+        if(warm_present[i]) {
+            double a=warm_angle[i];
+            if(!std::isfinite(a)||!std::isfinite(warm_tx[i])||!std::isfinite(warm_ty[i])) {fallback();return 2;}
+            int n=part_rotations?part_rotations[i]:0;
+            if(n>0 && std::fabs(std::remainder(a,6.2831853071795864769/n))>1e-5) {fallback();return 2;}
+        }
+    }
+    if((params->iter_mode && params->iter_budget<=0) || (!params->iter_mode && params->time_budget_secs<=0)) {
+        fallback();return 1;
+    }
+    NpParams p=*params; p.fit_mode=1; p.n_starts=1;
+    NpWarmSeed warm{warm_present,warm_tx,warm_ty,warm_angle};
+    int rc=np_nest_impl(part_count,part_vertex_counts,part_xy,part_rotations,nullptr,
+        sheet_count,sheet_outer_vertex_counts,sheet_outer_xy,sheet_hole_counts,hole_vertex_counts,hole_xy,
+        part_hole_counts,part_hole_vertex_counts,part_hole_xy,&p,out_tx,out_ty,out_angle,out_sheet_id,out_n_sheets,&warm);
+    bool complete=rc==0 && g_q_overlap_pairs.load()==0 && g_q_out_of_bounds.load()==0;
+    for(int i=0;i<part_count;++i) if(out_sheet_id[i]!=0) complete=false;
+    if(complete) return 0;
+    fallback();
+    int missing=0;for(int i=0;i<part_count;++i) if(!warm_present[i]) ++missing;
+    g_q_unplaced.store(missing);
+    return rc==2?2:1;
 }

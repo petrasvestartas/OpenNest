@@ -137,6 +137,12 @@ inline std::vector<Point> execute_candidate(const std::vector<Point>& shape, con
 
 } // namespace shapemod_detail
 
+// NP_SIMPL_BBOX=1 (jagua-rs 1.1.0 "simplified shapes stay within the original bounding box"; default off):
+// a ConvexConvex step replaces two convex corners by the intersection of their outer edges, which can lie
+// OUTSIDE the input's bbox (a part then reads wider/taller than it is and is refused by a strip it fits).
+// With the switch such a step is rejected and the next valid candidate is taken; the outward (Inflate)
+// bias of every other step is kept, so the outline stays conservative. Set per solve by the C ABI.
+inline bool g_simpl_bbox = false;
 inline Polygon simplify_shape(const Polygon& shape, ShapeModifyMode mode, f32 max_area_change_ratio) {
     using namespace shapemod_detail;
     f32 original_area = shape.area;
@@ -172,8 +178,14 @@ inline Polygon simplify_shape(const Polygon& shape, ShapeModifyMode mode, f32 ma
             return area_delta(ref_points, a) < area_delta(ref_points, b);
         });
         int best = -1;
+        const Rect obox = shape.bbox;
+        auto in_bbox = [&](const Candidate& c) {
+            if (!g_simpl_bbox || c.kind != CandKind::ConvexConvex) return true;
+            auto rv = replacing_vertex(ref_points, c.c1, c.c2);
+            return rv && rv->x >= obox.x_min && rv->x <= obox.x_max && rv->y >= obox.y_min && rv->y <= obox.y_max;
+        };
         for (usize i = 0; i < candidates.size(); ++i)
-            if (candidate_is_valid(ref_points, candidates[i])) { best = (int)i; break; }
+            if (candidate_is_valid(ref_points, candidates[i]) && in_bbox(candidates[i])) { best = (int)i; break; }
         if (best < 0) break;
 
         std::vector<Point> new_shape = execute_candidate(ref_points, candidates[best]);

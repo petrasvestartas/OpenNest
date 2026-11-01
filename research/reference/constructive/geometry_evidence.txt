@@ -1,0 +1,156 @@
+Geometry reconstruction evidence ledger -- 2026-10-19
+
+Original artifact: NestFab v3 libcns-unpacked.dll.
+Source inspected directly in this implementation task:
+C:\Users\Petras\Documents\NestFab-decompiled\native-ghidra\libcns-unpacked.dll\decompiled.c
+Line numbers below refer to that immutable export. These are static observations,
+not observed runtime traces or a recovered buildable original source tree.
+
+1. Reflected polygon construction
+658f5300, lines 979280-979301, loops over pairs of signed integer coordinates;
+979296-979297 stores -*plVar5 and -plVar5[1]. This directly establishes origin
+reflection (x,y)->(-x,-y), not merely a suggestive function name.
+658f7a10, 981051 and 981089-981106, invokes that helper for the outer data and
+successive internal-path records. Some decompiler call signatures omit apparent
+arguments; their exact recovered C types must not be treated as source types.
+Our implementation: each convex bulk-outer-piece pair generates a reflected
+Minkowski sum by linear edge walking; this has the same vertex-difference algebra.
+Part mirroring x->-x is a distinct input feature, followed by rotation; it is not
+the reflected moving polygon used internally to form the forbidden region.
+
+2. No-fit convolution wrapper and important hole limitation
+658ff4f0, 985382-985383 converts both arguments using 65a0b2b0 with a scale-like
+parameter. 985390-985423 and 985439-985472 test internal-path collection emptiness
+and construct diagnostics decoding to polygon1/2.m_internal_paths.size()==0u,
+"hole not supported", GetNoFitConvolutions, and ..\exact\geom.cpp.
+985483 calls polygon reflection 658f7a10; 985484 calls 65910e00.
+65910e00 at 996789 calls 65910c20, then downstream segment-processing helpers.
+658ff4f0 at 985520-985521 rescales resulting integer coordinates by param_4.
+Observed: this particular convolution wrapper rejects nonempty internal paths.
+Not established: that the entire NestFab nesting system cannot handle holes;
+other paths and hole reinsertion exist. Nor is param_4's UI-derived value proven.
+Our implementation choice: bulk placement uses outer contours without holes,
+consistent with this observed wrapper's limitation. Separate cavity contacts are
+generated for fixed and moving holes, bypass bulk-outer pruning, and every
+candidate is checked against full material including holes. Cavity search is
+bounded and not exhaustive. This is not a claimed line-for-line reproduction of
+the original wrapper, decomposition, or complete NestFab hole reinsertion policy.
+
+3. Segment convolution arithmetic
+65910c20, 996676 calls 65910880 to generate records. 996709-996714 adds a common
+vertex coordinate pair to each of two endpoint pairs. 996715-996735 emits those
+two resulting endpoints in one order or its reverse according to a record flag.
+This arithmetic, together with the reflection path above, supports reflected
+polygon Minkowski-style convolution. The exact sweep/event ordering in its
+callee is not recreated in geometry.cpp.
+Our choice: ear-clipped triangles merged into convex pieces only after integer
+Boolean difference proves the hull adds no material; convex inputs bypass this.
+Boost trapezoids remain a fallback. Convex sums use linear edge walking, then
+per-fixed-piece row unions and a final union. Algebra is equivalent for each
+convex piece; decomposition and convolution ordering are independent choices.
+
+4. Allowed-position interval intersection
+65512e60, 363996-364004 selects a shifted row using 128-row block indexing.
+364016-364024 forms lower=max(current lower, shifted interval lower) and
+upper=min(current upper, shifted interval upper); 364026-364037 retains it only
+when lower<=upper. 364053-364062 swaps work buffers and exits if empty.
+364078-364144 repeats the same operation for further variable interval records.
+This directly supports shifted feasible-interval intersection, including contact
+endpoints. The assertion text decodes AllowedPosAtXNoCheck and sheet_zone.cpp.
+Our choice: subtract translated cached forbidden polygons from the rectangular
+translation domain, intersect polygon boundaries with scan rows, and independently
+validate each endpoint. This does not reproduce the original 128-row mask layout.
+
+5. Directional first-feasible row scan and endpoint proposals
+65bbfe90, 1416454-1416480 bounds a row index, applies four cheap row predicates,
+calls 65512e60 at 1416471, and decrements the row until nonempty intervals appear.
+1416503-1416524 chooses/emits an interval endpoint; 1416526-1416555 can emit the
+other endpoint and returns success. 65bc0320 has the corresponding increasing
+row loop at 1416632-1416657, calls 65512e60 at 1416648, then endpoint emission at
+1416680-1416732. When param_7 has a nonzero first field both functions dispatch
+to alternate helpers, so this is a verified branch, not every strategy.
+Our choice: four directional lexicographic rankings, polygon boundary contact
+vertices, bounded scan rows and interval-boundary intersections. Stock/defect
+and actual material intersection checks gate every returned candidate.
+Forbidden regions are united once before feasible-region subtraction; winding
+point-location rejects bulk-interior candidates before costly material checks.
+Explicit cavity proposals bypass that conservative bulk rejection. For limit1,
+the original directional first candidate is preserved. Larger result limits
+cycle directional row, column, compact-envelope-area, and farthest-contact
+orderings. A5%-of-short-dimension separation preference backfills closer valid
+points if necessary. These diversity policies are reconstruction choices.
+Cavity contacts divide a32768 pair-sampling budget across all eligible cavities,
+sample pair indices uniformly, and include a bounding-box-center alignment per
+cavity. Neither exhaustion nor an empty positions result proves infeasibility.
+
+Independent implementation boundaries and numeric policy
+- No original binary, recovered function, or existing OpenNest solver is called.
+  Shared third-party primitives are vendored Clipper2 and Boost.Polygon only.
+- Arbitrary input local origins are retained through rotation/mirroring; output
+  translation uses those same origins. Inputs are already offset; no implicit
+  part spacing or stock margin is added.
+- Coordinates round to nearest integer at configurable scale (default 100000).
+  One unit is 1/scale input units; per-coordinate rounding error <=0.5/scale.
+  An outer ring that collapses is rejected. A collapsed hole is filled, adding
+  material conservatively. Invalid crossing/backtracking rings, outside holes,
+  overlapping holes, nonfinite coordinates and abs(coord*scale)>1e12 reject.
+  Original-double outer bounds additionally gate stock containment, and stock
+  candidate limits round inward, preventing small rounded-away stock protrusions.
+- Optional conservative bulk proxies (Config.conservative_proxies / C ABI flag2)
+  simplify closed outer contours with two-chain Ramer-Douglas-Peucker at
+  min(stock width,height)*0.0005 input units, inflate by that tolerance plus two
+  integer units, and accept only if original outer minus proxy has zero material.
+  This is candidate pruning, not extra clearance in validity checks. On the boat
+  instance it is approximately0.99mm. Proxies can omit valid tight fits; exact
+  integer full-material validation remains mandatory and unchanged. No proxy
+  is ever used as the final material geometry. Holes are retained there.
+  Already-simple outlines for which simplification removes at most two vertices
+  retain their original contours, preserving exact rectangle/triangle contacts.
+- Optional smart orientations augment only empty input-angle lists: up to four
+  distinct longest convex-hull edge directions and their quarter turns, plus
+  uniform rotations. Explicit angle restrictions remain exact. This is an
+  implementation strategy choice, not a proven original preset equivalence.
+- Exact integer-product orientation guards hulls/simple-ring checks and detects
+  nonzero-area integer Boolean output, with no area acceptance tolerance.
+  Clipper/Boost Boolean/decomposition intersections are integer-grid operations;
+  this is not an exact analytic CAD-curve or original floating-polygon proof.
+  Source-space overlap/clearance validation remains necessary at the application
+  boundary. Curves, numerical offset fidelity and original Ultra settings are
+  outside the verified equivalence claim.
+- Cache keys are fixed/moving variant indices and include defects as fixed shapes.
+  Cache is mutex protected; decomposition uses call_once. Duplicate concurrent
+  computation is possible but incomplete/cancelled NFPs are never published.
+  Reverse pairs reuse the existing polygon by origin reflection:
+  NFP(fixed,moving)=-NFP(moving,fixed). Reflection preserves path winding.
+- Deadline checks occur before/after decomposition, between convex pair sums,
+  between fixed-piece row unions, scan rings and candidate validity tests. Individual
+  library Boolean/decomposition calls are not preemptible; deadline overshoot is
+  possible. Scan rows and cavity-contact proposals have explicit finite bounds.
+- Constructor prepares variants before search and does not have a Stop callback.
+  Complete algorithm/configuration equivalence and exact Ultra preset mapping
+  are not established by this reconstruction.
+
+Validation
+tests/geometry_tests.cpp exercises origin preservation, stock contact/excursion,
+edge touch versus material overlap, sheet isolation, stop request, fixed-hole
+exact fit, moving-holed shape surrounding a placed shape, stock defects,
+nonconvex cavity placement, explicit rotations/mirroring, concurrent cache reuse,
+overflow rejection, self-crossing/outside/overlapping-hole rejection, and safe
+collapsed-hole filling. CMake Release build and all three native CTest suites
+passed after these changes (geometry, search, C API).
+
+Performance follow-up (same real first two input shapes, one orientation)
+Standalone tests/geometry_bench.cpp reads a plain-text shape fixture, prints piece
+counts, and times one real placement/NFP call with a30-second stop. No original
+reference sheet assignment is consumed. Diagnostic fixture and build log are in
+tools/bench3dm/out/constructive_geometry_profile/.
+- Original full-material trapezoids:592x1071 pieces, >30s before one NFP completed.
+- Exact adjacent merging + linear sums:363x808 pieces,21.38s.
+- Outer-only trapezoids:311x268,6.03s.
+- Outer-only original-vertex ear clipping and convex merge:97x82,0.65s.
+- Fine conservative proxy + row-wise sum unions:60x68,0.055s.
+- Coarse verified proxy + row-wise unions:17x18,0.019s.
+These are pair-level timings, not a claim that the full58-part job is solved.
+Direct all-edge quadrilateral convolution was tested at1.55s and removed; it is
+not a hidden alternate engine. The benchmark reports zero feasible positions for
+this particular pair/stock/orientation; its timing still exercises a complete NFP.

@@ -133,7 +133,13 @@ namespace nest_lib
                 stagnationGens   = 30,
                 // Exact Minkowski void exclusion is opt-in (0 = fast convex-hull default). Expose as a
                 // component toggle when tight packing around non-convex sheet voids is wanted.
-                exactVoids       = 0
+                exactVoids       = 0,
+                // Part-aware orientation candidates: each part's own min-area-rectangle / longest-edge
+                // angles (+ quarter turns) are tried ahead of the uniform Rotations grid. Without it,
+                // Rotations >= 12 swept 45-degree steps from a random gene angle and could miss the
+                // narrow 0/180 window a sheet-length plate needs -> the biggest parts went unplaced.
+                smartRotations   = 1,
+                rotationTiltDeg  = 0
             };
 
             var tx = new double[N]; var ty = new double[N]; var ang = new double[N];

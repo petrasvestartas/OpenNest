@@ -18,7 +18,8 @@
 //   * Curve.IsLinear(mtol*10) — the harness's Seg.IsLinear is exact. A "nearly straight" NURBS that Rhino
 //     calls linear contributes ONE point in production and is never sampled.
 //   * The pts.Count < 3 fallback in curve_to_polyline (re-sampling the WHOLE curve) — never reached here.
-//   * Polyline.MergeColinearSegments / CollapseShortSegments — modelled by MergeColinear() below, which does
+//   * (legacy only) Polyline.MergeColinearSegments / CollapseShortSegments — modelled by MergeColinear() below; the
+//     production non-keep_all pass is now the REAL curve_sampling.rdp_closed. MergeColinear does
 //     NOT reproduce Rhino's iteration order, only its 10 deg threshold.
 //   * Curve.ClosestPoint (the ring-vertex -> curve-parameter mapping role_allowance seeds its scan with) and
 //     Curve.DivideByCount — modelled by RingCurve below against an exact analytic parameterisation.
@@ -303,22 +304,46 @@ namespace nest_geo_harness
             return Math.Sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0));
         }
 
+        // Curve.GetBoundingBox(true).Diagonal.Length for the WHOLE closed curve (all sub-segments).
+        static double RingDiagonal(Seg[] segs)
+        {
+            double x0 = double.MaxValue, y0 = double.MaxValue, x1 = -double.MaxValue, y1 = -double.MaxValue;
+            foreach (Seg s in segs)
+                for (int i = 0; i <= 400; i++)
+                {
+                    V2 p = s.PointAt(i / 400.0);
+                    x0 = Math.Min(x0, p.X); y0 = Math.Min(y0, p.Y);
+                    x1 = Math.Max(x1, p.X); y1 = Math.Max(y1, p.Y);
+                }
+            return Math.Sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0));
+        }
+
         // NEW behaviour: linear sub-segments keep only their start point; curved ones are sampled ON the curve
         // until the real curve_sampling.divisions_for_sagitta is satisfied. NO outward bias — the ring is
         // role-free, and role_allowance (RoleRing below) does the role-specific nudge afterwards.
-        static List<V2> BuildRing(Seg[] segs, double sdl, bool keep_all)
+        // `legacy` = the pre-ring-cap budget (per-sub-segment fraction only), kept to reproduce the 6 mm hull
+        // arc of section I.
+        // `ringDiagRef` = nest_geo's ring_diag_ref (the batch's largest ring diagonal); <= 0 = this ring's own.
+        static List<V2> BuildRing(Seg[] segs, double sdl, bool keep_all, bool legacy = false, double ringDiagRef = 0)
         {
             bool coarse = sdl < 0;
             double step = coarse ? curve_sampling.step_angle_coarse : curve_sampling.step_angle_fine;
             int cap = coarse ? curve_sampling.max_divisions_coarse : curve_sampling.max_divisions_fine;
             double frac = coarse ? curve_sampling.sagitta_fraction_coarse : curve_sampling.sagitta_fraction_fine;
+            double ring_frac = coarse ? curve_sampling.chord_fraction_of_ring_coarse : curve_sampling.chord_fraction_of_ring_fine;
+            // nest_geo.curve_to_polyline: GetBoundingBox(true) of the WHOLE closed curve.
+            double ring_diag = legacy ? 0.0 : (ringDiagRef > 0 ? ringDiagRef : RingDiagonal(segs));
 
             var pts = new List<V2>();
+            var locked = new List<bool>();                 // nest_geo.curve_to_polyline's RDP lock mask
+            bool prevCurved = segs.Length > 0 && !segs[segs.Length - 1].IsLinear;
             foreach (Seg s in segs)
             {
-                if (s.IsLinear) { pts.Add(s.PointAt(0)); continue; }
-                // nest_geo.sagitta_budget: a fraction of THIS SUB-SEGMENT's own bbox diagonal, not the ring's.
-                double dev_tol = Math.Max(mtol, frac * SegDiagonal(s));
+                if (s.IsLinear) { pts.Add(s.PointAt(0)); locked.Add(prevCurved); prevCurved = false; continue; }
+                prevCurved = true;
+                // nest_geo.sagitta_budget: a fraction of THIS SUB-SEGMENT's own bbox diagonal, capped at a
+                // (much smaller) fraction of the WHOLE ring's diagonal. REAL production rule.
+                double dev_tol = curve_sampling.sagitta_budget(SegDiagonal(s), ring_diag, frac, ring_frac, mtol);
 
                 int n = curve_sampling.divisions_for_turn(SegmentTurn(s), step, cap);       // REAL
                 if (sdl > 0 && s.Length > 0) n = Math.Max(n, (int)Math.Ceiling(s.Length / sdl));
@@ -341,9 +366,23 @@ namespace nest_geo_harness
                         + " measured=" + curve_sampling.worst_sagitta(at, SampleParams(local, n), 1.0, curve_sampling.sagitta_probes).ToString("F4"));
 
                 double[] ts = SampleParams(local, n);
-                for (int d = 0; d < ts.Length; d++) pts.Add(local.PointAt(ts[d]));
+                for (int d = 0; d < ts.Length; d++) { pts.Add(local.PointAt(ts[d])); locked.Add(true); }
             }
-            if (!keep_all) MergeColinear(pts, 10.0);
+            if (!keep_all)
+            {
+                if (legacy) MergeColinear(pts, 10.0);      // the old MergeColinearSegments(10 deg)
+                else
+                {
+                    // nest_geo.simplify_rdp at the same chord cap. REAL production code.
+                    double[] x = new double[pts.Count], y = new double[pts.Count];
+                    for (int i = 0; i < pts.Count; i++) { x[i] = pts[i].X; y[i] = pts[i].Y; }
+                    int[] keep = curve_sampling.rdp_closed(x, y, pts.Count, Math.Max(mtol, ring_frac * ring_diag),
+                                                           locked.ToArray());
+                    var kept = new List<V2>(keep.Length);
+                    foreach (int k in keep) kept.Add(pts[k]);
+                    pts.Clear(); pts.AddRange(kept);
+                }
+            }
             return pts;
         }
 
@@ -699,6 +738,17 @@ namespace nest_geo_harness
         // T11: r = 100 + 20*cos(16*theta) as ONE sub-segment. 16 lobes, min radius of curvature ~1.3, so the
         // old 64-chord ceiling gave 4 chords per lobe.
         static Seg[] Scallop() { return new Seg[] { new PolarSeg(100, 20, 16) }; }
+
+        // Section I: a circular SEGMENT cut off a R=1937 circle by a 45 deg chord (arc + straight), the
+        // shape of the long shallow hull edge that shipped a 5.94 chord deviation and a 6.24 allowance.
+        static Seg[] HullSegment()
+        {
+            const double R = 1937.0, half = 22.5 * Math.PI / 180.0;
+            double a0 = Math.PI / 2 - half, a1 = Math.PI / 2 + half;
+            V2 c = new V2(0, 0);
+            V2 pa = new V2(R * Math.Cos(a0), R * Math.Sin(a0)), pb = new V2(R * Math.Cos(a1), R * Math.Sin(a1));
+            return new Seg[] { new ArcSeg(c, R, a0, a1), new LineSeg(pb, pa) };
+        }
 
         static Seg[] Polygon(params V2[] pts)
         {
@@ -1138,6 +1188,88 @@ namespace nest_geo_harness
                       "unfilleted OUTER: sharp corner is on the HARMLESS side, no allowance", null);
                 Check(holeAllow > 0, "unfilleted HOLE: sharp corner is measured and shrunk away", "-" + F(holeAllow));
                 Check(holePoke <= ftol, "unfilleted HOLE stays inside the real filleted hole", "poke " + F(holePoke));
+            }
+
+            Console.WriteLine();
+            Console.WriteLine("=== I. ring cap on the chord budget: R=1937 hull arc spanning 45 deg ===");
+            // Before the ring cap the budget was 0.4% of the ARC's own bbox diagonal (~1490 here) = ~6, so the
+            // chords sat ~6 off the curve and role_allowance grew the whole outline by ~6.2. Now it is
+            // min(that, 3.5e-6 * reference diagonal) and the outline needs (almost) no allowance.
+            {
+                Seg[] hull = HullSegment();
+                Console.WriteLine("        ring bbox diagonal " + F(RingDiagonal(hull)) + ", ring cap (fine) "
+                                  + F(curve_sampling.chord_fraction_of_ring_fine * RingDiagonal(hull)));
+                foreach (double sdl in new double[] { 0, -100 })
+                {
+                    var legacyRing = BuildRing(hull, sdl, sdl == 0, true);
+                    double legacyDev = WorstDeviation(legacyRing, hull);
+                    RoleRing(legacyRing, hull, true); double legacyGrow = lastAllowance;
+                    // The SAMPLER's output (before any simplification) must meet the capped budget ...
+                    var sampled = BuildRing(hull, sdl, true);
+                    double dev = WorstDeviation(sampled, hull);
+                    // ... and so must the ring that SHIPS: Simplify < 0 runs rdp_closed at the same cap (it
+                    // used to run the 10 deg colinear merge, which put this arc back at 4 verts / +29.7).
+                    var ring = BuildRing(hull, sdl, sdl == 0);
+                    double devShip = WorstDeviation(ring, hull);
+                    var grown = RoleRing(ring, hull, true); double grow = lastAllowance;
+                    var finePts = Truth(hull, 8000, 0.5, 0.02);
+                    double residual = Escape(finePts, grown);
+                    Console.WriteLine("        Simplify " + F(sdl) + ": legacy " + legacyRing.Count + " verts, max chord dev "
+                                      + F(legacyDev) + ", allowance +" + F(legacyGrow) + "   |   ring cap: sampled "
+                                      + sampled.Count + " verts, max chord dev " + F(dev) + "; shipped " + ring.Count
+                                      + " verts, max chord dev " + F(devShip) + ", allowance +" + F(grow));
+                    Check(legacyDev > 1.0, "hull arc, Simplify " + F(sdl) + ": LEGACY budget leaves a mm-scale (> 1) chord deviation (repro)",
+                          "dev " + F(legacyDev));
+                    Check(dev <= 0.03, "hull arc, Simplify " + F(sdl) + ": sampled max chord deviation <= 0.03", "dev " + F(dev));
+                    Check(devShip <= 0.03, "hull arc, Simplify " + F(sdl) + ": SHIPPED max chord deviation <= 0.03", "dev " + F(devShip));
+                    Check(grow <= 0.03, "hull arc, Simplify " + F(sdl) + ": role allowance growth <= 0.03", "+" + F(grow));
+                    Check(residual <= 1e-3, "hull arc, Simplify " + F(sdl) + ": grown ring still CONTAINS the part",
+                          "escape " + F(residual));
+                }
+                // BATCH reference: a small circular hole (R=50) converted in the same batch as a 5.7 m plate
+                // (ring_diag_ref ~5700, the customer job's largest ring) gets the plate's ~0.02 cap instead of
+                // its own (mtol floor) -> far fewer than the 256-chord ceiling, deviation still <= 0.03.
+                foreach (double sdl in new double[] { 0, -100 })
+                {
+                    Seg[] hole = Circle(50);
+                    var own = BuildRing(hole, sdl, sdl == 0);
+                    var batch = BuildRing(hole, sdl, sdl == 0, false, 5700.0);
+                    double devB = WorstDeviation(batch, hole);
+                    var shr = RoleRing(batch, hole, false); double shrinkB = lastAllowance;
+                    Console.WriteLine("        R=50 hole, Simplify " + F(sdl) + ": own-diag cap " + own.Count + " verts | batch cap (ref 5700) "
+                                      + batch.Count + " verts, max chord dev " + F(devB) + ", shrink -" + F(shrinkB));
+                    Check(batch.Count < own.Count && devB <= 0.03 && shrinkB <= 0.03,
+                          "R=50 hole, Simplify " + F(sdl) + ": batch-relative cap is coarser than ring-relative and still <= 0.03",
+                          batch.Count + " vs " + own.Count + " verts");
+                }
+                // RDP still does the exact-colinear merge of a straight polyline (Simplify < 0), and keeps a
+                // real corner even when it is far smaller than the old 10 deg threshold.
+                {
+                    Seg[] sq = Polygon(new V2(0, 0), new V2(50, 0), new V2(100, 0), new V2(100, 100), new V2(50, 100.0),
+                                       new V2(0, 100), new V2(0, 50));
+                    Seg[] kink = Polygon(new V2(0, 0), new V2(500, 1.0), new V2(1000, 0), new V2(1000, 100), new V2(0, 100));
+                    int nSq = BuildRing(sq, -100, false).Count, nKink = BuildRing(kink, -100, false).Count;
+                    Check(nSq == 4, "Simplify -100: exactly colinear polyline vertices merge", nSq + " verts");
+                    Check(nKink == 5, "Simplify -100: a 0.23 deg corner 1.0 off the chord is KEPT (old 10 deg merge dropped it)", nKink + " verts");
+                }
+                // chord counts of the section B shapes under the new rule (cross-checked against
+                // tools/bench3dm/rhino_sampling.py)
+                foreach (var pair in new[] {
+                    new { n = "circle R=100", s = Circle(100) },
+                    new { n = "half-disc R=100", s = HalfDisc(100) },
+                    new { n = "stadium R=50", s = Stadium(120, 50) },
+                    new { n = "hull segment R=1937/45deg", s = HullSegment() } })
+                    foreach (double sdl in new double[] { 0, -100 })
+                    {
+                        // chord count BEFORE any simplification (keep_all), then the ring production actually
+                        // ships (Simplify < 0 runs rdp_closed; legacy ran the 10 deg merge) and its allowance
+                        int nNew = BuildRing(pair.s, sdl, true).Count, nOld = BuildRing(pair.s, sdl, true, true).Count;
+                        var shipNew = BuildRing(pair.s, sdl, sdl == 0); RoleRing(shipNew, pair.s, true); double gNew = lastAllowance;
+                        var shipOld = BuildRing(pair.s, sdl, sdl == 0, true); RoleRing(shipOld, pair.s, true); double gOld = lastAllowance;
+                        Console.WriteLine("        chords: " + pair.n + ", Simplify " + F(sdl) + ": " + nNew
+                                          + " (legacy " + nOld + "); shipped " + shipNew.Count + " verts +" + F(gNew)
+                                          + " (legacy " + shipOld.Count + " verts +" + F(gOld) + ")");
+                    }
             }
 
             Console.WriteLine();

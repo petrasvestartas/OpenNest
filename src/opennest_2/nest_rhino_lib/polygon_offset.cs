@@ -16,6 +16,14 @@ namespace nest_rhino_lib
     ///
     /// Rhino-free on purpose: the caller in nest_geo.cs is a thin Polyline adapter, so this can be unit-tested
     /// headless — see tools/nest_geo_harness/.
+    ///
+    /// JOIN STYLE. A part's CLEARANCE region is the Minkowski sum of the part with a disk of radius
+    /// clearance/2, i.e. a ROUND-join offset. A mitre offset is a superset of it: at a convex corner the
+    /// mitre tip sits up to (mitre limit - 1) * d further out (measured 2.1-2.5 extra at d = 5 on a customer
+    /// job), so mitred parts are nested with MORE than the requested gap at every convex corner and dense
+    /// layouts become infeasible. offset_ring therefore takes `round_sagitta`: &gt; 0 selects round joins
+    /// whose fillet chords stay within that distance of the true arc (see round_sagitta_target);
+    /// 0 keeps the old mitre join, which the sheet inset and role_allowance still use.
     /// </summary>
     internal static class polygon_offset
     {
@@ -55,6 +63,26 @@ namespace nest_rhino_lib
             return true;
         }
 
+        // Worst chord / nominal step sagitta ratio of the vendored Clipper's DoRound (steps = Round(a / step),
+        // so the closing chord of a fillet spans up to 1.5 steps and sagitta grows with the angle squared).
+        private const double round_last_chord_factor = 2.25;
+
+        /// <summary>
+        /// Chord budget for the round fillets of a clearance offset by |d| (model units): 0.4% of the offset,
+        /// clamped to [0.01 mm, 0.05 mm]. `units_per_mm` converts millimetres into model units (1 for a mm
+        /// model). At d = 5 mm this is 0.02 mm, the same order as the curve sampler's chord cap
+        /// (curve_sampling.chord_fraction_of_ring_fine x a plate-sized batch), so the offset adds no coarser
+        /// approximation than the intake already has; the clamp keeps a large clearance from dropping the
+        /// fillets to a handful of chords and a tiny one from exploding the vertex count.
+        /// </summary>
+        public static double round_sagitta_target(double d, double units_per_mm)
+        {
+            if (!(units_per_mm > 0) || double.IsInfinity(units_per_mm)) units_per_mm = 1.0;
+            double lo = 0.01 * units_per_mm, hi = 0.05 * units_per_mm;
+            double s = 0.004 * Math.Abs(d);
+            return s < lo ? lo : (s > hi ? hi : s);
+        }
+
         // Clipper is integer-based: scale so the whole ring fits inside ~1e8 (well under Clipper's 0x3FFFFFFF
         // single-range limit, so its fast 64-bit slope arithmetic is used) while keeping sub-micron resolution
         // at ordinary part sizes.
@@ -72,8 +100,12 @@ namespace nest_rhino_lib
         ///
         /// Keeping only the largest loop matters when a shrink SPLITS a ring: dropping the other lobes always
         /// makes the nesting outline bigger (a lost hole becomes solid material), which is the safe side.
+        ///
+        /// round_sagitta &gt; 0: ROUND joins (the exact clearance region, fillet vertices ON the arc, chords at
+        /// most round_sagitta inside it — model units). 0 (default): MITRE joins, limit 2.
         /// </summary>
-        public static double[][] offset_ring(double[] x, double[] y, int n, double distance, bool shrink)
+        public static double[][] offset_ring(double[] x, double[] y, int n, double distance, bool shrink,
+                                             double round_sagitta = 0.0)
         {
             double d = Math.Abs(distance);
             double cx, cy, ext;
@@ -86,8 +118,16 @@ namespace nest_rhino_lib
             bool in_ccw = Clipper.Orientation(path);
             if (!in_ccw) path.Reverse();                      // CCW, so a POSITIVE delta expands
 
-            var co = new ClipperOffset(2.0, Math.Max(1.0, 0.1 * d * scale));
-            co.AddPath(path, JoinType.jtMiter, EndType.etClosedPolygon);
+            // Round: ArcTolerance is the max chord-to-arc deviation in SCALED units. The vendored Clipper rounds
+            // the step count per fillet, so the last chord can span up to 1.5 steps (sagitta x 2.25): divide by
+            // that so the WORST chord, not the average one, honours round_sagitta. Never below one grid unit
+            // (Clipper itself also caps it at 0.25 * d). Mitre: the original arguments (the arc tolerance is
+            // unused there, the mitre limit is 2).
+            bool round = round_sagitta > 0.0;
+            double arc_tol = round ? Math.Max(1.0, round_sagitta / round_last_chord_factor * scale)
+                                   : Math.Max(1.0, 0.1 * d * scale);
+            var co = new ClipperOffset(2.0, arc_tol);
+            co.AddPath(path, round ? JoinType.jtRound : JoinType.jtMiter, EndType.etClosedPolygon);
             var sol = new List<List<IntPoint>>();
             try { co.Execute(ref sol, (shrink ? -d : d) * scale); } catch { return null; }
             if (sol == null || sol.Count == 0) return null;   // ring consumed by the offset: a REAL failure

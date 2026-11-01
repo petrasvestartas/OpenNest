@@ -58,6 +58,12 @@ typedef struct NfpParams {
                             //       H(+)(-B) instead of the convex-hull approximation. Tight packing
                             //       against NON-CONVEX voids; identical for convex voids; slightly
                             //       slower. Opt-in (default 0 = fast convex-hull, unchanged behavior).
+    int    smartRotations;  // bool: part-aware orientation candidates — each part's own min-area-
+                            //       rectangle / longest-edge angles (+ quarter turns) are tried
+                            //       ahead of the uniform grid, and GA genes prefer them. 0 = legacy
+                            //       grid sweep (byte-identical). Forced 0 in faithful mode (mode 0).
+    double rotationTiltDeg; // smartRotations only: also try own angle +/- this many degrees
+                            //       (0 = off). Appended after smartRotations (x64 offset 144).
 } NfpParams;
 
 // Main solve. Output arrays are caller-allocated, length = sum(part_quantities)

@@ -1,0 +1,62 @@
+{
+  "_comment": "Named engine configs for tools/bench3dm. 'inherit' merges the parent's keys; 'params' is merged field-by-field into the ABI struct (NpParams / NfpParams). 'seed' is injected per run. 'sheets' = number of identical solve sheets handed to the engine (null -> instance sheet.count).",
+  "gh_np": {
+    "description": "nest_physics exactly as the OpenNest GH component calls it (component_nest.cs 1262-1286, nest_options_catalog.cs 37-48)",
+    "engine": "np_nest",
+    "sheets": 10,
+    "params": {
+      "num_rotations": 3600,
+      "spacing": 0.0,
+      "simplify_tolerance": 0.0,
+      "time_budget_secs": 0.0,
+      "iter_mode": 1,
+      "iter_budget": 4000,
+      "max_sheets": 10,
+      "n_starts": 1,
+      "part_holes_mode": 1,
+      "pole_max": 48,
+      "final_compact": 1,
+      "fit_mode": 0
+    }
+  },
+  "np_rot360": {"inherit": "gh_np", "description": "360 discrete orientations instead of 3600", "params": {"num_rotations": 360}},
+  "np_quality": {"inherit": "gh_np", "description": "5x relaxation rounds", "params": {"iter_budget": 20000}},
+  "np_fit2": {"inherit": "gh_np", "description": "fit_mode 2 (engine mode under development; older DLLs may treat it as 0)", "params": {"fit_mode": 2}},
+  "gh_nfp": {
+    "description": "nfp_nest exactly as the OpenNest GH C++ backend calls it (rhino_example_cpp.cs 97-137), Iterations = 10",
+    "engine": "nfp_nest",
+    "sheets": 10,
+    "params": {
+      "placementType": 1,
+      "rotations": 4,
+      "mutationRate": 10,
+      "populationSize": 10,
+      "curveTolerance": 0.72,
+      "clipperScale": 100000.0,
+      "spacing": 0.0,
+      "sheetSpacing": 0.0,
+      "rotationLimit": 360.0,
+      "useHoles": 1,
+      "exploreConcave": 0,
+      "clipByHull": 0,
+      "clipByRects": 1,
+      "simplify": 0,
+      "mode": 1,
+      "generations": 10,
+      "numSeeds": 0,
+      "useParallel": 1,
+      "timeBudgetSecs": 0.0,
+      "maxSheets": 0,
+      "edgeSamples": -1,
+      "compactionPasses": 0,
+      "tryAllRotations": 1,
+      "exactNfp": 1,
+      "stagnationGens": 30,
+      "exactVoids": 0,
+      "smartRotations": 1,
+      "rotationTiltDeg": 0.0
+    }
+  },
+  "nfp_gens40": {"inherit": "gh_nfp", "description": "40 GA generations", "params": {"generations": 40}},
+  "nfp_compact": {"inherit": "gh_nfp", "description": "4 compaction passes, population 30", "params": {"compactionPasses": 4, "populationSize": 30}}
+}

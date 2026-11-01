@@ -112,6 +112,25 @@ public:
     static std::shared_ptr<NFP> getHull(const NFP& polygon);
     static NFP getFrame(const NFP& A);
 
+    // --- Smart rotations (NestConfig::smartRotations) ---
+    // Normalise to [0,360) and round to 1e-4 deg so every copy of an angle has the SAME float bits
+    // (the rotation-keyed caches hash raw float bits / 1e-4-rounded values).
+    static float normalizeOwnAngle(double degrees);
+    // A part's own sensible orientations: the rotation that aligns its min-area bounding rectangle
+    // (rotating calipers on the convex hull) with the axes, and the one that makes its longest
+    // outline edge horizontal, each with quarter turns; deduped within 0.5 deg.
+    static std::vector<float> computeOwnAngles(const NFP& polygon);
+    // Ordered, deduped (0.5 deg) placement candidates: [gene, own..., own+-tilt..., grid angles
+    // nearest the gene], capped (see NestConfig::rotationCandidateCap).
+    static std::vector<float> smartCandidateAngles(float geneAngle, const std::vector<float>& own,
+                                                   const NestConfig& config);
+    // Fit-angle rescue (always on, used only when a part fits the empty sheet at NONE of its
+    // discrete candidate angles): the rotation intervals in which the part's convex-hull bounding
+    // box fits strictly inside the sheet's bounding rectangle; returns the centres of the widest
+    // intervals (at most maxAngles, widest first, normalised). Empty when the bbox fits at no
+    // angle, or at every angle. Exact containment is still decided by the sheet IFP.
+    static std::vector<float> computeFitAngles(const NFP& part, const NFP& sheet, int maxAngles = 4);
+
     // --- Coordinate conversion (pure, no mutable state) ---
     static std::vector<Clipper2Lib::Path64> nfpToClipperCoordinates(NFP& nfp, double clipperScale = 10000000);
     static std::vector<Clipper2Lib::Path64> nfpToClipperWithShift(const NFP& nfp, double clipperScale, double dx, double dy);

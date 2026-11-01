@@ -38,6 +38,10 @@ namespace NfpNest
                                         // early-exit (legacy full-budget burn, for wall-clock baselines).
         public int    exactVoids;       // bool: exact Minkowski void/hole exclusion (tight around
                                         // non-convex voids); 0 = fast convex-hull default (unchanged)
+        public int    smartRotations;   // bool: part-aware orientations (own min-area-rectangle /
+                                        // longest-edge angles + quarter turns ahead of the grid);
+                                        // 0 = legacy grid sweep. Ignored (forced 0) in faithful mode.
+        public double rotationTiltDeg;  // smartRotations only: also try own angle +/- tilt (0 = off)
     }
 
     // P/Invoke into nfp_nest.dll (the C++ Boost.Polygon NFP/SvgNest GA nester). The DLL is copied next to

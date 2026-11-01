@@ -17,9 +17,19 @@
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
+#include <cstddef>
 #include <functional>
 
 using namespace nest;
+
+#if defined(_WIN64) || defined(__x86_64__)
+// ABI guard for the C# (NfpNestWrapper.cs) and ctypes (tools/bench3dm/engines.py) mirrors:
+// new fields are only ever APPENDED.
+static_assert(offsetof(NfpParams, exactVoids) == 136, "NfpParams layout changed");
+static_assert(offsetof(NfpParams, smartRotations) == 140, "NfpParams layout changed");
+static_assert(offsetof(NfpParams, rotationTiltDeg) == 144, "NfpParams layout changed");
+static_assert(sizeof(NfpParams) == 152, "NfpParams layout changed");
+#endif
 
 namespace {
 
@@ -70,6 +80,10 @@ NestConfig toConfig(const NfpParams* p) {
         if (p->edgeSamples >= 0)      c.edgeSamples = p->edgeSamples;
         if (p->compactionPasses >= 0) c.compactionPasses = p->compactionPasses;
         if (p->tryAllRotations >= 0)  c.tryAllRotations = p->tryAllRotations != 0;
+        // Part-aware orientation candidates (faithful mode keeps the canonical grid: forced off).
+        c.smartRotations  = p->smartRotations != 0;
+        c.rotationTiltDeg = (c.smartRotations && p->rotationTiltDeg > 0 && p->rotationTiltDeg < 45)
+                                ? p->rotationTiltDeg : 0.0;
     }
     return c;
 }

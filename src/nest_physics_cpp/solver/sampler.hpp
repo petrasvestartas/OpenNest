@@ -24,45 +24,170 @@ inline FRange intersect_range(FRange a, FRange b) { return {max_f(a.start, b.sta
 // the nester raises it (e.g. 32) for elongated ribbon parts where orientation dominates density.
 inline usize ROT_N_SAMPLES = 16;
 
+// SMART ORIENTATION CANDIDATES (env NP_SMART_ROT=1, set per solve by the C ABI before parts are built).
+// Continuous-rotation parts get a small extra orientation set aligned with their min-area bounding
+// rectangle and their longest outline edge (each + quarter turns); the uniform sampler draws from that
+// set with probability g_smart_rot_p and from the uniform grid otherwise. Off => no smart set is built,
+// no extra RNG draw happens, and every sample is byte-identical to before.
+inline bool g_smart_rot = false;
+inline f32 g_smart_rot_p = 0.5f;
+// NP_SMART_ROT_TILT (degrees, default 3): rotation tolerance around the smart angle for smart_only parts.
+inline f32 g_smart_tilt = 3.0f * PI_F / 180.0f;
+
+// Nearest smart angle to r, expressed in r's own winding (so |result - r| <= pi).
+inline f32 nearest_smart_angle(const std::vector<std::pair<f32, Rect>>& set, f32 r) {
+    f32 best = 0.0f, bd = std::numeric_limits<f32>::max();
+    for (const auto& e : set) {
+        f32 d = normalize_rotation(r - e.first);
+        if (d > PI_F) d -= 2.0f * PI_F;
+        if (std::fabs(d) < bd) { bd = std::fabs(d); best = d; }
+    }
+    return r - best;
+}
+
 struct RotEntry { f32 r; FRange x_range, y_range; };
+
+// The orientation list UniformBBoxSampler::make enumerates for `part` (identical order and values).
+inline std::vector<f32> sampler_rotations(const Part& part) {
+    std::vector<f32> rotations;
+    switch (part.allowed_rotation.kind) {
+        case RotationKind::None: rotations = {0.0f}; break;
+        case RotationKind::Discrete: rotations = part.allowed_rotation.discrete; break;
+        case RotationKind::Continuous: {
+            f32 step = (2.0f * PI_F) / static_cast<f32>(ROT_N_SAMPLES);
+            for (usize i = 0; i < ROT_N_SAMPLES; ++i) rotations.push_back(static_cast<f32>(i) * step);
+            break;
+        }
+    }
+    return rotations;
+}
+
+// Precompute (r, bbox of the collision shape rotated by r) for every sampler orientation. The bbox is
+// computed by the SAME transform_from + generate_bounding_box sequence make() runs (bbox depends only on
+// the transformed vertices), so cached and recomputed values are bit-identical. make() rotated the whole
+// shape (vertices + poles) for every orientation on every call (twice per search_placement); at 3600
+// orientations that dominated the search. Filled once per part by build_part (driver.hpp).
+inline std::vector<std::pair<f32, Rect>> rotated_bboxes(const Part& part) {
+    std::vector<std::pair<f32, Rect>> out;
+    std::vector<f32> rotations = sampler_rotations(part);
+    out.reserve(rotations.size());
+    Polygon shape_buffer = *part.collision_shape;
+    for (f32 r : rotations) {
+        shape_buffer.transform_from(*part.collision_shape, AffineTransform::from_rotation(r));
+        out.emplace_back(r, shape_buffer.bbox);
+    }
+    return out;
+}
+
+// Smart orientation set of a polygon: theta_mrr (rotating calipers over the convex hull: the hull edge
+// whose alignment with +x gives the smallest bbox area) and theta_le (longest outline edge aligned with
+// +x), each + j*pi/2, normalised to [0, 2pi) and de-duplicated (<= 8 angles). An angle r here is the
+// rotation APPLIED to the part, so r = -edge_angle lays that edge horizontal.
+inline std::vector<f32> smart_rotation_angles(const Polygon& shape) {
+    const auto& V = shape.vertices;
+    std::vector<f32> out;
+    if (V.size() < 3) return out;
+    std::vector<Point> hull = convex_hull_from_points(V);
+    f32 best_area = std::numeric_limits<f32>::max(), th_mrr = 0.0f;
+    for (usize i = 0; i < hull.size(); ++i) {
+        const Point& a = hull[i]; const Point& b = hull[(i + 1) % hull.size()];
+        f32 dx = b.x - a.x, dy = b.y - a.y;
+        if (dx == 0.0f && dy == 0.0f) continue;
+        f32 ang = std::atan2(dy, dx), c = std::cos(-ang), s = std::sin(-ang);
+        f32 x0 = std::numeric_limits<f32>::max(), x1 = -x0, y0 = x0, y1 = -x0;
+        for (const auto& p : hull) {
+            f32 x = c * p.x - s * p.y, y = s * p.x + c * p.y;
+            x0 = min_f(x0, x); x1 = max_f(x1, x); y0 = min_f(y0, y); y1 = max_f(y1, y);
+        }
+        f32 area = (x1 - x0) * (y1 - y0);
+        if (area < best_area) { best_area = area; th_mrr = -ang; }
+    }
+    f32 best_len = -1.0f, th_le = 0.0f;
+    for (usize i = 0; i < V.size(); ++i) {
+        const Point& a = V[i]; const Point& b = V[(i + 1) % V.size()];
+        f32 dx = b.x - a.x, dy = b.y - a.y, len = dx * dx + dy * dy;
+        if (len > best_len) { best_len = len; th_le = -std::atan2(dy, dx); }
+    }
+    const f32 TWO_PI = 2.0f * PI_F;
+    for (f32 base : {th_mrr, th_le})
+        for (int j = 0; j < 4; ++j) {
+            f32 r = std::fmod(base + (f32)j * 0.5f * PI_F, TWO_PI);
+            if (r < 0.0f) r += TWO_PI;
+            bool dup = false;
+            for (f32 q : out) {
+                f32 d = std::fabs(q - r);
+                if (d < 1e-4f || TWO_PI - d < 1e-4f) { dup = true; break; }
+            }
+            if (!dup) out.push_back(r);
+        }
+    return out;
+}
+
+// (r, bbox of the collision shape rotated by r) for the smart set, computed exactly like rotated_bboxes.
+inline std::vector<std::pair<f32, Rect>> smart_rot_bboxes(const Part& part) {
+    std::vector<std::pair<f32, Rect>> out;
+    Polygon shape_buffer = *part.collision_shape;
+    for (f32 r : smart_rotation_angles(*part.collision_shape)) {
+        shape_buffer.transform_from(*part.collision_shape, AffineTransform::from_rotation(r));
+        out.emplace_back(r, shape_buffer.bbox);
+    }
+    return out;
+}
 
 struct UniformBBoxSampler {
     std::vector<RotEntry> rot_entries;
+    std::vector<RotEntry> smart_entries;   // empty unless the part carries a smart set (NP_SMART_ROT)
 
     static std::optional<UniformBBoxSampler> make(Rect sample_bbox, const Part& part, Rect container_bbox) {
-        std::vector<f32> rotations;
-        switch (part.allowed_rotation.kind) {
-            case RotationKind::None: rotations = {0.0f}; break;
-            case RotationKind::Discrete: rotations = part.allowed_rotation.discrete; break;
-            case RotationKind::Continuous: {
-                f32 step = (2.0f * PI_F) / static_cast<f32>(ROT_N_SAMPLES);
-                for (usize i = 0; i < ROT_N_SAMPLES; ++i) rotations.push_back(static_cast<f32>(i) * step);
-                break;
-            }
-        }
-        Polygon shape_buffer = *part.collision_shape;
         FRange sample_x{sample_bbox.x_min, sample_bbox.x_max};
         FRange sample_y{sample_bbox.y_min, sample_bbox.y_max};
 
-        std::vector<RotEntry> rot_entries;
-        for (f32 r : rotations) {
-            shape_buffer.transform_from(*part.collision_shape, AffineTransform::from_rotation(r));
-            Rect rb = shape_buffer.bbox;
+        std::vector<RotEntry> rot_entries, smart_entries;
+        auto consider_into = [&](std::vector<RotEntry>& dst, f32 r, const Rect& rb) {
             FRange cont_x{container_bbox.x_min - rb.x_min, container_bbox.x_max - rb.x_max};
             FRange cont_y{container_bbox.y_min - rb.y_min, container_bbox.y_max - rb.y_max};
             FRange x_range = intersect_range(cont_x, sample_x);
             FRange y_range = intersect_range(cont_y, sample_y);
-            if (x_range.is_empty() || y_range.is_empty()) continue;
-            rot_entries.push_back({r, x_range, y_range});
+            if (x_range.is_empty() || y_range.is_empty()) return;
+            dst.push_back({r, x_range, y_range});
+        };
+        auto consider = [&](f32 r, const Rect& rb) { consider_into(rot_entries, r, rb); };
+        if (part.smart_rots && part.allowed_rotation.kind == RotationKind::Continuous)
+            for (const auto& [r, rb] : *part.smart_rots) consider_into(smart_entries, r, rb);
+        if (part.smart_only && !smart_entries.empty()) {   // big part: smart set only (no uniform grid)
+            UniformBBoxSampler s;
+            s.smart_entries = std::move(smart_entries);
+            return s;
         }
-        if (rot_entries.empty()) return std::nullopt;
+        // Cache hit: same orientation count as the list below would produce (for Continuous parts that
+        // means ROT_N_SAMPLES is unchanged since build_part) -> identical (r, rb) sequence.
+        usize expected = 0;
+        switch (part.allowed_rotation.kind) {
+            case RotationKind::None: expected = 1; break;
+            case RotationKind::Discrete: expected = part.allowed_rotation.discrete.size(); break;
+            case RotationKind::Continuous: expected = ROT_N_SAMPLES; break;
+        }
+        if (part.rot_bboxes && part.rot_bboxes->size() == expected) {
+            for (const auto& [r, rb] : *part.rot_bboxes) consider(r, rb);
+        } else {
+            std::vector<f32> rotations = sampler_rotations(part);
+            Polygon shape_buffer = *part.collision_shape;
+            for (f32 r : rotations) {
+                shape_buffer.transform_from(*part.collision_shape, AffineTransform::from_rotation(r));
+                consider(r, shape_buffer.bbox);
+            }
+        }
+        if (rot_entries.empty() && smart_entries.empty()) return std::nullopt;
         UniformBBoxSampler s;
         s.rot_entries = std::move(rot_entries);
+        s.smart_entries = std::move(smart_entries);
         return s;
     }
 
     RigidTransform sample(Rng& rng) const {
-        const RotEntry& e = rng.choose(rot_entries);
+        // smart_entries is empty unless NP_SMART_ROT built a smart set: then no extra draw (byte-identical).
+        const bool smart = !smart_entries.empty() && (rot_entries.empty() || rng.gen_f32() < g_smart_rot_p);
+        const RotEntry& e = smart ? rng.choose(smart_entries) : rng.choose(rot_entries);
         f32 x = rng.random_range_f32(e.x_range.start, e.x_range.end);
         f32 y = rng.random_range_f32(e.y_range.start, e.y_range.end);
         return RigidTransform(e.r, x, y);
@@ -73,7 +198,10 @@ inline RigidTransform convert_sample_to_closest_feasible(RigidTransform dt, cons
     f32 fr;
     switch (part.allowed_rotation.kind) {
         case RotationKind::None: fr = 0.0f; break;
-        case RotationKind::Continuous: fr = dt.rotation; break;
+        case RotationKind::Continuous:
+            fr = (part.smart_only && part.smart_rots && !part.smart_rots->empty())
+                     ? nearest_smart_angle(*part.smart_rots, dt.rotation) : dt.rotation;
+            break;
         case RotationKind::Discrete: {
             fr = part.allowed_rotation.discrete[0];
             f32 best = std::numeric_limits<f32>::infinity();
@@ -152,6 +280,9 @@ struct BestSamples {
 struct CDConfig {
     f32 t_step_init, t_step_limit, r_step_init, r_step_limit;
     bool wiggle;
+    // NP_SMART_ROT_BIG: clamp the rotation to +-clamp_tilt around the smart angle nearest the start.
+    const std::vector<std::pair<f32, Rect>>* clamp_set = nullptr;
+    f32 clamp_tilt = 0.0f;
 };
 
 enum class CDAxis { Horizontal, Vertical, ForwardDiag, BackwardDiag, Wiggle };
@@ -216,8 +347,12 @@ inline std::pair<RigidTransform, SampleEval> refine_coord_desc(
     cd.t_step_limit = cfg.t_step_limit;
     cd.r_step = cfg.r_step_init; cd.r_step_limit = cfg.r_step_limit;
     cd.wiggle = cfg.wiggle;
+    const bool clamp = cfg.clamp_set && !cfg.clamp_set->empty();
+    const f32 r0 = clamp ? nearest_smart_angle(*cfg.clamp_set, start.first.rotation) : 0.0f;
 
     while (auto c = cd.ask()) {
+        if (clamp)
+            for (auto& t : *c) t.rotation = std::min(std::max(t.rotation, r0 - cfg.clamp_tilt), r0 + cfg.clamp_tilt);
         SampleEval e0 = evaluator.evaluate_sample((*c)[0], cd.eval);
         SampleEval e1 = evaluator.evaluate_sample((*c)[1], cd.eval);
         if (sample_cmp(e0, e1) <= 0) cd.tell((*c)[0], e0, rng);
@@ -227,17 +362,27 @@ inline std::pair<RigidTransform, SampleEval> refine_coord_desc(
 }
 
 // ---- search.rs : Algorithm 6 ----
+inline void apply_smart_clamp(CDConfig& c, const Part& part) {
+    if (part.smart_only && part.smart_rots && !part.smart_rots->empty()) {
+        c.clamp_set = part.smart_rots.get();
+        c.clamp_tilt = g_smart_tilt;
+    }
+}
 inline CDConfig prerefine_cd_config(const Part& part) {
     f32 md = min_f(part.collision_shape->bbox.width(), part.collision_shape->bbox.height());
     bool wiggle = part.allowed_rotation.kind == RotationKind::Continuous;
-    return {md * PRE_REFINE_CD_TL_RATIOS.first, md * PRE_REFINE_CD_TL_RATIOS.second,
-            PRE_REFINE_CD_R_STEPS.first, PRE_REFINE_CD_R_STEPS.second, wiggle};
+    CDConfig c{md * PRE_REFINE_CD_TL_RATIOS.first, md * PRE_REFINE_CD_TL_RATIOS.second,
+               PRE_REFINE_CD_R_STEPS.first, PRE_REFINE_CD_R_STEPS.second, wiggle};
+    apply_smart_clamp(c, part);
+    return c;
 }
 inline CDConfig final_refine_cd_config(const Part& part) {
     f32 md = min_f(part.collision_shape->bbox.width(), part.collision_shape->bbox.height());
     bool wiggle = part.allowed_rotation.kind == RotationKind::Continuous;
-    return {md * SND_REFINE_CD_TL_RATIOS.first, md * SND_REFINE_CD_TL_RATIOS.second,
-            SND_REFINE_CD_R_STEPS.first, SND_REFINE_CD_R_STEPS.second, wiggle};
+    CDConfig c{md * SND_REFINE_CD_TL_RATIOS.first, md * SND_REFINE_CD_TL_RATIOS.second,
+               SND_REFINE_CD_R_STEPS.first, SND_REFINE_CD_R_STEPS.second, wiggle};
+    apply_smart_clamp(c, part);
+    return c;
 }
 
 inline std::pair<std::optional<std::pair<RigidTransform, SampleEval>>, usize> search_placement(
@@ -254,8 +399,17 @@ inline std::pair<std::optional<std::pair<RigidTransform, SampleEval>>, usize> se
         Rect pi_bbox = l.placed_parts[*ref_pk].shape->bbox;
         focussed_sampler = UniformBBoxSampler::make(pi_bbox, part, l.container.collision_outer->bbox);
     }
+    Rect sample_box = l.container.collision_outer->bbox;
+    if (part.pin_pitch > 0.0f && ref_pk) {   // NP_BIG_PIN: stay inside the current column
+        const Rect cb = l.container.collision_outer->bbox;
+        f32 cx = l.placed_parts[*ref_pk].shape->centroid().x;
+        f32 x0 = std::floor(cx / part.pin_pitch) * part.pin_pitch;
+        f32 x1 = min_f(x0 + part.pin_w, cb.x_max);
+        x0 = max_f(x0, cb.x_min);
+        if (x0 < x1) sample_box = Rect(x0, cb.y_min, x1, cb.y_max);
+    }
     std::optional<UniformBBoxSampler> container_sampler =
-        UniformBBoxSampler::make(l.container.collision_outer->bbox, part, l.container.collision_outer->bbox);
+        UniformBBoxSampler::make(sample_box, part, l.container.collision_outer->bbox);
 
     if (focussed_sampler) {
         for (usize i = 0; i < sample_config.n_focussed_samples; ++i) {

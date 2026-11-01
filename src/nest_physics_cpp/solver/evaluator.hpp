@@ -110,18 +110,18 @@ struct SpecializedHazardCollector {
             const Polygon& other_shape = *layout->placed_parts[obs.pk].shape;
             f32 loss = pairwise_overlap_loss(other_shape, shape);
             f32 weight = ct->get_pair_weight(current_pk, obs.pk);
-            return loss * weight;
+            return loss == 0.0f ? 0.0f : loss * weight;   // overflow guard: 0 x inf weight is NaN
         } else if (obs.kind == ObstacleKind::Exterior) {
             f32 loss = containment_overlap_loss(shape, layout->container.collision_outer->bbox);
             f32 weight = ct->get_container_weight(current_pk);
-            return loss * weight;
+            return loss == 0.0f ? 0.0f : loss * weight;
         } else if (obs.kind == ObstacleKind::Hole) {
             // sheet hole: penalize like a static part the candidate must stay clear of, so the
             // sample search avoids placing inside holes (not just rejecting at final feasibility).
             const Polygon& hole_shape = *layout->engine_ref().obstacles_map[okey].shape;
             f32 loss = pairwise_overlap_loss(hole_shape, shape);
             f32 weight = ct->get_hole_weight(current_pk);
-            return loss * weight;
+            return loss == 0.0f ? 0.0f : loss * weight;
         }
         return 0.0f; // QualityZone (quality > 0): not penalized (preserves prior behaviour)
     }

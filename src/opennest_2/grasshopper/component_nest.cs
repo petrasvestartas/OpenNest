@@ -393,7 +393,7 @@ namespace opennest_2
 
                 // element_holes / poles / compact / fit / batch: parse BY NAME (robust to dropdown order). Sheet
                 // holes are ALWAYS kept out when the sheet has them. element_holes: 0=off,1=fill,2=fill-first.
-                int partHolesMode = 1; int poles = 48; bool compact = true; int fitMode = 0;   // 0 = all parts / fewest sheets (default)
+                int partHolesMode = 1; int poles = 48; int compact = 1; int fitMode = 0;   // 0 = all parts / fewest sheets (default)
                 int batchOn = 0;
                 foreach (var ln in parameters_text)
                 {
@@ -402,7 +402,7 @@ namespace opennest_2
                     if (tk.Length < 2) continue;
                     if (t.StartsWith("element_holes", StringComparison.OrdinalIgnoreCase) && int.TryParse(tk[tk.Length - 1], out int em)) partHolesMode = em;
                     else if (t.StartsWith("poles", StringComparison.OrdinalIgnoreCase) && int.TryParse(tk[tk.Length - 1], out int pv)) poles = pv;
-                    else if (t.StartsWith("compact", StringComparison.OrdinalIgnoreCase) && double.TryParse(tk[tk.Length - 1], out double cv)) compact = (cv != 0.0);
+                    else if (t.StartsWith("compact", StringComparison.OrdinalIgnoreCase) && double.TryParse(tk[tk.Length - 1], out double cv)) compact = (int)cv;
                     else if (t.StartsWith("batch", StringComparison.OrdinalIgnoreCase) && int.TryParse(tk[tk.Length - 1], out int bo)) batchOn = bo;
                     else if (t.StartsWith("fit", StringComparison.OrdinalIgnoreCase) && int.TryParse(tk[tk.Length - 1], out int fm)) fitMode = fm;
                 }
@@ -1150,7 +1150,7 @@ namespace opennest_2
         // batch pack into ONE sheet-sized block. Combined mode passes the defaults -> behaviour is unchanged.
         public void Flatten(nest_rhino_lib.nest_sheets nest_sheets, nest_rhino_lib.nest_geo nest_geo,
                             List<double> parameters, int max_iterations, int partHolesMode = 1,
-                            int poles = 0, bool compact = false, int fitMode = 0,
+                            int poles = 0, int compact = 0, int fitMode = 0,
                             IReadOnlyList<int> groupSubset = null, int maxSheetsOverride = -1, int fitModeOverride = -1)
         {
             int nGroups = nest_geo.boundary_sorted.Count;
@@ -1282,8 +1282,9 @@ namespace opennest_2
             np.n_starts = Math.Max(1, (int)GetP(2, 1));   // multi-start: run N seeds, keep the densest (positional [2] after spacing+simplify removed)
             np.part_holes_mode = partHolesMode;   // 0=off, 1=post-pass fill, 2=fill-first (from Element Holes dropdown)
             np.pole_max = poles > 0 ? poles : 0;      // surrogate poles/part (16 ≈ 2.7x faster; 0 = default 48)
-            np.final_compact = compact ? 1 : 0;       // post-relaxation compaction slide (tighter pack)
-            np.fit_mode = fitModeOverride >= 0 ? fitModeOverride : fitMode;   // 0 = all parts / fewest sheets; 1 = ONE sheet, max fill
+            np.final_compact = compact;               // 0 off, 1 bottom-left slide, 2 multi-directional slide (Compact option)
+            np.fit_mode = fitModeOverride >= 0 ? fitModeOverride : fitMode;   // 0 = all parts / fewest sheets; 1 = ONE sheet, max fill; 2 = global bin pack; 3 = group & fill
+            np.n_threads = 0;                         // fit_mode 3 portfolio threads: 0 = engine default (4)
 
             int F = flatGroup.Count;
             double[] out_tx = new double[F == 0 ? 1 : F];
@@ -1324,7 +1325,7 @@ namespace opennest_2
         // so component PASS 2 (which reads _pendingNestGeo = merged) is unchanged.
         public void SetupBatches(List<nest_rhino_lib.nest_sheets> batchSheets, nest_rhino_lib.nest_geo merged,
                                  List<List<int>> partition, List<double> parameters, int max_iterations,
-                                 int partHolesMode, int poles, bool compact, int fitMode)
+                                 int partHolesMode, int poles, int compact, int fitMode)
         {
             _batchMode = true;
             _geo = merged;
@@ -1361,7 +1362,7 @@ namespace opennest_2
             np.n_starts = Math.Max(1, (int)GetP(2, 1));
             np.max_sheets = Math.Max(1, nsheet);   // progress/diagnostic only; each batch carries its own params
             np.part_holes_mode = partHolesMode; np.pole_max = poles > 0 ? poles : 0;
-            np.final_compact = compact ? 1 : 0; np.fit_mode = fitMode;
+            np.final_compact = compact; np.fit_mode = fitMode;
             _np = np;
 
             // One inner NpRun per batch: nest that batch's groups (of the merged geo) across its OWN sheets, with
@@ -1374,7 +1375,7 @@ namespace opennest_2
                 int bsCount = Math.Max(1, SheetCount(bs));
                 var inner = new NpRun();
                 inner.Flatten(bs, merged, parameters, max_iterations, partHolesMode, poles, compact, fitMode,
-                              partition[b], /*maxSheetsOverride*/ bsCount, /*fitModeOverride*/ 0);
+                              partition[b], /*maxSheetsOverride*/ bsCount, /*fitModeOverride*/ (fitMode == 2 || fitMode == 3) ? fitMode : 0);
                 _batches.Add(inner);
                 _F += inner._F;
             }

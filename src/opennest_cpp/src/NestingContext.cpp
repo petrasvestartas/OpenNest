@@ -36,6 +36,7 @@ void NestingContext::init() {
         clone->Points = item->Points;
         clone->exactFlags = item->exactFlags;
         clone->rotationCount = item->rotationCount;
+        clone->ownAngles = item->ownAngles;
         if (!item->children.empty()) {
             for (auto& citem : item->children) {
                 auto childClone = std::make_shared<NFP>();
@@ -90,6 +91,19 @@ void NestingContext::init() {
         for (auto& item : lsheets) {
             double gap = config.sheetSpacing - config.spacing / 2;
             NestingEngine::offsetTree(*item, -gap, config, true);
+        }
+    }
+
+    // Smart rotations: each SOURCE part's own orientations, computed once on the outline the
+    // engine actually nests (after the offset/simplify above) and shared by all its copies.
+    if (config.smartRotations) {
+        std::unordered_map<int, std::vector<float>> ownBySource;
+        for (auto& p : lpoly) {
+            int src = p->source.has_value() ? p->source.value() : -1;
+            auto it = ownBySource.find(src);
+            if (it == ownBySource.end())
+                it = ownBySource.emplace(src, NfpWorker::computeOwnAngles(*p)).first;
+            p->ownAngles = it->second;
         }
     }
 
@@ -297,6 +311,7 @@ NestingContext NestingContext::RunParallelSeeds(
             clone->Points = p->Points;
             clone->exactFlags = p->exactFlags;
             clone->rotationCount = p->rotationCount;
+            clone->ownAngles = p->ownAngles;
             for (auto& child : p->children) {
                 auto cc = std::make_shared<NFP>();
                 cc->Id = child->Id;

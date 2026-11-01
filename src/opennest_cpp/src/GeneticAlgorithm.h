@@ -29,6 +29,11 @@ public:
 private:
     NestConfig Config;
     Random r;
+
+    // One rotation gene for `part`. Legacy: floor(rnd*N)*(360/N) on the part's grid (N = its
+    // rotationCount override, else Config.rotations). Smart rotations (unconstrained parts with an
+    // own-angle set): with probability 0.5 one of the part's own angles, else the grid draw.
+    float drawAngle(const NFP& part);
 };
 
 } // namespace nest

@@ -32,7 +32,7 @@ namespace nest_rhino_lib
     /// nest_physics engine behind OpenNestCollision is the one that genuinely ignores spacing — its
     /// NpParams.spacing has no effect because offset_shape was never ported.)
     ///
-    ///     geo.offset_nesting_boundary(spacing / 2);   // grow outers out, shrink holes in
+    ///     geo.offset_nesting_boundary(spacing / 2);   // grow outers out, shrink holes in (ROUND joins)
     ///
     /// This grows ONLY the nesting polyline (Item2) — each outer loop outward, each hole inward — so placed
     /// parts keep `spacing` of clearance, while geometry[] / Item4 stay the ORIGINAL curve. The output
@@ -252,7 +252,12 @@ namespace nest_rhino_lib
         //     with the real circle bulging 0.293*R outside the polygon the solver was avoiding.
         // Both fed OpenNest1's "Spacing shows up as the gap BETWEEN parts" promise a polygon smaller than the
         // part; OpenNest2 / OpenNestCollision show the same outline on their Borders port.
-        public Polyline curve_to_polyline(Curve curve, double segment_division_length = 0, bool hull = false, bool keep_all = false)
+        //
+        // ring_diag_ref: the reference diagonal of the chord cap (curve_sampling.chord_fraction_of_ring_*) —
+        // the LARGEST ring diagonal of the batch this curve belongs to (see batch_diagonal). null = this
+        // curve's own diagonal, which keeps a lone call meaningful.
+        public Polyline curve_to_polyline(Curve curve, double segment_division_length = 0, bool hull = false, bool keep_all = false,
+                                          double? ring_diag_ref = null)
         {
             Curve[] segments = curve_explode.GetSegments(curve, true, 1);
             if (segments == null || segments.Length == 0) segments = new Curve[] { curve };
@@ -266,14 +271,31 @@ namespace nest_rhino_lib
             double step = coarse ? curve_sampling.step_angle_coarse : curve_sampling.step_angle_fine;
             int cap = coarse ? curve_sampling.max_divisions_coarse : curve_sampling.max_divisions_fine;
             double frac = coarse ? curve_sampling.sagitta_fraction_coarse : curve_sampling.sagitta_fraction_fine;
+            // Chord cap on the per-sub-segment budget: a fraction of the BATCH's largest ring diagonal (or this
+            // curve's own when the caller knows no batch), so a long shallow arc cannot leave a chord
+            // millimetres off the curve for role_allowance to grow the entire outline by.
+            double ring_frac = coarse ? curve_sampling.chord_fraction_of_ring_coarse : curve_sampling.chord_fraction_of_ring_fine;
+            double ring_diag = (ring_diag_ref.HasValue && ring_diag_ref.Value > 0) ? ring_diag_ref.Value : bbox_diagonal(curve);
 
             var pts = new List<Point3d>();
+            // locked[k]: pts[k] is a CURVE sample, or the vertex that ends a curved sub-segment — the RDP pass
+            // below must not drop it (see curve_sampling.rdp_closed). Only straight runs get simplified.
+            var locked = new List<bool>();
+            bool prevCurved = false;
+            for (int i = segments.Length - 1; i >= 0; i--)
+                if (segments[i] != null) { prevCurved = !segments[i].IsLinear(mtol * 10); break; }
             for (int i = 0; i < segments.Length; i++)
             {
                 Curve seg = segments[i];
                 if (seg == null) continue;
-                if (seg.IsLinear(mtol * 10)) pts.Add(seg.PointAtStart);
-                else add_curved(pts, seg, segment_division_length, step, cap, frac, mtol);
+                if (seg.IsLinear(mtol * 10)) { pts.Add(seg.PointAtStart); locked.Add(prevCurved); prevCurved = false; }
+                else
+                {
+                    int before = pts.Count;
+                    add_curved(pts, seg, segment_division_length, step, cap, frac, mtol, ring_frac, ring_diag);
+                    while (locked.Count < pts.Count) locked.Add(true);
+                    prevCurved = pts.Count > before || prevCurved;
+                }
             }
 
             // Degenerate explode (a single line, an unsplittable stub): fall back to sampling the WHOLE curve,
@@ -281,7 +303,9 @@ namespace nest_rhino_lib
             if (pts.Count < 3)
             {
                 pts.Clear();
-                add_curved(pts, curve, segment_division_length, step, cap, frac, mtol);
+                add_curved(pts, curve, segment_division_length, step, cap, frac, mtol, ring_frac, ring_diag);
+                locked.Clear();
+                while (locked.Count < pts.Count) locked.Add(true);
             }
             if (pts.Count == 0) pts.Add(curve.PointAtStart);
 
@@ -290,12 +314,14 @@ namespace nest_rhino_lib
             {
                 polyline.Add(polyline[0]);
             }
-            // keep_all (Simplify==0): preserve EVERY input vertex - skip the colinear merge that
-            // otherwise collapses fine curve detail (e.g. 67-pt ribbons -> ~15) and loosens nesting.
-            // Where it does run it is harmless to the guarantees: it can only move the ring by up to the
-            // 10 deg corner it drops, and role_allowance measures the ring AFTER this, not before.
+            // keep_all (Simplify==0): preserve EVERY input vertex. Otherwise simplify with Ramer-Douglas-Peucker
+            // at the SAME chord cap the sampler used, so a vertex is dropped only where the outline moves by
+            // less than that budget. This replaced MergeColinearSegments(10 deg), which dropped every vertex
+            // whose corner turned < 10 deg — i.e. all of the capped curve samples (a 45 deg R=1937 arc went
+            // back to 4 vertices and a +29.7 allowance). RDP also drops exactly colinear vertices, so a true
+            // straight polyline still merges. role_allowance measures the ring AFTER this, not before.
             if (!keep_all)
-                polyline.MergeColinearSegments(RhinoMath.ToRadians(10), true);
+                polyline = simplify_rdp(polyline, Math.Max(mtol, ring_frac * ring_diag), locked);
             if (hull)
             {
                 polyline = new Polyline(this.convex_hull(polyline.ToList<Point3d>()));
@@ -313,13 +339,58 @@ namespace nest_rhino_lib
         // Loosening this was never a CORRECTNESS problem (divisions_for_sagitta only ever raises the count
         // above the turn seed, and role_allowance measures and repairs whatever the chords give away); it cost
         // TIGHTNESS, i.e. a fatter allowance on exactly the parts that can least afford one.
-        private static double sagitta_budget(Curve seg, double frac, double mtol)
+        //
+        // ...but a pure fraction of the sub-segment is unbounded in absolute terms (a 1500-wide shallow hull
+        // arc got ~6 and role_allowance grew the whole plate by 6.24), so it is capped at `ring_frac` (=
+        // curve_sampling.chord_fraction_of_ring_*) times the WHOLE ring's diagonal `ring_diag`. The rule itself lives in
+        // curve_sampling.sagitta_budget so the headless harness runs the same code.
+        private static double sagitta_budget(Curve seg, double frac, double mtol, double ring_frac, double ring_diag)
+        {
+            return curve_sampling.sagitta_budget(bbox_diagonal(seg), ring_diag, frac, ring_frac, mtol);
+        }
+
+        // RDP on a closed polyline (with its closing duplicate), via the Rhino-free curve_sampling.rdp_closed.
+        private static Polyline simplify_rdp(Polyline pl, double eps, List<bool> locked)
+        {
+            if (pl == null) return pl;
+            int n = ring_vertex_count(pl);
+            if (n <= 3) return pl;
+            double[] x = new double[n], y = new double[n];
+            for (int i = 0; i < n; i++) { x[i] = pl[i].X; y[i] = pl[i].Y; }
+            bool[] lk = new bool[n];
+            for (int i = 0; i < n && locked != null && i < locked.Count; i++) lk[i] = locked[i];
+            int[] keep = curve_sampling.rdp_closed(x, y, n, eps, lk);
+            if (keep.Length == n) return pl;
+            var res = new Polyline(keep.Length + 1);
+            for (int i = 0; i < keep.Length; i++) res.Add(pl[keep[i]]);
+            res.Add(res[0]);
+            return res;
+        }
+
+        /// <summary>
+        /// Reference diagonal for the chord cap of a BATCH of curves: the largest (accurate) bounding-box
+        /// diagonal among them, or null when there is none. Pass it to curve_to_polyline as ring_diag_ref.
+        /// </summary>
+        public static double? batch_diagonal(IEnumerable<Curve> curves)
+        {
+            if (curves == null) return null;
+            double best = 0.0;
+            foreach (Curve c in curves)
+            {
+                if (c == null) continue;
+                double d = bbox_diagonal(c);
+                if (d > best) best = d;
+            }
+            return best > 0.0 ? (double?)best : null;
+        }
+
+        // accurate: the QUICK box of a NURBS is its control-point hull, which for a rational circle is
+        // ~2x the real extent — the budget would scale with the representation instead of the shape.
+        private static double bbox_diagonal(Curve c)
         {
             double diag = 0.0;
-            // accurate: the QUICK box of a NURBS is its control-point hull, which for a rational circle is
-            // ~2x the real extent — the budget would scale with the representation instead of the shape.
-            try { BoundingBox bb = seg.GetBoundingBox(true); if (bb.IsValid) diag = bb.Diagonal.Length; } catch { }
-            return Math.Max(mtol, frac * diag);
+            try { BoundingBox bb = c.GetBoundingBox(true); if (bb.IsValid) diag = bb.Diagonal.Length; } catch { }
+            return diag;
         }
 
         // Sample ONE curved sub-segment onto the ring: its START plus n-1 interior divisions. The END is
@@ -331,9 +402,10 @@ namespace nest_rhino_lib
         // a spline that does all of its turning in one spot, and the measurement alone would need a wild first
         // guess to converge from.
         private static void add_curved(List<Point3d> pts, Curve seg, double segment_division_length,
-                                       double step, int cap, double frac, double mtol)
+                                       double step, int cap, double frac, double mtol,
+                                       double ring_frac, double ring_diag)
         {
-            double dev_tol = sagitta_budget(seg, frac, mtol);
+            double dev_tol = sagitta_budget(seg, frac, mtol, ring_frac, ring_diag);
             int n = curve_sampling.divisions_for_turn(segment_turn(seg, mtol), step, cap);
             if (segment_division_length > 0)
             {
@@ -617,10 +689,12 @@ namespace nest_rhino_lib
             var rings = new List<Polyline>();
             var sources = new List<Curve>();
             if (loops == null) return rings;
-            foreach (Curve c in loops)
+            var loopList = loops.ToList();
+            double? diagRef = batch_diagonal(loopList);      // the sheet's loops are one batch
+            foreach (Curve c in loopList)
             {
                 if (c == null) continue;
-                Polyline pl = this.curve_to_polyline(c, segment_division_length, false, keep_all);
+                Polyline pl = this.curve_to_polyline(c, segment_division_length, false, keep_all, diagRef);
                 if (pl == null || pl.Count < 4) continue;
                 rings.Add(pl); sources.Add(c);
             }
@@ -872,17 +946,21 @@ namespace nest_rhino_lib
             }
         }
 
-        public void hard_coded_input(List<int> ids, double segment_division_length = 0, bool hull = false)
+        // ring_diag_ref: the chord-cap reference of the WHOLE batch (geo_to_nest_geo computes it over every
+        // input curve before the per-part calls); null = the largest ring of THIS part.
+        public void hard_coded_input(List<int> ids, double segment_division_length = 0, bool hull = false, double? ring_diag_ref = null)
         {
+            if (!ring_diag_ref.HasValue)
+                ring_diag_ref = batch_diagonal(ids.Select(k => boundary_curves_non_sorted[k]));
 
             var double_lengths = new double[ids.Count];
             var plines_simplified = new Tuple<int, Polyline, BoundingBox, Curve>[ids.Count];
             for (int i = 0; i < ids.Count; i++)
             {
                 Polyline pline = segment_division_length == 0 ?
-                    this.curve_to_polyline(boundary_curves_non_sorted[ids[i]], 0, hull, true) :   // 0 = keep all vertices
+                    this.curve_to_polyline(boundary_curves_non_sorted[ids[i]], 0, hull, true, ring_diag_ref) :   // 0 = keep all vertices
                     segment_division_length < 0 ?
-                    this.curve_to_polyline(boundary_curves_non_sorted[ids[i]], segment_division_length, hull) :
+                    this.curve_to_polyline(boundary_curves_non_sorted[ids[i]], segment_division_length, hull, false, ring_diag_ref) :
                     this.curve_to_polyline_unfillet(boundary_curves_non_sorted[ids[i]], segment_division_length, hull);
                 BoundingBox bbox = pline.Count == 2 ? new BoundingBox(pline[0], pline[1]) : pline.BoundingBox;
                 bbox.Inflate(RhinoDoc.ActiveDoc.ModelAbsoluteTolerance * 2);
@@ -925,6 +1003,8 @@ namespace nest_rhino_lib
             if (mtol_roles <= 0) mtol_roles = 0.001;
 
             var groups = new List<List<Tuple<int, Polyline, BoundingBox, Curve>>>();
+            // chord-cap reference: the largest ring of the whole batch (curve_sampling.chord_fraction_of_ring_*)
+            double? diagRef = batch_diagonal(boundary_curves_non_sorted);
 
             //Sort by bbox diagonal, from largest to smallest
             var double_lengths = new double[n];
@@ -933,9 +1013,9 @@ namespace nest_rhino_lib
             for (int i = 0; i < n; i++)
             {
                 Polyline pline = segment_division_length == 0 ?
-                    curve_to_polyline(boundary_curves_non_sorted[i], 0, hull, true) :   // 0 = keep all vertices
+                    curve_to_polyline(boundary_curves_non_sorted[i], 0, hull, true, diagRef) :   // 0 = keep all vertices
                     segment_division_length < 0 ?
-                    curve_to_polyline(boundary_curves_non_sorted[i], segment_division_length, hull) :
+                    curve_to_polyline(boundary_curves_non_sorted[i], segment_division_length, hull, false, diagRef) :
                     curve_to_polyline_unfillet(boundary_curves_non_sorted[i], segment_division_length, hull);
                 BoundingBox bbox = pline.Count == 2 ? new BoundingBox(pline[0], pline[1]) : pline.BoundingBox;
                 bbox.Inflate(Rhino.RhinoDoc.ActiveDoc.ModelAbsoluteTolerance * 2);
@@ -1128,6 +1208,11 @@ namespace nest_rhino_lib
         public int last_offset_failures;
         public int last_offset_rings;
 
+        // The part offset uses ROUND joins: offsetting the outer by d (holes by -d) with round joins IS the
+        // Minkowski sum with a disk of radius d, i.e. exactly the clearance region. A mitre offset sticks out
+        // further at every convex corner (up to the mitre limit), which nests parts with more than the
+        // requested gap there. Sheets (nest_sheets.offset_sheet_boundary, the Sheets components) keep the
+        // mitre/sharp offset.
         public void offset_nesting_boundary(double distance)
         {
             this.last_offset_failures = 0;
@@ -1140,7 +1225,7 @@ namespace nest_rhino_lib
                     var tup = this.boundary_sorted[i][j];
                     this.last_offset_rings++;
                     if (tup.Item2 == null || tup.Item2.Count < 4) { this.last_offset_failures++; continue; }
-                    Polyline off = offset_closed_polyline(tup.Item2, distance, j > 0 /*isHole*/, tol);
+                    Polyline off = offset_closed_polyline(tup.Item2, distance, j > 0 /*isHole*/, tol, true /*round*/);
                     if (off == null || off.Count < 4) { this.last_offset_failures++; continue; }   // keep original on failure
                     this.boundary_sorted[i][j] = Tuple.Create<int, Polyline, BoundingBox, Curve>(
                         tup.Item1, off, off.BoundingBox, tup.Item4);
@@ -1157,9 +1242,22 @@ namespace nest_rhino_lib
         // The plane is now the ring's OWN elevation (mirroring the testPlane in identify_groups, which already
         // compensates for geometry imported at z != 0) instead of a hardcoded Plane.WorldXY, and the two
         // topological failures fall through to a Clipper polygon offset, which has neither failure mode.
-        internal static Polyline offset_closed_polyline(Polyline src, double distance, bool isHole, double tol)
+        //
+        // round = true (part clearance, offset_nesting_boundary): ROUND joins, computed by the Clipper offset
+        // DIRECTLY. Curve.Offset with CurveOffsetCornerStyle.Round returns arcs, which TryGetPolyline cannot
+        // turn into a polyline (and a coarse conversion would cut the fillets), so that path is skipped; the
+        // fillets are chorded by polygon_offset at round_sagitta_target(distance) (0.02 mm at a 5 mm offset).
+        // round = false (default; sheet outlines and sheet holes): unchanged — Curve.Offset Sharp first,
+        // Clipper mitre as the fallback.
+        internal static Polyline offset_closed_polyline(Polyline src, double distance, bool isHole, double tol,
+                                                        bool round = false)
         {
             if (src == null || src.Count < 4) return null;
+            if (round)
+            {
+                double sag = polygon_offset.round_sagitta_target(distance, model_units_per_mm());
+                return clipper_offset_closed_polyline(src, distance, isHole, sag);
+            }
             double srcA = poly_area(src);
             Curve crv = src.ToPolylineCurve();
             // Offset in an XY plane AT THIS RING'S ELEVATION — Curve.Offset against Plane.WorldXY is unreliable
@@ -1193,7 +1291,8 @@ namespace nest_rhino_lib
         // sharp offset creates, and comes back empty only when the ring genuinely collapses. Before 25ccd5b
         // the gap came from the Clipper-based solver, which has neither failure mode, so this is a return to a
         // known-good path rather than a new one. Z is carried over from the source ring.
-        private static Polyline clipper_offset_closed_polyline(Polyline src, double distance, bool isHole)
+        private static Polyline clipper_offset_closed_polyline(Polyline src, double distance, bool isHole,
+                                                               double round_sagitta = 0.0)
         {
             if (src == null) return null;
             int n = src.Count;
@@ -1205,13 +1304,27 @@ namespace nest_rhino_lib
             for (int i = 0; i < n; i++) { x[i] = src[i].X; y[i] = src[i].Y; }
 
             // isHole means "this ring has to SHRINK" (a part's hole, or — from nest_sheets — a sheet's outer).
-            double[][] off = polygon_offset.offset_ring(x, y, n, distance, isHole);
+            double[][] off = polygon_offset.offset_ring(x, y, n, distance, isHole, round_sagitta);
             if (off == null) return null;
 
             var res = new Polyline(off[0].Length + 1);
             for (int i = 0; i < off[0].Length; i++) res.Add(new Point3d(off[0][i], off[1][i], z));
             res.Add(res[0]);
             return res;
+        }
+
+        // Model units per millimetre (1 in a mm document, 0.001 in a metre one), so the round-join chord budget
+        // is an absolute length rather than a unit-dependent number. 1 when there is no active document.
+        private static double model_units_per_mm()
+        {
+            try
+            {
+                RhinoDoc doc = RhinoDoc.ActiveDoc;
+                if (doc == null) return 1.0;
+                double k = RhinoMath.UnitScale(UnitSystem.Millimeters, doc.ModelUnitSystem);
+                return (k > 0 && !double.IsNaN(k) && !double.IsInfinity(k)) ? k : 1.0;
+            }
+            catch { return 1.0; }
         }
 
         private static double poly_area(Polyline p)

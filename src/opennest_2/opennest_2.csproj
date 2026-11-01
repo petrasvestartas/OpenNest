@@ -61,6 +61,8 @@
   </ItemGroup>
 
   <Target Name="PostBuild" AfterTargets="PostBuildEvent">
+    <!-- Optional independent constructive engine; absence never changes legacy components. -->
+    <Copy Condition=" '$(OS)' == 'Windows_NT' AND Exists('../nest_constructive_cpp/build/Release/nest_constructive.dll') " SourceFiles="../nest_constructive_cpp/build/Release/nest_constructive.dll" DestinationFolder="$(TargetDir)" />
     <!-- Copy the nest_physics solver DLL next to the .gha so the component_nest P/Invoke finds it.
          Read from the CMake build dir, exactly like the two engines below. It used to be copied from a
          checked-in `nest_physics.dll` sitting next to this csproj, so every build shipped that stale binary

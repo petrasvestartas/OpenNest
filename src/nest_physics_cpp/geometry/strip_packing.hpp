@@ -19,13 +19,19 @@ struct Strip {
     // Forbidden interior regions (sheet holes), in container coords [0,width]x[0,fixed_height].
     // Empty by default => the container is a plain rectangle (original behaviour, bit-identical).
     std::vector<Polygon> holes;
+    // Lazily built hole QualityZone (converted shapes + surrogates) for `holes`, shared by every container
+    // this Strip (and its copies) produces. Building it is deterministic, so a cached zone is identical to
+    // a fresh one; it only saves re-converting every hole and regenerating its surrogate on each width
+    // change. Reset by set_holes (the only writer of `holes`). Not thread-safe for concurrent
+    // to_container() calls on ONE Strip object (none exist: width changes run on the solve thread).
+    mutable std::shared_ptr<const QualityZone> holes_qz;
 
     Strip() = default;
     Strip(f32 h, CollisionConfig engine, ShapeModifyConfig smc, f32 w)
         : fixed_height(h), collision_config(engine), shape_modify_config(smc), width(w) {}
 
     void set_width(f32 w) { assert(w > 0.0f); width = w; }
-    void set_holes(std::vector<Polygon> h) { holes = std::move(h); }
+    void set_holes(std::vector<Polygon> h) { holes = std::move(h); holes_qz.reset(); }
 
     Container to_container() const {
         usize id;
@@ -42,20 +48,23 @@ struct Strip {
         // scope, so placements inside are rejected). Inflate so `offset` spacing is kept from holes
         // too. Generate surrogates because the overlap proxy (pairwise_overlap_loss) reads
         // surrogate_ref() when the optimizer pushes parts out of holes during relaxation.
-        std::vector<SourceShape> hole_shapes;
-        hole_shapes.reserve(holes.size());
-        for (const auto& h : holes) {
-            SourceShape hs;
-            hs.shape = h;
-            hs.pre_transform = RigidTransform::empty();
-            hs.modify_mode = ShapeModifyMode::Inflate;
-            hs.modify_config = shape_modify_config;
-            hole_shapes.push_back(std::move(hs));
+        if (!holes_qz) {
+            std::vector<SourceShape> hole_shapes;
+            hole_shapes.reserve(holes.size());
+            for (const auto& h : holes) {
+                SourceShape hs;
+                hs.shape = h;
+                hs.pre_transform = RigidTransform::empty();
+                hs.modify_mode = ShapeModifyMode::Inflate;
+                hs.modify_config = shape_modify_config;
+                hole_shapes.push_back(std::move(hs));
+            }
+            QualityZone qz = QualityZone::make(0, std::move(hole_shapes));
+            for (auto& cs : qz.collision_shapes) cs->generate_surrogate(collision_config.part_surrogate_config);
+            holes_qz = std::make_shared<const QualityZone>(std::move(qz));
         }
-        QualityZone qz = QualityZone::make(0, std::move(hole_shapes));
-        for (auto& cs : qz.collision_shapes) cs->generate_surrogate(collision_config.part_surrogate_config);
         std::vector<QualityZone> qzs;
-        qzs.push_back(std::move(qz));
+        qzs.push_back(*holes_qz);   // copy shares the immutable shape pointers
         return Container::make(id, std::move(os), std::move(qzs), collision_config);
     }
 

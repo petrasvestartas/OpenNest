@@ -22,9 +22,22 @@
 cmake_minimum_required(VERSION 3.20)
 project(opennest NONE)
 
+option(OPENNEST_BUILD_CONSTRUCTIVE "Build the independent constructive 2D solver" ON)
+
 include(ExternalProject)
 
 set(_root ${CMAKE_CURRENT_SOURCE_DIR})
+
+if(OPENNEST_BUILD_CONSTRUCTIVE)
+  ExternalProject_Add(nest_constructive
+    SOURCE_DIR ${_root}/src/nest_constructive_cpp
+    BINARY_DIR ${_root}/src/nest_constructive_cpp/build
+    CMAKE_ARGS -DCMAKE_BUILD_TYPE=Release
+    BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --config Release --target nest_constructive
+    INSTALL_COMMAND ""
+    BUILD_ALWAYS 1
+  )
+endif()
 
 ExternalProject_Add(nfp_nest
   SOURCE_DIR  ${_root}/src/opennest_cpp

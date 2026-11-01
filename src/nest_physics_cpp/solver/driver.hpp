@@ -18,6 +18,7 @@
 #include <cmath>
 #include <thread>
 #include <mutex>
+#include <atomic>
 
 namespace nest {
 // Resolve the worker count for best-of-N. g_n_workers if set, else ~75% of hardware cores. Using
@@ -25,6 +26,7 @@ namespace nest {
 // from contention AND landed a worse basin; ~75% (e.g. 24 of 32) is the sweet spot — fastest, finds
 // the best packing, and leaves the machine responsive. See plan Lever 1.
 inline unsigned resolve_n_workers() {
+    if (g_n_workers_tl > 0) return g_n_workers_tl;   // fit_mode 3 portfolio thread (0 elsewhere)
     if (g_n_workers > 0) return g_n_workers;
     unsigned hc = std::thread::hardware_concurrency();
     if (hc == 0) return 8u;
@@ -87,7 +89,14 @@ inline std::optional<Part> build_part(usize id, std::vector<Point> pts, Point* i
             for (int k = 0; k < rotation_count; ++k) angles.push_back(static_cast<f32>(k) * step);
             rr = RotationRange::discrete_of(std::move(angles));
         }
-        return Part::make(id, std::move(os), std::move(rr), std::nullopt, surrogate_config());
+        Part part = Part::make(id, std::move(os), std::move(rr), std::nullopt, surrogate_config());
+        // Rotated-bbox cache for the uniform sampler (ROT_N_SAMPLES is set by every caller before parts
+        // are built; a later change just makes the sampler fall back to recomputing).
+        part.rot_bboxes = std::make_shared<const std::vector<std::pair<f32, Rect>>>(rotated_bboxes(part));
+        // Smart orientation candidates (NP_SMART_ROT): continuous-rotation parts only.
+        if (g_smart_rot && part.allowed_rotation.kind == RotationKind::Continuous)
+            part.smart_rots = std::make_shared<const std::vector<std::pair<f32, Rect>>>(smart_rot_bboxes(part));
+        return part;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "  skip part %zu: %s\n", id, e.what());
         return std::nullopt;
@@ -142,6 +151,48 @@ struct StripResult {
     bool fits = false; // achieved width fits within perp_limit (=> all parts fit one sheet)
 };
 
+// ---- E1: rank a strip layout by what the sheet-width CUT keeps (fit 1 with part priorities) ----
+// fit 1 keeps the parts lying wholly inside [0, cut_w]. Rank: fewer MANDATORY parts lost first (a layout
+// missing a mandatory part is below every layout that has them all), then more kept AREA (sum of
+// Part::area), then the narrower strip. Only used when np_nest_prio is active; nothing else calls it.
+struct CutScore { int missing = 0; f32 kept_area = 0.0f; f32 width = 0.0f; };
+inline bool cut_better(const CutScore& a, const CutScore& b) {
+    if (a.missing != b.missing) return a.missing < b.missing;
+    if (a.kept_area != b.kept_area) return a.kept_area > b.kept_area;
+    return a.width < b.width;
+}
+inline CutScore cut_score(const LayoutSnapshot& ls, const StripInstance& inst, f32 width, f32 cut_w) {
+    CutScore s; s.width = width;
+    std::vector<usize> kept(inst.parts.size(), 0);
+    ls.placed_parts.for_each([&](PartKey, const PlacedPart& pi) {
+        if (pi.shape->bbox.x_max <= cut_w + 1e-3f) {           // same keep test as greedy_fill's cut
+            s.kept_area += inst.part(pi.part_id).area();
+            if (pi.part_id < kept.size()) kept[pi.part_id]++;
+        }
+    });
+    for (usize id = 0; id < inst.parts.size(); ++id)
+        if (inst.parts[id].first.priority > 0 && kept[id] < inst.parts[id].second)
+            s.missing += (int)(inst.parts[id].second - kept[id]);
+    return s;
+}
+// Forwards every report unchanged and keeps a copy of the best-by-cut FEASIBLE layout seen (the LBF
+// start, every feasible exploration width, every compression success, the final). Watching the reports
+// lets run_strip pick a wider intermediate layout whose cut keeps every mandatory part, without touching
+// the exploration / compression themselves.
+struct CutRankListener : SolutionListener {
+    SolutionListener* fwd = nullptr;
+    f32 cut_w = 0.0f;
+    bool have = false;
+    CutScore best_s;
+    StripSolution best;
+    void report(ReportType rt, const StripSolution& sol, const StripInstance& inst) override {
+        if (fwd) fwd->report(rt, sol, inst);
+        if (rt != ReportType::ExplFeas && rt != ReportType::CmprFeas && rt != ReportType::Final) return;
+        CutScore s = cut_score(sol.layout_snapshot, inst, sol.strip_width(), cut_w);
+        if (!have || cut_better(s, best_s)) { best_s = s; best = sol; have = true; }
+    }
+};
+
 // Multi-pass WARM-RESTART strip pack: pass 0 is a cold optimize(); each later pass feeds the best
 // layout back as optimize()'s initial_solution, resuming the width shrink from the plateau instead
 // of cold-rebuilding. Different seed per pass for basin diversity. Stops early once width<=limit.
@@ -150,7 +201,14 @@ inline StripResult run_strip(const std::vector<std::pair<Part, usize>>& items_ma
                              const CollisionConfig& collision_cfg, f32 fixed_height, f32 perp_limit,
                              double budget, uint64_t seed, int n_passes = 1,
                              const std::vector<Polygon>* holes = nullptr,
-                             SolutionListener* ext_listener = nullptr) {
+                             SolutionListener* ext_listener = nullptr,
+                             f32 rank_cut_w = 0.0f,
+                             const std::vector<Placement>* warm = nullptr, f32 warm_width = 0.0f) {
+    // E1 extras (both default off => the original code path byte for byte):
+    //   rank_cut_w > 0  return the best FEASIBLE layout by cut_score at that cut (CutRankListener) when it
+    //                   beats the narrowest one by cut_better; the passes themselves are unchanged.
+    //   warm            pass 0 starts from these placements (subset ids) on a strip of warm_width instead
+    //                   of a cold LBF build (the fit-1 eviction retry resumes the previous layout).
     std::vector<std::pair<Part, usize>> parts = items_master;
     f32 total_area = 0.0f;
     for (auto& pr : parts) total_area += pr.first.area() * (f32)pr.second;
@@ -163,29 +221,57 @@ inline StripResult run_strip(const std::vector<std::pair<Part, usize>>& items_ma
     if (n_passes < 1) n_passes = 1;
     double per = budget / (double)n_passes;
     DummySolListener dummy;
-    SolutionListener& listener = ext_listener ? *ext_listener : static_cast<SolutionListener&>(dummy);
+    SolutionListener& base_listener = ext_listener ? *ext_listener : static_cast<SolutionListener&>(dummy);
+    CutRankListener rank;
+    rank.fwd = &base_listener; rank.cut_w = rank_cut_w;
+    SolutionListener& listener = (rank_cut_w > 0.0f) ? static_cast<SolutionListener&>(rank) : base_listener;
+    StripSolution warm_sol;
+    const StripSolution* warm_init = nullptr;
+    if (warm && !warm->empty()) {
+        StripProblem wp(inst);
+        wp.change_strip_width(warm_width > 0.0f ? warm_width : wp.strip_width());
+        for (const Placement& pl : *warm) wp.place_item(pl);
+        warm_sol = wp.save();
+        warm_init = &warm_sol;
+    }
     BasicTerminator bterm;
     IterationTerminator iterm;
     Terminator& term = g_iter_mode ? static_cast<Terminator&>(iterm) : static_cast<Terminator&>(bterm);
 
     StripSolution best;
     bool have = false;
+    // NP_EXPL_TARGET: expose perp_limit to exploration for this strip only (restored on every exit path).
+    struct TargetScope {
+        f32 saved;
+        explicit TargetScope(f32 t) : saved(g_expl_target) { g_expl_target = t; }
+        ~TargetScope() { g_expl_target = saved; }
+    } target_scope(g_expl_target_on ? perp_limit : 0.0f);
     for (int pass = 0; pass < n_passes; ++pass) {
         SolverConfig cfg = default_solver_config();
         cfg.expl_cfg.time_limit_secs = per * 0.8;
         cfg.cmpr_cfg.time_limit_secs = per * 0.2;
         cfg.expl_cfg.max_conseq_failed_attempts = std::nullopt; // run to the clock
+        // NP_EXPL_STRIKES / NP_EXPL_NOIMPR: cheaper failed widths in the strip exploration (0 = keep 3 / 200).
+        if (g_expl_strikes) cfg.expl_cfg.separator_config.strike_limit = g_expl_strikes;
+        if (g_expl_noimpr) cfg.expl_cfg.separator_config.iter_no_imprv_limit = g_expl_noimpr;
         // Use more of the 24-core machine: best-of-N workers run in parallel (WorkerPool), so a
         // larger N gives better moves per iteration at ~the same wall-time => faster convergence.
         unsigned nw = resolve_n_workers();
         cfg.expl_cfg.separator_config.n_workers = nw;
         cfg.cmpr_cfg.separator_config.n_workers = nw;
         Rng rng(seed + (uint64_t)pass);
-        const StripSolution* init = have ? &best : nullptr; // warm-restart: deepen the best basin
+        const StripSolution* init = have ? &best : warm_init; // warm-restart: deepen the best basin
         StripSolution sol = optimize(inst, rng, listener, term, cfg.expl_cfg, cfg.cmpr_cfg, init);
+        if (g_expl_trace) std::fprintf(stderr, "[TRACE] run_strip pass %d/%d -> width %.3f (best %.3f) limit %.1f round=%llu\n",
+                                       pass + 1, n_passes, sol.strip_width(), have ? best.strip_width() : sol.strip_width(),
+                                       perp_limit, (unsigned long long)g_iter_count);
         if (!have || sol.strip_width() < best.strip_width()) { best = sol; have = true; }
         if (best.strip_width() <= perp_limit) break; // already fits one sheet -> stop early
     }
+    // E1: a wider feasible layout whose cut keeps more (mandatory first, then area) replaces the narrowest.
+    if (rank_cut_w > 0.0f && rank.have &&
+        cut_better(rank.best_s, cut_score(best.layout_snapshot, inst, best.strip_width(), rank_cut_w)))
+        best = rank.best;
 
     StripResult r;
     r.fixed_height = fixed_height;
@@ -323,6 +409,7 @@ struct LiveLayout {
     std::mutex mtx;
     bool active = false;                 // a solve is in progress
     f32 sheet_w = 0.0f;                  // sheet width (for banding the strip into columns)
+    f32 col_pitch = 0.0f;                // column pitch for banding (> 0: bin_driver's sheet+gap pitch; 0 => sheet_w)
     int max_bins = 6;                    // cap on sheets
     int sheet_base = 0;                  // greedy_fill's current sheet index
     std::vector<usize> sub2glob;         // subset part_id -> global color_id (= the `remaining` vector)
@@ -682,6 +769,387 @@ inline Sheets greedy_fill(const std::vector<std::pair<Part, usize>>& parts, cons
     for (const auto& p : out.placements) if (p.sheet + 1 > last_used) last_used = p.sheet + 1;
     out.n_sheets = last_used;
     out.ok = (out.inf == 0) && (out.bf == 0) && remaining.empty();
+    return out;
+}
+
+// ===== E1: fit_mode 1 with part PRIORITIES (np_nest_prio) - ONE sheet, MANDATORY parts first, then AREA =====
+// greedy_fill's one-sheet run keeps whatever the narrowest strip leaves inside x <= sheet_w, so a big part
+// that happens to sit across the cut is dropped while smaller ones stay (the COUNT objective). Here:
+//   attempt 0  = EXACTLY the plain fit-1 run (greedy_fill's sheet 0: 65% of the budget, 3 warm-restart passes,
+//                same seed, same LBF), so a priority run that drops nothing equals the plain call. Only the
+//                choice of layout to cut differs: run_strip returns the feasible layout whose CUT ranks best
+//                (cut_better: fewest mandatory parts lost, then most kept area, then narrowest); when the strip
+//                fits the sheet that is the plain run's own layout.
+//   drop policy = if attempt 0 does not keep everything offered, BISECTION over d = how many of the NORMAL
+//                parts, sorted by area ascending, are dropped (a mandatory part is never dropped). The first
+//                retry drops the smaller half; a retry that keeps every part it was offered is FEASIBLE and
+//                the next one re-adds half of the dropped ones (smaller d), an infeasible one drops half of
+//                what remains (larger d). Each retry runs:
+//                  cold  a fresh LBF of the reduced set with the plain run's seed and g_prio_retry_frac x the
+//                        plain run's budget (default 1.0 => exactly the plain call on that reduced set), then,
+//                        only if cold did not keep everything,
+//                  warm  the best-ranked earlier layout whose offered set contains the reduced set, minus the
+//                        parts not offered now, on a strip fitted to them (if those already lie inside the
+//                        sheet that IS the answer, no run), same budget; the better of the two counts.
+//                A d whose whole offered area cannot beat the best cut that already holds every mandatory part
+//                is skipped as if feasible (only smaller d can win). At most g_prio_max_retries retries.
+//   insertion  = finally, if the best layout holds every mandatory part but not every normal one, it is frozen
+//                as sheet keep-outs and the normal parts it lacks are strip-packed into the free space (one
+//                run, retry budget), then every part still missing alone (largest first, quarter budget,
+//                re-frozen after each success); those inside the sheet are added (each run counts as a retry;
+//                off when g_prio_max_retries == 0). The joint pack can fail with parts that fit once the big
+//                parts stay put, which is what this recovers.
+// The best cut over every run (all mandatory parts first, then the largest area) is emitted and verified
+// exactly like greedy_fill. Only np_nest_prio (fit 1) calls this; without it nothing here runs.
+// NP_PRIO_RETRY_BUDGET (fraction, default 1.0) / NP_PRIO_MAX_RETRIES (default 6) are read by the C ABI.
+inline double g_prio_retry_frac = 1.0;
+inline int g_prio_max_retries = 6;
+inline std::atomic<int> g_prio_retries{0};   // retries (drop sets evaluated) of the last solve, all starts
+inline std::atomic<int> g_prio_runs{0};      // strip runs of the last solve (attempt 0 + cold + warm), all starts
+// fit_mode 3 (solver/group_fill.hpp) caps the drop-policy retries of ITS packs per thread; -1 => g_prio_max_retries.
+inline thread_local int g_prio_retries_tl = -1;
+// ...and how many missing normal parts its insertion stage tries ALONE (-1 => all of them, the default path).
+inline thread_local int g_prio_alone_cap_tl = -1;
+
+inline Sheets prio_fill_one(const std::vector<std::pair<Part, usize>>& parts, const CollisionConfig& engine,
+                            f32 sheet_w, f32 sheet_h, double total_budget,
+                            const std::vector<std::vector<Polygon>>& per_sheet_holes = {},
+                            uint64_t base_seed = 100, bool publish_live = true,
+                            const SheetDims* per_sheet_dims = nullptr) {
+    auto [cur_w, cur_h] = dims_for(per_sheet_dims, 0, sheet_w, sheet_h);
+    // Same deferral as greedy_fill's sheet 0 (mixed sizes only): a part too tall for this sheet stays off.
+    std::vector<usize> offered0, defer;
+    for (usize i = 0; i < parts.size(); ++i) {
+        const Polygon* cs = parts[i].first.collision_shape.get();
+        if (per_sheet_dims && !per_sheet_dims->empty() && cs && min_bounding_height(*cs, 90) > cur_h * 1.001f)
+            defer.push_back(i);
+        else offered0.push_back(i);
+    }
+    // A cancel already pending, or nothing that fits: greedy_fill's own handling, unchanged.
+    if (g_cancel.load(std::memory_order_relaxed) || offered0.empty())
+        return greedy_fill(parts, engine, sheet_w, sheet_h, total_budget, 1, per_sheet_holes, base_seed, publish_live, per_sheet_dims);
+
+    const std::vector<Polygon>* holes = per_sheet_holes.empty() ? nullptr : &per_sheet_holes[0];
+    ProgressListener prog;
+    DummySolListener dummy;
+    SolutionListener* listener = publish_live ? (SolutionListener*)&prog : (SolutionListener*)&dummy;
+    auto is_mand = [&](usize g) { return parts[g].first.priority > 0; };
+    auto area_of = [&](usize g) { return parts[g].first.area(); };
+    int mand_total = 0, mand_deferred = 0;
+    for (usize g = 0; g < parts.size(); ++g) if (is_mand(g)) mand_total++;
+    for (usize g : defer) if (is_mand(g)) mand_deferred++;   // can never be placed: not a reason to drop
+    const f32 sheet_area = cur_w * cur_h;
+    const double b_plain = total_budget * 0.65;                // greedy_fill's sheet-0 budget (3 passes)
+    const double b_retry = b_plain * (g_prio_retry_frac > 0.0 ? g_prio_retry_frac : 1.0);
+    const int max_retries = (g_prio_retries_tl >= 0) ? g_prio_retries_tl : g_prio_max_retries;
+
+    struct Keep { usize gid; std::vector<Point> verts; RigidTransform dt; };
+    struct Cand { std::vector<Keep> keep; CutScore s; };
+    // One strip run: its cut, plus EVERY part of the (compacted) strip for later warm starts.
+    struct Run { Cand c; std::vector<Keep> all; std::vector<char> in; bool all_kept = false; };
+
+    // Cut of a set of placed parts (global ids): greedy_fill's keep test and progress guarantee, scored by
+    // cut_better's terms.
+    auto cut_of = [&](const std::vector<Keep>& placed) -> Cand {
+        Cand c;
+        f32 best_xmax = F32_MAX; usize best_i = 0; bool any = false;
+        for (usize i = 0; i < placed.size(); ++i) {
+            f32 xmax = -F32_MAX;
+            for (auto& pt : placed[i].verts) xmax = max_f(xmax, pt.x);
+            if (!any || xmax < best_xmax) { best_xmax = xmax; best_i = i; any = true; }
+            if (xmax <= cur_w + 1e-3f) c.keep.push_back(placed[i]);
+        }
+        if (c.keep.empty() && any) c.keep.push_back(placed[best_i]);
+        int kept_mand = 0;
+        for (auto& k : c.keep) {
+            if (is_mand(k.gid)) kept_mand++;
+            c.s.kept_area += area_of(k.gid);
+            for (auto& pt : k.verts) c.s.width = max_f(c.s.width, pt.x);
+        }
+        c.s.missing = mand_total - kept_mand;
+        return c;
+    };
+    auto run_set = [&](const std::vector<usize>& off, double b, uint64_t seed,
+                       const std::vector<Placement>* warm, f32 warm_w) -> Run {
+        auto sub = subset_items(parts, off);
+        if (publish_live) {
+            std::lock_guard<std::mutex> lk(g_live.mtx);
+            g_live.sub2glob = off; g_live.sheet_base = 0;
+            g_live.sheet_w = cur_w; g_live.max_bins = 1;
+        }
+        StripResult R = run_strip(sub, engine, cur_h, cur_w, b, seed, 3, holes, listener, cur_w, warm, warm_w);
+        Layout live = Layout::from_snapshot(R.sol.layout_snapshot);
+        compact_left(live, cur_w, cur_h, holes);
+        Run r;
+        live.placed_parts.for_each([&](PartKey, const PlacedPart& pi) {
+            r.all.push_back({off[pi.part_id], pi.shape->vertices, pi.d_transf});
+        });
+        r.c = cut_of(r.all);
+        r.in.assign(parts.size(), 0);
+        for (usize g : off) r.in[g] = 1;
+        r.all_kept = (r.c.keep.size() == off.size());
+        g_prio_runs.fetch_add(1, std::memory_order_relaxed);
+        return r;
+    };
+    auto pct = [&](const CutScore& s) { return (double)(100.0f * s.kept_area / sheet_area); };
+
+    Run first = run_set(offered0, b_plain, base_seed, nullptr, 0.0f);
+    if (!g_quiet_tl) std::fprintf(stderr, "[np] prio attempt 0 (plain run): offered %zu -> kept %zu, mandatory missing %d/%d, area %.1f%%\n",
+                 offered0.size(), first.c.keep.size(), first.c.s.missing, mand_total, pct(first.c.s));
+    Cand best = first.c;
+    std::vector<Run> sources;                                  // warm-start sources (every run that counted)
+    sources.push_back(std::move(first));
+
+    // Normal parts by area ascending (ties by id): dropping d means dropping the d smallest.
+    std::vector<usize> normals;
+    for (usize g : offered0) if (!is_mand(g)) normals.push_back(g);
+    std::stable_sort(normals.begin(), normals.end(), [&](usize a, usize b) { return area_of(a) < area_of(b); });
+    const int k = (int)normals.size();
+    std::vector<f32> prefix((usize)k + 1, 0.0f);               // area of the d smallest normals
+    for (int i = 0; i < k; ++i) prefix[(usize)i + 1] = prefix[(usize)i] + area_of(normals[(usize)i]);
+    f32 offered_area = 0.0f;
+    for (usize g : offered0) offered_area += area_of(g);
+
+    int L = 1, R = k, retries = 0;
+    while (!sources.front().all_kept && L <= R && retries < max_retries && !g_cancel.load(std::memory_order_relaxed)) {
+        int d = (L + R) / 2;
+        if (best.s.missing <= mand_deferred && offered_area - prefix[(usize)d] <= best.s.kept_area) {
+            R = d - 1;                                         // cannot beat the best: only dropping less can
+            continue;
+        }
+        ++retries;
+        g_prio_retries.fetch_add(1, std::memory_order_relaxed);
+        std::vector<char> drop(parts.size(), 0);
+        for (int i = 0; i < d; ++i) drop[normals[(usize)i]] = 1;
+        std::vector<usize> off;
+        for (usize g : offered0) if (!drop[g]) off.push_back(g);
+
+        // cold: a fresh LBF of the reduced set (= the plain call on it when g_prio_retry_frac == 1)
+        Run rc = run_set(off, b_retry, base_seed, nullptr, 0.0f);
+        if (!g_quiet_tl) std::fprintf(stderr, "[np] prio retry %d: drop %d smallest normal(s) (offered %zu) cold -> kept %zu, mandatory missing %d/%d, area %.1f%%\n",
+                     retries, d, off.size(), rc.c.keep.size(), rc.c.s.missing, mand_total, pct(rc.c.s));
+        Run chosen = std::move(rc);
+        if (!chosen.all_kept && !g_cancel.load(std::memory_order_relaxed)) {
+            // warm: the best-ranked earlier layout whose offered set contains `off`, minus the rest
+            const Run* src = nullptr;
+            for (const Run& s : sources) {
+                bool sup = true;
+                for (usize g : off) if (!s.in[g]) { sup = false; break; }
+                if (sup && (!src || cut_better(s.c.s, src->c.s))) src = &s;
+            }
+            if (src) {
+                std::vector<usize> local(parts.size(), (usize)-1);
+                for (usize i = 0; i < off.size(); ++i) local[off[i]] = i;
+                std::vector<Placement> warm;
+                std::vector<Keep> sub_all;
+                f32 extent = 0.0f;
+                for (const Keep& kp : src->all) {
+                    if (local[kp.gid] == (usize)-1) continue;
+                    warm.push_back(Placement{local[kp.gid], kp.dt});
+                    sub_all.push_back(kp);
+                    for (auto& pt : kp.verts) extent = max_f(extent, pt.x);
+                }
+                Run rw;
+                const char* how = "warm";
+                if (warm.size() == off.size() && extent <= cur_w + 1e-3f) {
+                    // the earlier layout minus the dropped parts already lies inside the sheet: no run needed
+                    rw.all = std::move(sub_all);
+                    rw.c = cut_of(rw.all);
+                    rw.in.assign(parts.size(), 0);
+                    for (usize g : off) rw.in[g] = 1;
+                    rw.all_kept = (rw.c.keep.size() == off.size());
+                    how = "warm (subset already fits, no run)";
+                } else {
+                    rw = run_set(off, b_retry, base_seed + (uint64_t)retries * 7919ull, &warm, extent * 1.00001f);
+                }
+                if (!g_quiet_tl) std::fprintf(stderr, "[np] prio retry %d: %s -> kept %zu, mandatory missing %d/%d, area %.1f%%\n",
+                             retries, how, rw.c.keep.size(), rw.c.s.missing, mand_total, pct(rw.c.s));
+                if (cut_better(rw.c.s, chosen.c.s)) chosen = std::move(rw);
+            }
+        }
+        const bool feasible = chosen.all_kept;
+        if (cut_better(chosen.c.s, best.s)) best = chosen.c;
+        sources.push_back(std::move(chosen));
+        if (feasible) R = d - 1; else L = d + 1;
+    }
+
+    // INSERTION: the joint pack can stay infeasible with parts that DO fit into the free space of a layout
+    // holding every mandatory part (they need the big parts to stay put). Freeze the best layout as sheet
+    // keep-outs and strip-pack the normal parts it does not hold into the rest; keep those inside the sheet.
+    // First all of them in one run, then each one still missing ALONE (largest area first, the layout
+    // re-frozen after every success, a quarter of the retry budget each): one hopeless part (e.g. a long
+    // strip) in the group run must not hide a small one that fits. Every kept insertion avoids the frozen
+    // parts by construction (keep-outs) and is verified below.
+    auto insert_into = [&](const Cand& base, const std::vector<usize>& ins, double b, uint64_t seed, usize& n_in) -> Cand {
+        std::vector<Polygon> frozen;
+        if (holes) frozen = *holes;
+        for (auto& kp : base.keep) { try { frozen.push_back(Polygon::create(kp.verts)); } catch (...) {} }
+        auto sub = subset_items(parts, ins);
+        if (publish_live) {
+            std::lock_guard<std::mutex> lk(g_live.mtx);
+            g_live.sub2glob = ins; g_live.sheet_base = 0;
+            g_live.sheet_w = cur_w; g_live.max_bins = 1;
+        }
+        StripResult R2 = run_strip(sub, engine, cur_h, cur_w, b, seed, 3, &frozen, listener, cur_w);
+        g_prio_runs.fetch_add(1, std::memory_order_relaxed);
+        Layout live = Layout::from_snapshot(R2.sol.layout_snapshot);
+        compact_left(live, cur_w, cur_h, &frozen);
+        Cand c = base;
+        n_in = 0;
+        live.placed_parts.for_each([&](PartKey, const PlacedPart& pi) {
+            if (pi.shape->bbox.x_max <= cur_w + 1e-3f) {       // no progress guarantee here: only real fits
+                c.keep.push_back({ins[pi.part_id], pi.shape->vertices, pi.d_transf});
+                c.s.kept_area += area_of(ins[pi.part_id]);
+                for (auto& pt : pi.shape->vertices) c.s.width = max_f(c.s.width, pt.x);
+                ++n_in;
+            }
+        });
+        return c;
+    };
+    auto missing_normals = [&]() {
+        std::vector<char> kept(parts.size(), 0);
+        for (auto& kp : best.keep) kept[kp.gid] = 1;
+        std::vector<usize> ins;
+        for (usize g : offered0) if (!kept[g] && !is_mand(g)) ins.push_back(g);
+        return ins;
+    };
+    if (max_retries > 0 && best.s.missing <= mand_deferred && !g_cancel.load(std::memory_order_relaxed)) {
+        std::vector<usize> ins = missing_normals();
+        const usize group_n = ins.size();
+        if (!ins.empty()) {
+            g_prio_retries.fetch_add(1, std::memory_order_relaxed);
+            usize n_in = 0;
+            Cand c = insert_into(best, ins, b_retry, base_seed, n_in);
+            if (!g_quiet_tl) std::fprintf(stderr, "[np] prio insert: %zu normal part(s) into the frozen best layout -> %zu inserted, area %.1f%%\n",
+                         ins.size(), n_in, pct(c.s));
+            if (cut_better(c.s, best.s)) best = std::move(c);
+        }
+        ins = missing_normals();
+        if (group_n > 1 && !ins.empty()) {               // a lone part was just tried by the group run
+            std::stable_sort(ins.begin(), ins.end(), [&](usize a, usize b) { return area_of(a) > area_of(b); });
+            int n_alone = 0;
+            for (usize g : ins) {
+                if (g_cancel.load(std::memory_order_relaxed)) break;
+                if (g_prio_alone_cap_tl >= 0 && n_alone++ >= g_prio_alone_cap_tl) break;
+                g_prio_retries.fetch_add(1, std::memory_order_relaxed);
+                usize n_in = 0;
+                Cand c = insert_into(best, std::vector<usize>{g}, b_retry * 0.25, base_seed, n_in);
+                if (!g_quiet_tl) std::fprintf(stderr, "[np] prio insert part %zu alone -> %s, area %.1f%%\n",
+                             g, n_in ? "inserted" : "no fit", pct(c.s));
+                if (n_in && cut_better(c.s, best.s)) best = std::move(c);
+            }
+        }
+    }
+
+    // emit + verify the chosen sheet (as greedy_fill does)
+    Sheets out;
+    f32 wmax = 0.0f;
+    std::vector<Polygon> shapes;
+    for (auto& kp : best.keep) {
+        SheetPlacement p; p.color_id = kp.gid; p.sheet = 0; p.verts = kp.verts; p.d_transf = kp.dt;
+        for (auto& pt : kp.verts) wmax = max_f(wmax, pt.x);
+        out.placements.push_back(std::move(p));
+        try { shapes.push_back(Polygon::create(kp.verts)); } catch (...) {}
+    }
+    for (auto& s : shapes)
+        if (s.bbox.x_max > cur_w + 1e-2f || s.bbox.x_min < -1e-2f ||
+            s.bbox.y_max > cur_h + 1e-2f || s.bbox.y_min < -1e-2f) out.inf++;
+    for (usize i = 0; i < shapes.size(); ++i)
+        for (usize j = i + 1; j < shapes.size(); ++j)
+            if (brute_overlap(shapes[i], shapes[j])) out.bf++;
+    out.counts.push_back(best.keep.size());
+    out.widths.push_back(wmax);
+    out.n_sheets = best.keep.empty() ? 0 : 1;
+    out.ok = (out.inf == 0) && (out.bf == 0) && best.keep.size() == parts.size();
+    return out;
+}
+
+// Explicit external warm repair. All demand is placed feasibly before optimize: its
+// exploration phase assumes that the initial snapshot is complete and feasible.
+inline Sheets warm_repair_one(const std::vector<std::pair<Part, usize>>& parts,
+    const CollisionConfig& engine, f32 w, f32 h, double budget, uint64_t seed,
+    const std::vector<Placement>& incumbent, const std::vector<Polygon>* holes) {
+    Sheets failure;
+    Strip strip(h, engine, part_modify(), w);
+    if (holes && !holes->empty()) strip.set_holes(*holes);
+    StripInstance inst(parts, strip);
+    StripProblem prob(inst);
+    std::vector<Placement> complete;
+    std::vector<bool> seen(parts.size(), false);
+    for (const auto& pl : incumbent) {
+        if (pl.part_id >= parts.size() || seen[pl.part_id]) return failure;
+        seen[pl.part_id] = true;
+        const auto& part = parts[pl.part_id].first;
+        auto poly = part.collision_shape->transform_clone(pl.d_transf.compose());
+        if (poly.bbox.x_min < -PACKER_SLACK || poly.bbox.y_min < -PACKER_SLACK ||
+            poly.bbox.x_max > w + PACKER_SLACK || poly.bbox.y_max > h + PACKER_SLACK) { std::fprintf(stderr,"[np-warm] seed %zu out of bounds\n",pl.part_id); return failure; }
+        prob.place_item(pl); complete.push_back(pl);
+    }
+    const f32 gap = std::max(0.001f, std::max(w,h)*0.0001f);
+    f32 right = w + gap;
+    for (usize id=0; id<parts.size(); ++id) {
+        if (seen[id]) continue;
+        if (g_cancel.load()) return failure;
+        const Part& part=parts[id].first;
+        std::vector<f32> angles = part.allowed_rotation.discrete;
+        if (part.allowed_rotation.kind == RotationKind::Continuous)
+            for (int k=0;k<180;++k) angles.push_back((f32)k*3.14159265358979323846f/180.0f);
+        if (angles.empty()) angles.push_back(0.0f);
+        bool placed=false;
+        f32 best_width=std::numeric_limits<f32>::infinity();
+        Placement best_append{id,RigidTransform(0,0,0)};
+        for (f32 a: angles) {
+            auto poly=part.collision_shape->transform_clone(RigidTransform(a,0,0).compose());
+            if (poly.bbox.y_max-poly.bbox.y_min > h) continue;
+            const f32 append_width=poly.bbox.x_max-poly.bbox.x_min;
+            if (append_width>=best_width) continue;
+            best_width=append_width;
+            best_append={id,RigidTransform(a,right-poly.bbox.x_min,0.5f*(h-(poly.bbox.y_max-poly.bbox.y_min))-poly.bbox.y_min)};
+            placed=true;
+        }
+        if (placed) {
+            right+=best_width+gap;
+            prob.change_strip_width(right);
+            prob.place_item(best_append); complete.push_back(best_append);
+        }
+        if (!placed) { std::fprintf(stderr,"[np-warm] cannot append part %zu at height %.9g\n",id,(double)h); return failure; }
+    }
+    if (complete.size()!=parts.size()) return failure;
+    for (usize demand:prob.part_demand_qtys) if (demand!=0) return failure;
+    OverlapTracker complete_check(prob.layout);
+    double remaining_budget=budget;
+    if (complete_check.get_total_loss()!=0.0f) {
+        // External double-precision incumbents may touch after float conversion or
+        // conservative outline modification. Repair in the complete expanded strip,
+        // never label an overlapping seed feasible or pass it to optimize.
+        std::fprintf(stderr,"[np-warm] sanitize complete seed loss %.9g\n",complete_check.get_total_loss());
+        auto cfg=default_solver_config().expl_cfg.separator_config;
+        cfg.n_workers=resolve_n_workers();
+        BasicTerminator bt; IterationTerminator it;
+        Terminator& term=g_iter_mode?static_cast<Terminator&>(it):static_cast<Terminator&>(bt);
+        const double sanitize_budget=budget*0.1;
+        remaining_budget-=sanitize_budget; term.new_timeout(sanitize_budget);
+        DummySolListener listener;
+        Relaxer relaxer(inst,prob,Rng(seed),cfg);
+        auto fixed=relaxer.relax(term,listener);
+        if(fixed.second.get_total_loss()!=0.0f) {
+            std::fprintf(stderr,"[np-warm] could not sanitize loss %.9g\n",fixed.second.get_total_loss());return failure;
+        }
+        prob.restore(fixed.first);
+        complete.clear();
+        prob.layout.placed_parts.for_each([&](PartKey,const PlacedPart& pi){complete.push_back({pi.part_id,pi.d_transf});});
+        if(complete.size()!=parts.size()) return failure;
+    }
+    if (g_cancel.load()) return failure;
+    auto result=run_strip(parts,engine,h,w,remaining_budget,seed,3,holes,nullptr,0.0f,&complete,prob.strip_width());
+    if (!result.fits) { std::fprintf(stderr,"[np-warm] no fit: width %.9g target %.9g\n",(double)result.width,(double)w); return failure; }
+    Sheets out;
+    Layout final_layout=Layout::from_snapshot(result.sol.layout_snapshot);
+    final_layout.placed_parts.for_each([&](PartKey,const PlacedPart& pi) {
+        out.placements.push_back({pi.shape->vertices,pi.part_id,0,pi.d_transf});
+    });
+    if (out.placements.size()!=parts.size()) return failure;
+    out.n_sheets=1; out.counts.push_back(parts.size()); out.widths.push_back(result.width);
     return out;
 }
 

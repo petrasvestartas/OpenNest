@@ -1,0 +1,297 @@
+{
+ "px": 5.0,
+ "bias_mm": 3.5355339059327378,
+ "sheets": {
+  "2": {
+   "parts": [
+    5,
+    10,
+    14,
+    31,
+    41,
+    36,
+    46,
+    45,
+    51,
+    49,
+    50,
+    52
+   ],
+   "util": 85.11,
+   "free_pct": 14.89,
+   "free_components_after_50mm_erosion": 22,
+   "component_areas_pct": [
+    0.68,
+    0.56,
+    0.39,
+    0.37,
+    0.37,
+    0.26,
+    0.14,
+    0.12
+   ],
+   "largest_inscribed_rect_mm": [
+    410,
+    230
+   ],
+   "largest_rect_pos": [
+    4300,
+    1750
+   ],
+   "leftovers": {
+    "8": {
+     "name": "P008",
+     "area_pct": 4.41,
+     "bbox": [
+      3777,
+      402
+     ],
+     "fits": false,
+     "angles_that_fit": 0,
+     "angles_tested": 360,
+     "example": null
+    },
+    "7": {
+     "name": "P007",
+     "area_pct": 4.41,
+     "bbox": [
+      3777,
+      402
+     ],
+     "fits": false,
+     "angles_that_fit": 0,
+     "angles_tested": 360,
+     "example": null
+    },
+    "18": {
+     "name": "P018",
+     "area_pct": 3.44,
+     "bbox": [
+      2380,
+      262
+     ],
+     "fits": false,
+     "angles_that_fit": 0,
+     "angles_tested": 360,
+     "example": null
+    },
+    "21": {
+     "name": "P021",
+     "area_pct": 2.83,
+     "bbox": [
+      2002,
+      256
+     ],
+     "fits": false,
+     "angles_that_fit": 0,
+     "angles_tested": 360,
+     "example": null
+    },
+    "43": {
+     "name": "P043",
+     "area_pct": 0.63,
+     "bbox": [
+      556,
+      537
+     ],
+     "fits": false,
+     "angles_that_fit": 0,
+     "angles_tested": 360,
+     "example": null
+    }
+   },
+   "seconds": 79.1
+  },
+  "3": {
+   "parts": [
+    1,
+    3,
+    13,
+    28,
+    27,
+    39,
+    34,
+    37,
+    26
+   ],
+   "util": 80.46,
+   "free_pct": 19.54,
+   "free_components_after_50mm_erosion": 9,
+   "component_areas_pct": [
+    1.6,
+    0.93,
+    0.48,
+    0.47,
+    0.14,
+    0.09,
+    0.07,
+    0.01
+   ],
+   "largest_inscribed_rect_mm": [
+    1230,
+    225
+   ],
+   "largest_rect_pos": [
+    4750,
+    1755
+   ],
+   "leftovers": {
+    "8": {
+     "name": "P008",
+     "area_pct": 4.41,
+     "bbox": [
+      3777,
+      402
+     ],
+     "fits": false,
+     "angles_that_fit": 0,
+     "angles_tested": 360,
+     "example": null
+    },
+    "7": {
+     "name": "P007",
+     "area_pct": 4.41,
+     "bbox": [
+      3777,
+      402
+     ],
+     "fits": false,
+     "angles_that_fit": 0,
+     "angles_tested": 360,
+     "example": null
+    },
+    "18": {
+     "name": "P018",
+     "area_pct": 3.44,
+     "bbox": [
+      2380,
+      262
+     ],
+     "fits": false,
+     "angles_that_fit": 0,
+     "angles_tested": 360,
+     "example": null
+    },
+    "21": {
+     "name": "P021",
+     "area_pct": 2.83,
+     "bbox": [
+      2002,
+      256
+     ],
+     "fits": false,
+     "angles_that_fit": 0,
+     "angles_tested": 360,
+     "example": null
+    },
+    "43": {
+     "name": "P043",
+     "area_pct": 0.63,
+     "bbox": [
+      556,
+      537
+     ],
+     "fits": false,
+     "angles_that_fit": 0,
+     "angles_tested": 360,
+     "example": null
+    }
+   },
+   "seconds": 75.6
+  },
+  "4": {
+   "parts": [
+    2,
+    9,
+    15,
+    25,
+    33,
+    32
+   ],
+   "util": 70.27,
+   "free_pct": 29.73,
+   "free_components_after_50mm_erosion": 10,
+   "component_areas_pct": [
+    2.78,
+    2.38,
+    1.16,
+    1.01,
+    0.94,
+    0.92,
+    0.6,
+    0.16
+   ],
+   "largest_inscribed_rect_mm": [
+    750,
+    415
+   ],
+   "largest_rect_pos": [
+    3210,
+    300
+   ],
+   "leftovers": {
+    "8": {
+     "name": "P008",
+     "area_pct": 4.41,
+     "bbox": [
+      3777,
+      402
+     ],
+     "fits": false,
+     "angles_that_fit": 0,
+     "angles_tested": 360,
+     "example": null
+    },
+    "7": {
+     "name": "P007",
+     "area_pct": 4.41,
+     "bbox": [
+      3777,
+      402
+     ],
+     "fits": false,
+     "angles_that_fit": 0,
+     "angles_tested": 360,
+     "example": null
+    },
+    "18": {
+     "name": "P018",
+     "area_pct": 3.44,
+     "bbox": [
+      2380,
+      262
+     ],
+     "fits": false,
+     "angles_that_fit": 0,
+     "angles_tested": 360,
+     "example": null
+    },
+    "21": {
+     "name": "P021",
+     "area_pct": 2.83,
+     "bbox": [
+      2002,
+      256
+     ],
+     "fits": false,
+     "angles_that_fit": 0,
+     "angles_tested": 360,
+     "example": null
+    },
+    "43": {
+     "name": "P043",
+     "area_pct": 0.63,
+     "bbox": [
+      556,
+      537
+     ],
+     "fits": false,
+     "angles_that_fit": 0,
+     "angles_tested": 360,
+     "example": null
+    }
+   },
+   "seconds": 74.8
+  }
+ }
+}

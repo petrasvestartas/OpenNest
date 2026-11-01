@@ -34,3 +34,9 @@ Prepares parts for nesting: separates outlines (with holes) from attached attrib
 | --- | --- | --- |
 | **Geometry** | Generic | Prepared parts ready for nesting |
 | **Borders** | Curve | Outline border curves per part |
+
+## Curve sampling
+
+Curved edges are sampled with chords that stay on the true curve, and the largest allowed chord deviation is capped at 3.5e-6 of the largest outline bounding-box diagonal in the input (e.g. 0.02 mm when the biggest part is a 5.7 m plate, never below the model tolerance), so long shallow arcs no longer force a millimetre-scale outward allowance around the whole part; with Simplify < 0, straight runs are then simplified by Ramer-Douglas-Peucker at that same deviation (curve samples are kept).
+
+The clearance **Offset** is applied as a round (exact) offset: outers grow and holes shrink by the Minkowski sum with a disk of that radius (fillet chords within clamp(0.4% of the offset, 0.01 mm, 0.05 mm) of the true arc), so convex corners get exactly the requested gap instead of the larger mitre tip; sheet margins keep sharp corners.

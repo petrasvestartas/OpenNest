@@ -10,6 +10,11 @@
 //             [--sheetOffset DX DY] [--dumpPlacements] [--sheets N] [--expectSheets N] \
 //             --tag baseline [--csv out/results.csv] [--svg out/]
 //
+// --smartRotations 0|1 (default 1, like the GH component): part-aware orientation candidates
+// (NfpParams.smartRotations); 0 = legacy grid sweep. --tilt DEG = NfpParams.rotationTiltDeg.
+// --curveTolerance X (default 0.72). --perSheet prints one "SHEET" line per used sheet (parts,
+// used width, utilisation) and one "UNPLACED" line per unplaced instance.
+//
 // --expectSheets N turns a run into a REGRESSION ASSERTION: exit code 3 unless every part is
 // placed on at most N sheets with overlap_area and oob_area both ~0. The pinned cases are
 //   nfp_bench --dataset multisheet    --sheets 6                       --expectSheets 4
@@ -70,6 +75,10 @@ struct Args {
                         // -1 = NEVER early-exit (legacy full-budget burn, for wall baselines)
     int exactNfp = 0;   // 1 => full-resolution exact NFP (no simplify/dilate protective gap)
     int exactVoids = 0; // 1 => exact Minkowski void exclusion (maps to NfpParams.useHoles)
+    int smartRotations = 1;   // NfpParams.smartRotations (GH component default)
+    double tilt = 0;          // NfpParams.rotationTiltDeg
+    double curveTolerance = 0.72;
+    bool perSheet = false;
     std::string sheetVoid; // "" none, "rect" (convex) or "L" (non-convex) hole injected per sheet
     double sheetW = 0, sheetH = 0; // 0 = dataset default
     double sheetOffX = 0, sheetOffY = 0; // translate the sheet passed to the ENGINE only:
@@ -117,6 +126,10 @@ Args parseArgs(int argc, char** argv) {
         else if (k == "--stagnation") a.stagnation = std::atoi(need(i));
         else if (k == "--exactNfp") a.exactNfp = std::atoi(need(i));
         else if (k == "--exactVoids") a.exactVoids = std::atoi(need(i));
+        else if (k == "--smartRotations") a.smartRotations = std::atoi(need(i));
+        else if (k == "--tilt") a.tilt = std::atof(need(i));
+        else if (k == "--curveTolerance") a.curveTolerance = std::atof(need(i));
+        else if (k == "--perSheet") a.perSheet = true;
         else if (k == "--geomSeed") a.geomSeed = (unsigned)std::strtoul(need(i), nullptr, 10);
         else if (k == "--sheetVoid") a.sheetVoid = need(i);
         else if (k == "--sheets") a.nSheets = std::atoi(need(i));
@@ -257,7 +270,7 @@ RunResult runOnce(const Args& a, int seed, const bench::BenchData& d) {
     params.mutationRate    = 10;
     params.populationSize  = a.pop;
     params.seed            = seed;
-    params.curveTolerance  = 0.72;
+    params.curveTolerance  = a.curveTolerance;
     params.clipperScale    = 1e7;
     params.spacing         = a.spacing;
     params.sheetSpacing    = 0;
@@ -277,6 +290,8 @@ RunResult runOnce(const Args& a, int seed, const bench::BenchData& d) {
                                              // external benchmarks run; simplify+dilate masks
                                              // NFP defects behind a ~2.9-unit protective gap)
     params.exactVoids      = a.exactVoids;   // dedicated exact Minkowski void-exclusion flag
+    params.smartRotations  = a.smartRotations;
+    params.rotationTiltDeg = a.tilt;
 
     std::vector<double> tx(instCount), ty(instCount), angle(instCount);
     std::vector<int> sheetId(instCount), partIndex(instCount);
@@ -310,15 +325,20 @@ RunResult runOnce(const Args& a, int seed, const bench::BenchData& d) {
     // per-sheet layout bbox + placed solid area
     double placedArea = 0;
     std::vector<double> sheetMinX(a.nSheets, 1e300), sheetMaxX(a.nSheets, -1e300);
+    std::vector<double> sheetPartArea(a.nSheets, 0.0);
+    std::vector<int> sheetParts(a.nSheets, 0);
     std::vector<Clipper2Lib::Paths64> solids(instCount);
     for (int k = 0; k < instCount; k++) {
         if (sheetId[k] < 0) continue;
         const auto& part = d.parts[partIndex[k]];
-        placedArea += polyAreaXY(part.xy);
-        for (auto& h : part.holes) placedArea -= polyAreaXY(h);
+        double instArea = polyAreaXY(part.xy);
+        for (auto& h : part.holes) instArea -= polyAreaXY(h);
+        placedArea += instArea;
         solids[k] = instanceSolid(part, tx[k], ty[k], angle[k]);
         int sid = sheetId[k];
         if (sid >= 0 && sid < a.nSheets) {
+            sheetPartArea[sid] += instArea;
+            sheetParts[sid]++;
             for (auto& path : solids[k])
                 for (auto& pt : path) {
                     double x = pt.x / CHECK_SCALE;
@@ -336,6 +356,17 @@ RunResult runOnce(const Args& a, int seed, const bench::BenchData& d) {
         if (w > maxWidth) maxWidth = w;
     }
     r.bbox_width = maxWidth;
+    if (a.perSheet) {
+        for (int s = 0; s < a.nSheets; s++) {
+            if (sheetMaxX[s] < sheetMinX[s]) continue;
+            double w = sheetMaxX[s] - sheetMinX[s];
+            std::printf("SHEET %d parts=%d used_width=%.1f util_sheet=%.4f util_strip=%.4f\n", s,
+                        sheetParts[s], w, sheetPartArea[s] / (sheetW * sheetH),
+                        w > 0 ? sheetPartArea[s] / (w * sheetH) : 0.0);
+        }
+        for (int k = 0; k < instCount; k++)
+            if (sheetId[k] < 0) std::printf("UNPLACED inst %d part=%d\n", k, partIndex[k]);
+    }
     r.util_strip = stripArea > 0 ? placedArea / stripArea : 0;
     r.util_sheet = usedSheetArea > 0 ? placedArea / usedSheetArea : 0;
 

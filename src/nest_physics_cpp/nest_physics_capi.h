@@ -31,6 +31,20 @@ typedef struct NpParams {
     int       fit_mode;            // 0 = place ALL parts on the fewest sheets (default); 1 = ONE sheet, MAX FILL
                                    //     (cap to a single sheet; multi-start keeps the run with the most parts on
                                    //      it; parts that don't fit are reported unplaced for the host to lay outside)
+                                   //   2 = ALL parts, GLOBAL BIN PACK: every sheet is a column of one wide strip
+                                   //       (keep-out gaps between columns) optimised jointly, emptying the last
+                                   //       column until it can be dropped. Needs uniform sheet sizes and a non-
+                                   //       preview budget (iter_budget >= 500); otherwise falls back to mode 0.
+                                   //   3 = ALL parts, GROUP-AND-FILL (solver/group_fill.hpp): plate groups tested for
+                                   //       single-sheet feasibility per sheet type, exact cover of the plates, every
+                                   //       sheet one joint pack (plates mandatory + long + knapsack small parts),
+                                   //       insertion, leftover repack, part-in-hole seating, extra sheets, remnant
+                                   //       compaction; threaded portfolio + the fit 2 (fit 0 for mixed sizes) run as
+                                   //       a baseline member. Mixed sheet sizes, sheet holes and irregular outlines
+                                   //       (as keep-outs) are supported. Preview budgets fall back to mode 0.
+    int       n_threads;           // fit_mode 3 only: total solver threads of the portfolio (<= 0 -> 4). APPENDED
+                                   //   field (2026-10): it sits in the former tail padding, so sizeof(NpParams)
+                                   //   stays 80 and a host that zero-fills the struct gets the default.
 } NpParams;
 
 // Nest `part_count` polygons onto `sheet_count` fixed sheets (sheet 0's bbox sets the W x H used for
@@ -78,6 +92,94 @@ NP_EXPORT int np_nest(
     double*       out_angle,
     int*          out_sheet_id,
     int*          out_n_sheets);
+
+// Explicit one-sheet warm insertion. Seed transforms use the same public frame as outputs.
+// Every offered part must be placed for success. Incumbents remain movable during repair.
+// Returns 0 only for complete clean repair, 1 for no repair/cancel, 2 for invalid input.
+// On 1/2 valid seed entries are returned unchanged; incoming parts remain unplaced.
+// Rejected/fallback seed geometry has quality overlap/oob=-1 (unverified), never a clean verdict.
+// Exactly one sheet, part_holes_mode 0/1 only. NpParams and old exports are unchanged.
+NP_EXPORT int np_nest_warm_one(
+    int           part_count,
+    const int*    part_vertex_counts,
+    const double* part_xy,
+    const int*    part_rotations,           // [part_count] per-part rotation override: 0 = free
+                                            //   continuous rotation (default), N>0 = this part may
+                                            //   only use N discrete orientations (360/N deg step;
+                                            //   1 = fixed at 0 deg). NULL = no overrides.
+    const int*    warm_present,
+    const double* warm_tx,
+    const double* warm_ty,
+    const double* warm_angle,
+    int           sheet_count,
+    const int*    sheet_outer_vertex_counts,
+    const double* sheet_outer_xy,
+    const int*    sheet_hole_counts,
+    const int*    hole_vertex_counts,
+    const double* hole_xy,
+    const int*    part_hole_counts,         // [part_count] holes per part (NULL => no part holes)
+    const int*    part_hole_vertex_counts,  // [sum(part_hole_counts)] vertex count per part-hole, part-major (NULL ok)
+    const double* part_hole_xy,             // interleaved x,y for all part holes, part-major (NULL ok)
+    const NpParams* params,
+    double*       out_tx,
+    double*       out_ty,
+    double*       out_angle,
+    int*          out_sheet_id,
+    int*          out_n_sheets);
+
+// E1: np_nest with an optional per-part PRIORITY array. Every argument is np_nest's, in the same order, plus
+//   part_priority[part_count]  one int per input part (same order as part_vertex_counts):
+//                              0 = normal, >0 = MANDATORY. NULL => exactly np_nest (np_nest calls this with NULL).
+// Only fit_mode 1 (ONE sheet, MAX FILL) reads it; fit modes 0 and 2 ignore it (all parts are placed there).
+// With an array (even all zeros) fit_mode 1 changes its objective from placed COUNT to:
+//   1. every mandatory part on the sheet: a layout missing a mandatory part ranks below any layout that has
+//      them all - across the multi-starts and when choosing the strip layout to cut at the sheet width;
+//   2. then the most placed AREA (sum of part areas), then the narrowest used width.
+// Attempt 0 is exactly the plain fit-1 run (same budget, passes, seed, LBF), so a run that drops nothing
+// equals np_nest. If it does not keep every offered part, the NORMAL parts (area ascending) are dropped by
+// BISECTION on how many of the smallest go (first half; a retry that keeps everything it was offered re-adds
+// half of the dropped, otherwise half of the rest is dropped). Each retry runs a cold LBF pack of the reduced
+// set (= the plain call on it) and, if that does not keep everything, a warm start from the best earlier
+// layout minus the dropped parts; the better counts. A mandatory part is never dropped. Last, the best layout
+// holding every mandatory part is frozen and the normal parts it lacks are packed into its free space
+// (insertion run; counted as a retry). The best cut over all runs wins. When the mandatory parts cannot all fit, the best effort is returned and np_last_prio reports
+// how many are missing (stderr: "[np] prio attempt/retry/verdict ..." and the per-start "multistart" line).
+// Env: NP_PRIO_RETRY_BUDGET=<f> budget of each retry run as a fraction of the plain run's (default 1.0);
+//      NP_PRIO_MAX_RETRIES=<n> retries per start (default 6); wall time grows with both.
+// Dev env: NP_PRIO_AREA=1 forces the area objective on np_nest (fit 1) without a priority array.
+NP_EXPORT int np_nest_prio(
+    int           part_count,
+    const int*    part_vertex_counts,
+    const double* part_xy,
+    const int*    part_rotations,
+    const int*    part_priority,            // [part_count] 0 = normal, >0 = mandatory; NULL = np_nest
+    int           sheet_count,
+    const int*    sheet_outer_vertex_counts,
+    const double* sheet_outer_xy,
+    const int*    sheet_hole_counts,
+    const int*    hole_vertex_counts,
+    const double* hole_xy,
+    const int*    part_hole_counts,
+    const int*    part_hole_vertex_counts,
+    const double* part_hole_xy,
+    const NpParams* params,
+    double*       out_tx,
+    double*       out_ty,
+    double*       out_angle,
+    int*          out_sheet_id,
+    int*          out_n_sheets);
+
+// E1 priority verdict of the LAST completed np_nest / np_nest_prio, on the FINAL placements (after every
+// post-pass, like np_last_quality; same process-global, not re-entrant contract):
+//   out_mandatory          input parts flagged mandatory (0 for np_nest)
+//   out_mandatory_missing  of those, how many got no sheet (should be 0)
+//   out_placed_area        sum of the placed parts' areas (model units^2)
+//   out_offered_area       sum of every buildable input part's area
+//   out_retries            drop-policy retries (drop sets evaluated) summed over the multi-starts; 0 when
+//                          attempt 0 kept everything or the priority path did not run
+// Any out-param may be NULL. Returns out_mandatory_missing.
+NP_EXPORT int np_last_prio(int* out_mandatory, int* out_mandatory_missing,
+                           double* out_placed_area, double* out_offered_area, int* out_retries);
 
 // Quality verdict of the LAST completed np_nest, measured by exact brute-force verification of the FINAL
 // placements (after every post-pass), so it describes precisely the layout np_nest just returned:

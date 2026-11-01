@@ -24,6 +24,17 @@
 //     np_bench --parts=24 --sheets=6 --sw=600 --sh=600 --sw2=1000 --sh2=1000   # big sheets later
 //     np_bench --parts=40 --sheets=6 --iters=4000 --cancel_ms=2500    # ESC snapshot
 // All of these must end "VERDICT: CLEAN" or "UNPLACED-SPILL"; OUT-OF-BOUNDS or OVERLAPPING is a bug.
+// GLOBAL BIN PACK (fit_mode 2, solver/bin_driver.hpp): re-run every gate case here with --fit=2 appended
+// (mixed-size sheet sets print "[np] fit_mode 2 -> greedy fallback" and must match --fit=0 exactly), plus
+//     np_bench --fit=2 --parts=12 --sheets=8 --sw=60000 --sh=20000 --pw=2000 --ph=1500 --scale=1      # big coords
+//     np_bench --fit=2 --parts=12 --sheets=8 --sw=60000 --sh=20000 --pw=2000 --ph=1500 --scale=0.001  # demoted=0
+//     np_bench --fit=2 --parts=40 --sheets=6 --iters=4000 --cancel_ms=1500    # cancelled=1, valid snapshot
+//     np_bench --fit=2 --sizes=1000x1000,600x600,800x800                      # fallback, == --fit=0
+// and compare sheets used / USEDWIDTH against --fit=0, e.g. --parts=60 --sheets=10 --shape=ell over seeds.
+// NP_BIN_VERBOSE=1 prints the bin driver's k_lb/k_hi/LBF/final column counts, one line per SNAP and a summary.
+// Lever A/B (env, all default off): NP_BIN_ROTATE_COL=1, NP_BIN_EVICT=1 [NP_BIN_EVICT_EVERY=N], NP_SMART_ROT=1
+// [NP_SMART_ROT_P=p], NP_BIN_COLWALLS=1|2 [NP_BIN_SWEEP_AFTER=N], NP_BIN_BFD=1, NP_BIN_STRIKES=n / NP_BIN_NOIMPR=n,
+// NP_SMART_ROT_BIG=1 [NP_SMART_ROT_BIG_FRAC=f, NP_SMART_ROT_TILT=deg], NP_BIN_GROUPFILL=1 [NP_BIG_PIN=1, NP_GROUP_*]. With every one of them unset, all --dump files above must stay byte-identical.
 //
 // QUALITY-GATE regression (np_last_quality). The gate is the thing under test here, so every run also
 // prints GATE CHECK: the engine's self-report next to this harness's INDEPENDENT measurement (exact
@@ -80,6 +91,17 @@
 //   --shift=F         inject NP_TEST_SHIFT: shove the right-most placement F x sheet width off its sheet
 //   --dropinvalid=0|1 force NP_DROP_INVALID (0 = keep invalid placements so the gate has to catch them)
 //   --dump=PATH       write the raw ABI placements at full precision, for a byte-exact A/B between builds
+//
+// fit_mode 3 (group & fill) test-set flags (2026-10):
+//   --fit=3 --threads=N   group-and-fill portfolio with N solver threads (NpParams.n_threads, default 4)
+//   --shape=varied        per-part cycle of big rect (1.6x) / ell (1.2x) / U / C (0.8x) / small rect (0.5x) /
+//                         long strip (2.2 x 0.35): plates, long parts and small parts in one job
+//   --outline=L|notch|trap   IRREGULAR sheet outline on every sheet (L-shape; top edge with a curved bite + a
+//                         rectangular side notch; trapezoid). Sent like component_nest.cs does: the outline plus
+//                         (bbox - outline) as keep-out polygons (NonRectFrameKeepouts port, slab decomposition)
+//   --sholes=circ|rect|both  interior keep-outs on every sheet: a 32-gon circle and/or a rectangle
+//   --json=PATH           write sheets (true outline + true holes) and every placed part (world outer ring +
+//                         holes) for the independent shapely validator tools/bench3dm/validate_layout.py
 // NOTE --poke / --shift only do anything against a DLL built with -DNEST_PHYSICS_BUILD_BENCH=ON; a
 // release DLL has those defect-injection seams compiled out entirely (NP_TEST_SEAMS undefined). Nothing
 // is injected, so there is nothing for the gate to disagree ABOUT and the run is indistinguishable from a
@@ -138,6 +160,7 @@ struct NpParams {
     int       pole_max;
     int       final_compact;
     int       fit_mode;
+    int       n_threads;      // fit_mode 3 portfolio threads (0 -> 4); sits in the old tail padding (sizeof 80)
 };
 
 typedef int (*np_nest_fn)(int, const int*, const double*, const int*,
@@ -209,6 +232,76 @@ static Poly make_rect(double x, double y, double w, double h) {
     return p;   // CCW
 }
 
+// Irregular sheet outline inside the bbox [ox,ox+w] x [oy,oy+h] (CCW). NULL / unknown kind => the rectangle.
+static Poly irregular_outline(const char* kind, double ox, double oy, double w, double h) {
+    Poly p;
+    if (kind && strcmp(kind, "L") == 0) {
+        p.push_back(P2{ox, oy}); p.push_back(P2{ox + w, oy}); p.push_back(P2{ox + w, oy + 0.45 * h});
+        p.push_back(P2{ox + 0.55 * w, oy + 0.45 * h}); p.push_back(P2{ox + 0.55 * w, oy + h}); p.push_back(P2{ox, oy + h});
+        return p;
+    }
+    if (kind && strcmp(kind, "trap") == 0) {
+        p.push_back(P2{ox, oy}); p.push_back(P2{ox + w, oy}); p.push_back(P2{ox + 0.8 * w, oy + h}); p.push_back(P2{ox + 0.2 * w, oy + h});
+        return p;
+    }
+    if (kind && strcmp(kind, "notch") == 0) {
+        // bottom edge, right edge with a rectangular notch, top edge with a curved (semicircular) bite
+        double r = 0.22 * std::min(w, h), cx = ox + 0.5 * w, top = oy + h;
+        p.push_back(P2{ox, oy}); p.push_back(P2{ox + w, oy});
+        p.push_back(P2{ox + w, oy + 0.4 * h}); p.push_back(P2{ox + 0.88 * w, oy + 0.4 * h});
+        p.push_back(P2{ox + 0.88 * w, oy + 0.6 * h}); p.push_back(P2{ox + w, oy + 0.6 * h});
+        p.push_back(P2{ox + w, top});
+        p.push_back(P2{cx + r, top});
+        for (int k = 1; k < 16; ++k) { double a = 3.141592653589793 * k / 16.0; p.push_back(P2{cx + r * std::cos(a), top - r * std::sin(a)}); }
+        p.push_back(P2{cx - r, top});
+        p.push_back(P2{ox, top});
+        return p;
+    }
+    return make_rect(ox, oy, w, h);
+}
+
+// Port of component_nest.cs NonRectFrameKeepouts: keep-out trapezoids tiling bbox(outer) - outer (horizontal slab
+// sweep, even-odd). Empty for a rectangle.
+static std::vector<Poly> frame_keepouts(const Poly& v) {
+    std::vector<Poly> out;
+    size_t n = v.size();
+    if (n < 3) return out;
+    double minx = 1e300, miny = 1e300, maxx = -1e300, maxy = -1e300;
+    for (size_t i = 0; i < n; ++i) { minx = std::min(minx, v[i].x); miny = std::min(miny, v[i].y); maxx = std::max(maxx, v[i].x); maxy = std::max(maxy, v[i].y); }
+    double bw = maxx - minx, bh = maxy - miny;
+    if (poly_area(v) >= bw * bh * (1.0 - 1e-6)) return out;
+    double EPS = std::max(1e-7, bh * 1e-9), areaTol = std::max(1e-4, bw * bh * 1e-9);
+    std::vector<double> ys;
+    for (size_t i = 0; i < n; ++i) ys.push_back(v[i].y);
+    std::sort(ys.begin(), ys.end()); ys.erase(std::unique(ys.begin(), ys.end()), ys.end());
+    auto emit = [&](double lx0, double lx1, double rx0, double rx1, double y0, double y1) {
+        Poly t; t.push_back(P2{lx0, y0}); t.push_back(P2{rx0, y0}); t.push_back(P2{rx1, y1}); t.push_back(P2{lx1, y1});
+        Poly c; for (size_t k = 0; k < t.size(); ++k) { if (c.empty() || std::fabs(c.back().x - t[k].x) > 1e-9 || std::fabs(c.back().y - t[k].y) > 1e-9) c.push_back(t[k]); }
+        if (c.size() > 1 && std::fabs(c.front().x - c.back().x) < 1e-9 && std::fabs(c.front().y - c.back().y) < 1e-9) c.pop_back();
+        if (c.size() >= 3 && poly_area(c) > areaTol) out.push_back(c);
+    };
+    for (size_t si = 0; si + 1 < ys.size(); ++si) {
+        double y0 = ys[si], y1 = ys[si + 1];
+        if (y1 - y0 <= EPS) continue;
+        double ym = 0.5 * (y0 + y1);
+        std::vector<std::vector<double> > cr;
+        for (size_t i = 0; i < n; ++i) {
+            P2 a = v[i], b = v[(i + 1) % n];
+            double lo = std::min(a.y, b.y), hi = std::max(a.y, b.y);
+            if (ym < lo || ym > hi || hi - lo <= EPS) continue;
+            double t0 = (y0 - a.y) / (b.y - a.y), t1 = (y1 - a.y) / (b.y - a.y), tm = (ym - a.y) / (b.y - a.y);
+            cr.push_back({a.x + (b.x - a.x) * tm, a.x + (b.x - a.x) * t0, a.x + (b.x - a.x) * t1});
+        }
+        if (cr.size() < 2) continue;
+        std::sort(cr.begin(), cr.end(), [](const std::vector<double>& p, const std::vector<double>& q) { return p[0] < q[0]; });
+        size_t m = cr.size();
+        emit(minx, minx, cr[0][1], cr[0][2], y0, y1);
+        for (size_t i = 1; i + 1 < m; i += 2) emit(cr[i][1], cr[i][2], cr[i + 1][1], cr[i + 1][2], y0, y1);
+        emit(cr[m - 1][1], cr[m - 1][2], maxx, maxx, y0, y1);
+    }
+    return out;
+}
+
 int main(int argc, char** argv) {
     // ---- scenario knobs (defaults = the reported class of input) --------------------------------
     int    nparts   = 24;
@@ -234,6 +327,10 @@ int main(int argc, char** argv) {
     int    dropinvalid = -1;              // -1 = leave the DLL default (on); 0/1 forces NP_DROP_INVALID
     const char* sizes = 0;                // "WxH,WxH,..." explicit per-sheet sizes, cycled; beats sw/sw2
     const char* dump  = 0;                // if set, write every raw placement here for a byte-exact A/B
+    const char* outline = 0;              // --outline=L|notch|trap (irregular sheet outline on every sheet)
+    const char* sholes  = 0;              // --sholes=circ|rect|both (interior sheet keep-outs)
+    const char* jsonp   = 0;              // --json=PATH (export for the shapely validator)
+    int    nthreads = 0;                  // --threads=N (fit_mode 3 portfolio)
 #if defined(_WIN32) || defined(_WIN64)
     const char* dll = "./nest_physics.dll";
 #else
@@ -281,6 +378,10 @@ int main(int argc, char** argv) {
         else if (const char* v = val("--sizes="))  sizes  = v;         // WxH,WxH,... per sheet (cycled)
         else if (const char* v = val("--dump="))   dump   = v;         // write raw placements for an exact A/B
         else if (const char* v = val("--dll="))    dll    = v;
+        else if (const char* v = val("--outline=")) outline = v;
+        else if (const char* v = val("--sholes="))  sholes  = v;
+        else if (const char* v = val("--json="))    jsonp   = v;
+        else if (const char* v = val("--threads=")) nthreads = atoi(v);
     }
     if (scale <= 0) scale = 1.0;
     pw *= scale; ph *= scale; sw *= scale; sh *= scale;
@@ -325,9 +426,20 @@ int main(int argc, char** argv) {
     if (ut > 0.45 * std::min(chw, chh)) ut = 0.45 * std::min(chw, chh);
     if (clear >= 0.45 * ut) clear = 0.45 * ut;                             // legs must survive the inset
     if (nframes > nparts) nframes = nparts;
+    const bool is_varied = (strcmp(shape, "varied") == 0);
     for (int i = 0; i < nparts; ++i) {
         double w = pw, hh = ph;
         if (is_mixed) { double f = 0.5 + 0.5 * ((i % 4) / 3.0); w = pw * f; hh = ph * (1.5 - 0.5 * ((i % 3) / 2.0)); }
+        if (is_varied) {
+            // per-part kind cycle (frames, if any, come first and are unaffected)
+            int kd = i % 6;
+            is_ell = (kd == 1); is_u = (kd == 2); is_c = (kd == 3);
+            if (kd == 0) { w = 1.6 * pw; hh = 1.6 * ph; }
+            else if (kd == 1) { w = 1.2 * pw; hh = 1.2 * ph; }
+            else if (kd == 3) { w = 0.8 * pw; hh = 0.8 * ph; }
+            else if (kd == 4) { w = 0.5 * pw; hh = 0.5 * ph; }
+            else if (kd == 5) { w = 2.2 * pw; hh = 0.35 * ph; }
+        }
         if (i < nframes) {
             // FRAME: outer 2.4x the nominal part with a centred hole 1.15x it, so a plain pw x ph part
             // fits inside the hole with real clearance (fill_cavities needs child area < hole area and
@@ -442,13 +554,19 @@ int main(int argc, char** argv) {
             p = c + 1;
         }
     }
+    std::vector<Poly> sheetOutline(nsheets);              // TRUE outline (== sheetPoly unless --outline)
+    double maxw_all = sw;
+    for (size_t q = 0; q < sizeList.size(); ++q) maxw_all = std::max(maxw_all, sizeList[q].x);
+    if (sw2 > maxw_all) maxw_all = sw2;
     for (int s = 0; s < nsheets; ++s) {
         double w = (s == 0) ? sw : sw2, hgt = (s == 0) ? sh : sh2;
         if (!sizeList.empty()) { w = sizeList[(size_t)s % sizeList.size()].x; hgt = sizeList[(size_t)s % sizeList.size()].y; }
-        double ox = s * (sw + gap), oy = 0.0;
+        double ox = s * (sw + gap), oy = 0.0;   // unchanged origins (dumps stay comparable)
         sheetOrigin[s] = P2{ox, oy};
         sheetPoly[s] = make_rect(ox, oy, w, hgt);
-        for (const P2& v : sheetPoly[s]) { soxy.push_back(v.x); soxy.push_back(v.y); }
+        sheetOutline[s] = irregular_outline(outline, ox, oy, w, hgt);
+        sovc[s] = (int)sheetOutline[s].size();
+        for (const P2& v : sheetOutline[s]) { soxy.push_back(v.x); soxy.push_back(v.y); }
     }
     // SHEET KEEP-OUTS (--svoid). A centred rectangle covering the given fraction of the sheet's AREA,
     // handed to the ABI in absolute coordinates (the engine translates it into the sheet's local frame).
@@ -469,6 +587,23 @@ int main(int argc, char** argv) {
             sheetVoids[s].push_back(v);
             shc[s] = 1;
         }
+    }
+    // TRUE interior holes (--sholes) and the outline FRAME keep-outs (--outline): both are keep-outs for the
+    // engine; the frame pieces are convex trapezoids, so the convex-clip measurement below stays exact.
+    std::vector<std::vector<Poly> > trueHoles(nsheets);
+    for (int s = 0; s < nsheets; ++s) {
+        double W = sheetPoly[s][2].x - sheetPoly[s][0].x, H = sheetPoly[s][2].y - sheetPoly[s][0].y;
+        double ox = sheetPoly[s][0].x, oy = sheetPoly[s][0].y;
+        if (sholes && (strcmp(sholes, "circ") == 0 || strcmp(sholes, "both") == 0)) {
+            Poly c; double r = 0.12 * std::min(W, H), cx = ox + 0.3 * W, cy = oy + 0.5 * H;
+            for (int k = 0; k < 32; ++k) { double a = 6.283185307179586 * k / 32.0; c.push_back(P2{cx + r * std::cos(a), cy + r * std::sin(a)}); }
+            trueHoles[s].push_back(c);
+        }
+        if (sholes && (strcmp(sholes, "rect") == 0 || strcmp(sholes, "both") == 0))
+            trueHoles[s].push_back(make_rect(ox + 0.7 * W - 0.075 * W, oy + 0.35 * H - 0.1 * H, 0.15 * W, 0.2 * H));
+        for (size_t k = 0; k < trueHoles[s].size(); ++k) { sheetVoids[s].push_back(trueHoles[s][k]); shc[s]++; }
+        std::vector<Poly> frame = frame_keepouts(sheetOutline[s]);
+        for (size_t k = 0; k < frame.size(); ++k) { sheetVoids[s].push_back(frame[k]); shc[s]++; }
     }
     for (int s = 0; s < nsheets; ++s)
         for (size_t k = 0; k < sheetVoids[s].size(); ++k) {
@@ -492,7 +627,7 @@ int main(int argc, char** argv) {
     np.time_budget_secs = 0; np.iter_budget = iters; np.iter_mode = 1;
     np.max_sheets = (maxSheetsArg >= 0) ? maxSheetsArg : nsheets;   // component: nsheet>0 ? nsheet : 6
     np.n_starts = nstarts; np.part_holes_mode = holes; np.pole_max = poles;
-    np.final_compact = compact; np.fit_mode = fitmode;
+    np.final_compact = compact; np.fit_mode = fitmode; np.n_threads = nthreads;
 
     std::vector<double> otx(nparts), oty(nparts), oang(nparts);
     std::vector<int> osid(nparts);
@@ -574,6 +709,18 @@ int main(int argc, char** argv) {
     printf("   per-sheet:");
     for (int s = 0; s < nsheets; ++s) printf(" [%d]=%d", s, per_sheet.count(s) ? per_sheet[s] : 0);
     printf("\n");
+    {   // USED WIDTH per sheet (max x of its parts, sheet-local): the secondary objective of fit 0 / fit 2
+        // (a narrower last sheet leaves a usable remnant). total = sum over used sheets.
+        std::vector<double> uw(nsheets, 0.0);
+        for (int i = 0; i < nparts; ++i) {
+            int sid = placed_sid[i];
+            if (sid < 0) continue;
+            for (const auto& p : world[i]) uw[sid] = std::max(uw[sid], p.x - sheetOrigin[sid].x);
+        }
+        double tot = 0.0, last = 0.0;
+        for (int s = 0; s < nsheets; ++s) if (uw[s] > 0.0) { tot += uw[s]; last = uw[s]; }
+        printf("   USEDWIDTH total=%.1f last=%.1f\n", tot, last);
+    }
 
     // Every threshold below is expressed as a FRACTION of one part's area / one sheet's span, never as an
     // absolute number of model units — otherwise the harness would itself be scale-blind and could not
@@ -654,8 +801,10 @@ int main(int argc, char** argv) {
     // and each used sheet's OWN size — the old "placed x biggest part / sheet-0 area" was meaningless for
     // mixed part or mixed sheet sizes.
     double used_sheet_area = 0.0;
-    for (std::map<int,int>::const_iterator it = per_sheet.begin(); it != per_sheet.end(); ++it)
-        used_sheet_area += poly_area(sheetPoly[it->first]);
+    for (std::map<int,int>::const_iterator it = per_sheet.begin(); it != per_sheet.end(); ++it) {
+        used_sheet_area += poly_area(sheetOutline[it->first]);
+        for (size_t k = 0; k < trueHoles[it->first].size(); ++k) used_sheet_area -= poly_area(trueHoles[it->first][k]);
+    }
     printf("   utilisation on used sheets = %.1f%%\n", 100.0 * placed_area / std::max(1e-30, used_sheet_area));
 
     // ---- HOLE-NESTING ground truth ------------------------------------------------------------------
@@ -733,6 +882,43 @@ int main(int argc, char** argv) {
                    "was built without -DNEST_PHYSICS_BUILD_BENCH=ON and has the seams compiled out.\n");
     }
 
+    if (jsonp) {
+        if (FILE* f = fopen(jsonp, "w")) {
+            auto ring = [&](const Poly& r) {
+                fprintf(f, "[");
+                for (size_t k = 0; k < r.size(); ++k) fprintf(f, "%s[%.17g,%.17g]", k ? "," : "", r[k].x, r[k].y);
+                fprintf(f, "]");
+            };
+            fprintf(f, "{\"n_sheets_used\": %d, \"wall_s\": %.3f, \"fit\": %d, \"seed\": %d, \"clearance\": 0, \"sheets\": [", nsheets_used, (t1 - t0) / 1000.0, fitmode, seed);
+            for (int s2 = 0; s2 < nsheets; ++s2) {
+                fprintf(f, "%s{\"outer\": ", s2 ? "," : ""); ring(sheetOutline[s2]);
+                fprintf(f, ", \"holes\": [");
+                for (size_t k = 0; k < trueHoles[s2].size(); ++k) { if (k) fprintf(f, ","); ring(trueHoles[s2][k]); }
+                fprintf(f, "]}");
+            }
+            fprintf(f, "], \"parts\": [");
+            for (int i = 0; i < nparts; ++i) {
+                fprintf(f, "%s{\"id\": %d, \"sheet\": %d", i ? "," : "", i, placed_sid[i]);
+                Poly loc = local[i];
+                fprintf(f, ", \"local\": "); ring(loc);
+                fprintf(f, ", \"local_holes\": [");
+                if (!holeRing[i].empty()) ring(holeRing[i]);
+                fprintf(f, "]");
+                if (placed_sid[i] >= 0) {
+                    double c = std::cos(oang[i]), sn = std::sin(oang[i]);
+                    double dx = otx[i] + sheetOrigin[placed_sid[i]].x, dy = oty[i] + sheetOrigin[placed_sid[i]].y;
+                    auto xf = [&](const Poly& pp) { Poly w; for (size_t k = 0; k < pp.size(); ++k) w.push_back(P2{c * pp[k].x - sn * pp[k].y + dx, sn * pp[k].x + c * pp[k].y + dy}); return w; };
+                    fprintf(f, ", \"outer\": "); ring(xf(local[i]));
+                    fprintf(f, ", \"holes\": [");
+                    if (!holeRing[i].empty()) ring(xf(holeRing[i]));
+                    fprintf(f, "]");
+                }
+                fprintf(f, "}");
+            }
+            fprintf(f, "]}\n");
+            fclose(f);
+        } else fprintf(stderr, "could not write json %s\n", jsonp);
+    }
     const char* verdict = (ovl > NOISE) ? "OVERLAPPING"
                         : (oob > NOISE) ? "OUT-OF-BOUNDS"
                         : (void_parts > 0) ? "ON-KEEPOUT"

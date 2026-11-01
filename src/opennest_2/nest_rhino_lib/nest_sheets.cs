@@ -318,7 +318,8 @@ namespace nest_rhino_lib
 
         // Inward MARGIN on the NESTING container: each sheet's OUTER boundary shrinks by `margin` (parts keep a
         // setback from the edge), each sheet HOLE grows by `margin` (keep-out regions get clearance). Reuses the
-        // same orientation-agnostic, collinear-merged offset as parts. On failure the original is kept.
+        // same orientation-agnostic offset_closed_polyline as parts, but with its default SHARP/mitre corners
+        // (parts use round joins — see nest_geo.offset_nesting_boundary). On failure the original is kept.
         // Rings the LAST offset_sheet_boundary call could NOT offset (left at their original size, so those
         // sheets give parts no setback from the edge) and the number it attempted. Same reason as
         // nest_geo.last_offset_failures: a failed offset here is a SILENT zero-gap, so callers warn on it.

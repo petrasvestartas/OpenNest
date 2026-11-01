@@ -57,6 +57,22 @@ struct NestConfig {
     // speedup for exact mode. Result is identical to serial (cache is a pure (source,rotation) map;
     // GA trajectory depends only on fitness + RNG, not eval order).
     bool parallelPopulation = false;
+
+    // Smart (part-aware) orientation candidates. Off = the legacy grid behaviour, byte-identical.
+    // On: every source part carries its OWN sensible angles (min-area bounding rectangle and
+    // longest-edge alignment, each with quarter turns — NFP::ownAngles, computed once at context
+    // init on the offset outline). Placement then tries [gene, own angles, (tilts), grid angles
+    // nearest the gene] instead of a fixed 45-degree sweep from the gene, and the GA draws genes
+    // from the own set half of the time. Fixes long plates that only fit near 0/180 being left
+    // unplaced whenever the grid sweep misses that narrow window. Parts with a rotationCount
+    // override (grain) are unaffected: they stay on their own N-step grid.
+    bool smartRotations = false;
+    // Upper bound on candidate orientations per placement in smart mode. The working count is
+    // max(8, |own|+4); this cap can only trim GRID fill-ins — the gene and every own/tilt angle
+    // are always evaluated.
+    int rotationCandidateCap = 12;
+    // Smart mode only: also try theta +/- tilt (degrees) for every own angle theta (0 = off).
+    double rotationTiltDeg = 0;
 };
 
 } // namespace nest

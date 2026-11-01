@@ -1,0 +1,285 @@
+OPENNEST FIVE-SHEET RESEARCH HANDOFF
+Snapshot: 2026-10-18. Repository: C:\pc\3_code\OpenNest.
+
+CURRENT PROGRESS (supersedes the earlier experiment snapshot below)
+Latest completed result: 56 of 58 parts on five sheets, including all 26 hard
+parts. Parts 30 and 43 remain unplaced. The 197-column pool has not produced a
+complete solution. Source-polygon minimum pair distance is 10.0279851994 mm;
+minimum margin is 15.0014057927 mm. Completion validation remains false.
+All 52 sheetcover tests pass, as reported by root after the latest changes.
+All experimental jobs have finished. The complete five-sheet target remains unmet.
+
+The composed relocation core succeeded in39.3s with strict source validation.
+out/rea_hard5_confirmed/candidates.json contains166 unique actual columns;
+hard_cover_certificate.json establishes a five-sheet cover of all26 hard parts,
+LP=5.0. Its five selected layouts cover36 total parts; small fillers remain.
+This is progress, NOT a complete58-part solution. General reproduction:
+python -I tools/bench3dm/sheetcover_relocate.py --instance tools/bench3dm/out/job1_fixed_round/instance.json --pool tools/bench3dm/out/rea_constrained_run/candidates.json --plan tools/bench3dm/out/rea_constrained_proposals/plan.json --out tools/bench3dm/out/rea_composed_reproduced --max-plans 1
+The computed composed plan is out/rea_composed_relocation/plan.json.
+Five joint-fill offers were prepared under out/rea_jointfill_composed and run
+under out/rea_jointfill_composed_run. All five have optional fillers; no core-only
+job was launched. The new core plus all seven assigned fillers completed; one
+other complete11-part result duplicates an existing part set. Three other jobs
+returned strict-valid partial subsets, each missing one mandatory core member.
+The resulting pool has171 columns; constrained selection remains43/58.
+Warm driver now supports --required-parts (JSON list or certificate hard_parts),
+preventing small-part area gain from evicting hard coverage. Checkpoints record
+this constraint and reject incompatible resume. Four warm tests pass, including
+a synthetic case where unconstrained selection sacrifices a required hard part.
+No-native constrained selection of the initial joint pool covers43/58 with all
+hard parts retained, at out/rea_jointfill_hard_baseline. Its missing15 parts are
+small; min source-polygon gap10.0128535 and margin15.0000086. It is incomplete.
+Small warm insertion round1 ended48/58. Managed/native agent's fixed-obstacle
+insertion produced52/58 at out/rea_frozen_small, preserving incumbent transforms;
+strict cavity insertion then produced53/58 at out/rea_frozen_cavities. Their
+validated columns were merged, never accepted solely on native quality flags.
+Warm round2 ended54/58, retaining all26 hard parts, missing30,33,36,43. Source
+polygon minimum gap10.0279851994 mm and margin15.0155851154 mm. Its output is
+out/rea_small_warm_round2. No complete58-part result has been established.
+Round3 finished at out/rea_small_warm_round3, pool196 after one addition.
+Its accepted insertion adds33, reaching55/58 with30,36,43 remaining.
+Root's cavities-only pass on that layout found no further insertion.
+Count-first union selection is opt-in: each covered part rewards1 plus normalized
+area with TOTAL area reward<=0.5. Thus an extra part always outranks area, while
+equal counts prefer more area. Default area objective remains unchanged.
+Round3 evaluates all4missing x5recipients (20jobs), cap45,5processes x12native.
+Initial command:
+python -I tools/bench3dm/sheetcover_warm.py --instance tools/bench3dm/out/job1_fixed_round/instance.json --pool tools/bench3dm/out/rea_jointfill_union/input_candidates.json --required-parts tools/bench3dm/out/rea_hard5_confirmed/hard_cover_certificate.json --dll src/nest_physics_cpp/build_pool_run/nest_physics.dll --out tools/bench3dm/out/rea_small_warm --rounds 1 --max-jobs 15 --workers 5 --gens 4000 --starts 1 --cap 45 --seed 84000 --env NP_WARM_WORKERS=12
+Round3 command:
+python -I tools/bench3dm/sheetcover_warm.py --instance tools/bench3dm/out/job1_fixed_round/instance.json --pool tools/bench3dm/out/rea_small_warm_round3/input_candidates.json --required-parts tools/bench3dm/out/rea_hard5_confirmed/hard_cover_certificate.json --coverage-objective count --dll src/nest_physics_cpp/build_pool_run/nest_physics.dll --out tools/bench3dm/out/rea_small_warm_round3 --rounds 1 --max-jobs 20 --workers 5 --gens 4000 --starts 1 --cap 45 --seed 84200 --env NP_WARM_WORKERS=12
+Bounded adaptive round4 finished56/58 by adding36. Only30 and43 remain;
+all26hard are retained, source min gap10.0279851994 and margin15.0014057927.
+Its15jobs used90s cap and8000iterations. Exact seed layouts and every returned candidate are saved under
+jobs_s84300_r0.json and raw_candidates. Command:
+python -I tools/bench3dm/sheetcover_warm.py --instance tools/bench3dm/out/job1_fixed_round/instance.json --pool tools/bench3dm/out/rea_small_warm_round3/candidates.json --required-parts tools/bench3dm/out/rea_hard5_confirmed/hard_cover_certificate.json --coverage-objective count --dll src/nest_physics_cpp/build_pool_run/nest_physics.dll --out tools/bench3dm/out/rea_small_warm_round4 --rounds 1 --max-jobs 15 --workers 5 --gens 8000 --starts 1 --cap 90 --seed 84300 --env NP_WARM_WORKERS=12
+Four ownership alternatives were regenerated from56 (the older55-based six-job
+manifest is stale). All four completed without a successful repair;56/58 remains.
+They ended at the iteration limit after47-64s, not outercap cancellation, with
+reported failed strip widths6055.22,6283.51,6255.44,6240.11 versus5980 required.
+Execution used explicit alternative partitions:
+python -I tools/bench3dm/sheetcover_warm_manifest.py --instance tools/bench3dm/out/job1_fixed_round/instance.json --pool tools/bench3dm/out/rea_small_warm_round4/candidates.json --jobs tools/bench3dm/out/rea_small_ownership_round4/jobs.json --dll src/nest_physics_cpp/build_pool_run/nest_physics.dll --out tools/bench3dm/out/rea_small_ownership_round4_run --workers 3 --native-workers 12 --max-jobs 4 --cap 90 --gens 4000 --seed 85100
+The stale55-based run was stopped before any accepted outcome. The new runner
+checks full alternative partitions before packing and verifies preservation of
+all56 existing parts plus incoming after complete strict warm success. It then
+merges every changed sheet and reselects with hard requirements and count-first.
+Latest completed outputs from this driver branch are
+out/rea_small_ownership_round4_run/{placements.json,strict_metrics.json,result.svg}.
+They retain56/58, allhard26, missing30/43; passed_sampled_polygons=false because
+completion is required. Root's four all-mandatory cold joint alternatives from
+out/rea_small_cold_joint/jobs.json all failed their complete requests, missing
+2, 2, 2 and 3 mandatory parts; some also failed geometry checks. No full result
+was accepted, and the pool remained at 197 columns.
+
+The two joint two-sheet cold attempts at out/rea_two_sheet also failed, leaving
+4 and 3 requested parts unplaced. The two warm attempts at out/rea_two_sheet_warm
+failed to fit the required combined width; neither produced accepted columns.
+These experiments therefore do not establish a complete two-sheet repair.
+The native wide-sheet contract test passed: three squares, two warm incumbents,
+one incoming part, and a full-height separator were independently checked for
+sheet containment, separator avoidance and pair intersections. See
+out/rea_two_sheet_warm/synthetic_contract.txt and test_wide_warm.py. No engine
+change was required for these two-sheet experiments.
+
+Root's final precision experiment is recorded at out/rea_small_warm_precise:
+ten warm jobs, 90-second cap, NP_SIMPL_MAXDEV=0.05 explicitly opted in. This
+changes the existing simplification tolerance for this run only; other solver
+defaults remain unchanged. All ten returned rc1 without an accepted candidate;
+the final result remains56/58, missing30/43, with the same validated geometry.
+Exact reproduction command:
+python -I tools/bench3dm/sheetcover_warm.py --instance tools/bench3dm/out/job1_fixed_round/instance.json --pool tools/bench3dm/out/rea_small_warm_round4/candidates.json --dll src/nest_physics_cpp/build_pool_run/nest_physics.dll --out tools/bench3dm/out/rea_small_warm_precise --required-parts tools/bench3dm/out/rea_hard5_confirmed/hard_cover_certificate.json --coverage-objective count --rounds 1 --max-jobs 10 --workers 5 --gens 8000 --starts 1 --cap 90 --seed 86000 --env NP_WARM_WORKERS=12 --env NP_SIMPL_MAXDEV=0.05
+Final progress.json, raw_candidates and strict_metrics.json retain all outcomes.
+Failed-width telemetry is shared native stderr; under parallel execution it
+cannot reliably be associated to a job. rc1 returns original seed placements,
+not the failed geometry. Preserve run.log and per-job quality/cancel records.
+
+EARLIER PRE-HARD-COVER SNAPSHOT AND LIMITS
+The requested complete 58-part five-sheet solution has NOT been achieved.
+Earlier completed coordinated pool: tools/bench3dm/out/rea_coordinated_run/candidates.json,
+163 source-polygon-checked columns. Its placements.json contains 56/58 parts on
+five sheets, missing parts 7 and 18. strict_metrics.json reports no geometric
+violations among placed parts, minimum pair distance 10.013988650322641 mm and
+minimum margin 15.004755341259976 mm. passed_sampled_polygons=false because
+two parts remain unplaced. Required clearance is 10 mm and margin is 15 mm.
+lp-certificate.json gives fractional hard-cover bound 5.236842105263157.
+This excludes a five-sheet hard-part cover USING THIS FINITE POOL ONLY. It is
+not an impossibility proof for the geometry or for an enlarged candidate pool.
+
+The original evaluation rings target nominal 0.005 mm sagitta. No verified
+Hausdorff bound against analytic CAD curves was established. These numbers
+are distances between source evaluation polygons, not exact curve certificates.
+
+OWNERSHIP AND SCOPE
+The repository already contained substantial uncommitted user development,
+including PackerNp, native solver work, prior groupfill experiments and caches.
+No clean baseline diff was available to attribute every existing line. Preserve
+that work. This session extended sheetcover.py and added the repair, warm,
+exchange, hybrid, transfer, polish, strict validation and planning scripts below.
+Root/native agent added the opt-in warm export and adapter, and bounded native
+worker-pool improvements. CNS agent added pricing/bin planning, manifest and
+salvage tooling. Those additions do not imply ownership of preexisting files.
+No Grasshopper deployment, installed-plugin replacement, commit or merge is
+claimed. Explicit experimental DLL paths are used throughout. NestFab reference
+placements were not inserted into these general search pools. No geometry IDs
+are embedded as solver rules; IDs in saved manifests describe this input only.
+NestFab REA findings are separately recorded under
+C:\Users\Petras\Documents\NestFab-decompiled; this handoff covers OpenNest work.
+
+GENERAL DRIVER CHANGES
+sheetcover.py: candidate selection now optimizes union coverage, rather than
+requiring candidates to be mutually disjoint. Binary coverage variables count
+each part once. Deterministic assignment removes duplicated placements from
+selected sheets; deleting parts preserves feasibility. Coverage/area are
+recomputed from actual assigned parts. Unknown IDs and invalid budgets are
+handled. Capped group selection prioritizes scarce-part coverage and reports
+actual post-truncation counts. --selection-only exports without repacking;
+--generate-only checkpoints candidates without later selection/repacking.
+
+sheetcover_repair.py: finite, resumable single-sheet offers with incoming parts
+mandatory and optional small fillers. Singles are interleaved across missing
+parts and recipients before pairs; bounded pair quota is optional. Logs retain
+raw/native placements even when rejected. Checkpoints record instance hash,
+actual candidates, missing parts, time/cancellation and rejection reasons.
+sheetcover_exchange.py: general two-sheet large-part transfer/swap proposals.
+A complete exchange requires both sides and preserved original union. Valid
+partial actual subsets are labeled separately and can become pool columns.
+sheetcover_hybrid.py: reuse a complete exchange side; warm-repair only its
+failed partner from documented baseline transforms. No duplicated cold work.
+sheetcover_transfer.py: oriented length/aspect/area ranks elongated-part
+transfers; donor removal is feasible by deletion, recipient packs incoming and
+transferred parts jointly. --native-seconds enables time mode; --replay-jobs
+reuses exact offers. Default iteration mode remains available.
+sheetcover_warm.py: finite missing-part x selected-sheet insertion offers,
+incumbent transforms retained as movable seeds. rc=0 plus complete expected
+part set plus independent geometry checks is required. rc=1 is never success.
+
+sheetcover_pricing.py: fractional-cover dual prices rank new hard cores. Later
+LP iterations may use hypothetical columns but original certificate remains
+separate; proposed jobs are not inserted into the actual pool without packing.
+sheetcover_binplan.py: coordinated exact-once hard-part partitions with area
+and count constraints; cached failed attempts are soft evidence, not proofs.
+sheetcover_manifest.py: bounded manifest execution and per-result checkpoints.
+sheetcover_salvage.py: preserve strict-valid actual subsets from incomplete jobs.
+sheetcover_frozen.py (root/native agent): existing fixed-obstacle native fill and
+cavity insertion with independent solve/source validation of actual results.
+sheetcover_constrained.py: retain supported cores and enumerate a single-plate
+transfer enabling a cached residual partition; actual supported columns are
+reused and only unsupported cores are emitted as packing jobs.
+sheetcover_relocate.py: compose bounded disjoint relocations into actually
+supported destinations, emitting only unsupported source cores for packing.
+sheetcover_ownership.py: prepare optional-part ownership transfers already
+supported by actual columns, freeing a source before warm missing-part insertion.
+Each job includes incumbent_partition. A consumer must retain that partition;
+ordinary first-owner assignment can otherwise put the transferred part back on
+the source and erase the intended free space. Six proposals are saved in
+out/rea_small_ownership/jobs.json with adjacent provenance; these older55-based
+jobs are superseded by four jobs in out/rea_small_ownership_round4/jobs.json.
+sheetcover_warm_manifest.py consumes these explicit partitions, validates both
+source and destination geometries and exact preserved union, and checkpoints
+all actual columns only after the whole proposed partition passes. Two runner
+tests reject missing, duplicate and colliding destination parts. Five ownership
+planner tests passed per CNS agent.
+sheetcover_jointfill_prepare.py: non-native preparation of disjoint core plus
+optional-filler offers. Uses demonstrated co-occurrence and area balancing,
+preferring offered load <=90%. Reports unsupported cores explicitly. Supplied
+pool membership is evidence only; the preparer does not independently validate
+geometry. Actual pack outputs still require the common gate.
+
+VALIDATION AND POLISH
+sheetcover_repair.validate_candidate checks solve polygons and, when a real
+instance is available, source evaluation polygons. validate_source_candidate
+checks the actual subset with quantity one. Mandatory membership, IDs, finite
+transforms, holes, intersections, sheet inset and clearance are checked.
+sheetcover_polish.py performs bounded translations (normally <=0.5 mm) and
+accepts only independently validated results. Source-failure correction adds
+small positive padding rather than relaxing clearance/margin. A rejected raw
+transfer with gap9.99998512696 and margin14.9996699433 stayed excluded because
+bounded correction failed. Engine quality flags alone are not acceptance.
+validate_strict.py separately checks all source-polygon pairs, including parts
+inside holes, margin15, clearance10, completion and optional sheet limit.
+Distance tolerance is1e-6 mm; overlap-area tolerance is1e-8 mm2. Legacy
+evaluate.py thresholds were not weakened or replaced. Optional external curve
+error bounds are conditional and are not verified by the strict script.
+
+NATIVE API
+src/nest_physics_cpp/nest_physics_capi.h/.cpp exports np_nest_warm_one.
+It follows np_nest arguments, with warm_present, warm_tx, warm_ty, warm_angle
+inserted after part_rotations. Seeds use public sheet-local output coordinates.
+Exactly one sheet; offered incumbents remain movable; all offered parts must
+fit for success. rc0=complete clean repair; rc1=no repair/cancel; rc2=bad input.
+Fallback preserves seed entries and leaves incoming parts unplaced. Fallback
+quality is unverified, not clean. Existing exports and NpParams layout remain.
+tools/bench3dm/engines.py solve_np_warm binds lazily, validates finite seeds and
+unknown IDs, and supports part IDs or (part ID,copy index). Pool drivers require
+quantity one. NP_WARM_WORKERS limits warm native threads; NP_WORKERS controls
+ordinary single-start pool parallelism; NP_STARTS_WORKERS remains multistart.
+Root reported 25 native deterministic dump gates with zero dump differences.
+
+COMPLETED EXPERIMENTS
+General cold repair improved coverage to56/58. Diversity generation completed
+76 candidates. Large-plate exchange produced no complete pair, but valid
+partial columns enlarged pool to136. Two warm failed-partner repairs also
+failed. Ten elongated transfers produced no complete mandatory group, but
+nine strict-valid actual subsets enlarged pool to145. Their iteration-mode
+plain runs consumed the outer time cap before priority retries could run.
+Time-mode165 seconds inside outercap180 was used for later bounded pricing.
+Ten priced cores failed complete requests; actual subsets were salvaged.
+Checked combined pool154 had LP5.2391304348. Nine coordinated jobs then gave
+four complete cores and five valid partials, reaching163 and LP5.2368421053.
+Neither original coordinated partition is complete. Filling isolated cores
+cannot solve the remaining hard-part compatibility problem.
+
+HISTORICAL CONSTRAINED BRANCH AND JOINT-FILL PREPARATION
+out/rea_constrained_proposals/plan.json records a computed five-core partition.
+Four cores already have actual supporting columns. Only the new core in
+jobs.json needs validation. Provenance and the enumeration rule are in plan.json.
+Cold output: out/rea_constrained_run; log: out/rea_constrained_proposals/run.log.
+The original larger core failed. Composed relocations subsequently succeeded,
+as described in CURRENT PROGRESS. All paths here are under tools/bench3dm.
+out/rea_jointfill_prepared/jobs.json offers all58 parts exactly once in five
+jobs: core mandatory, other parts optional. Offered solve-area fractions are
+.89218,.83713,.83652,.83846,.89994. preparation.json currently says
+all_cores_supported=false. Preparation is NOT a packing result. Reprepare with
+the successful enlarged pool before execution. Never use --core-only when
+running these joint-fill jobs. Optional fillers may be dropped; final union
+selection and strict completion must still show58/58 and <=5 sheets.
+
+REPRODUCIBLE COMMANDS (PowerShell, from repository root)
+Each line below is a complete command. Use fresh output directories for reruns.
+The original instance is tools/bench3dm/out/job1_fixed_round/instance.json.
+Cached group evidence is tools/bench3dm/out/groupfill_np_shards/base_cache.json
+(2828 entries,2556 feasible; cached feasibility alone does not prove a new core).
+
+python -I -m unittest discover -s tools/bench3dm -p "test_sheetcover*.py"
+python -I -m unittest discover -s tools/bench3dm -p "test_validate_strict.py"
+Root last ran30 sheetcover tests together. Two new joint-fill preparation tests
+passed separately afterward. Strict-validator tests cover9.98 clearance failure,
+14.99 margin failure and valid hole nesting.
+
+python -I tools/bench3dm/validate_strict.py --instance tools/bench3dm/out/job1_fixed_round/instance.json --placements tools/bench3dm/out/rea_coordinated_run/placements.json --out tools/bench3dm/out/rea_handoff_check/strict_metrics.json --max-sheets 5
+Expected exit1:56/58 incomplete, despite no placed-geometry violations.
+
+python -I tools/bench3dm/sheetcover_warm.py --instance tools/bench3dm/out/job1_fixed_round/instance.json --pool tools/bench3dm/out/rea_coordinated_run/candidates.json --dll src/nest_physics_cpp/build_pool_run/nest_physics.dll --out tools/bench3dm/out/rea_handoff_selection --rounds 0 --k 5
+This checks/selects/exports the supplied pool without running native packing.
+
+python -I tools/bench3dm/sheetcover_binplan.py --instance tools/bench3dm/out/job1_fixed_round/instance.json --pool tools/bench3dm/out/rea_pricing_salvage/candidates.json --cache tools/bench3dm/out/groupfill_np_shards/base_cache.json --out tools/bench3dm/out/rea_handoff_binplan --plans 2
+
+python -I tools/bench3dm/sheetcover_pricing.py --instance tools/bench3dm/out/job1_fixed_round/instance.json --pool tools/bench3dm/out/rea_exchange_salvage/candidates.json --cache tools/bench3dm/out/groupfill_np_shards/base_cache.json --out tools/bench3dm/out/rea_handoff_pricing --jobs 10 --target .86 --cap 180 --gens 16000 --starts 1
+
+Exact earlier constrained cold command:
+python -I tools/bench3dm/sheetcover_manifest.py --instance tools/bench3dm/out/job1_fixed_round/instance.json --pool tools/bench3dm/out/rea_coordinated_run/candidates.json --jobs tools/bench3dm/out/rea_constrained_proposals/jobs.json --out tools/bench3dm/out/rea_constrained_run --dll src/nest_physics_cpp/build_pool_run/nest_physics.dll --workers 3 --native-workers 12 --native-seconds 165 --core-only --salvage-partials
+Only one job is in this manifest. Its packing cap180/gens16000/starts1 are
+stored in jobs.json. Native mode165 permits retry scheduling before cap180.
+
+Reproduce the constrained proposal without native packing:
+python -I tools/bench3dm/sheetcover_constrained.py --instance tools/bench3dm/out/job1_fixed_round/instance.json --pool tools/bench3dm/out/rea_coordinated_run/candidates.json --plans tools/bench3dm/out/rea_coordinated_proposals/plans.json --cache tools/bench3dm/out/groupfill_np_shards/base_cache.json --out tools/bench3dm/out/rea_constrained_reproduced
+CNS verified234 enumerated alternatives and the same single unsupported core.
+
+After a new core succeeds, prepare against its checkpoint pool:
+python -I tools/bench3dm/sheetcover_jointfill_prepare.py --instance tools/bench3dm/out/job1_fixed_round/instance.json --pool tools/bench3dm/out/rea_constrained_run/candidates.json --plan tools/bench3dm/out/rea_constrained_proposals/plan.json --out tools/bench3dm/out/rea_jointfill_ready --cap 180 --gens 16000 --starts 1
+Require all_cores_supported=true before interpreting the plan as feasible cores.
+If the warm branch succeeds instead, use its merged validated pool here.
+
+Bounded joint-fill command, prepared but NOT launched by this handoff:
+python -I tools/bench3dm/sheetcover_manifest.py --instance tools/bench3dm/out/job1_fixed_round/instance.json --pool tools/bench3dm/out/rea_constrained_run/candidates.json --jobs tools/bench3dm/out/rea_jointfill_ready/jobs.json --out tools/bench3dm/out/rea_jointfill_run --dll src/nest_physics_cpp/build_pool_run/nest_physics.dll --workers 5 --native-workers 12 --native-seconds 165 --salvage-partials
+Re-run validate_strict against resulting placements.json. Only a complete,
+strict-valid result is success. The true-curve approximation limitation remains.

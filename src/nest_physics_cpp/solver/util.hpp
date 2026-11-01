@@ -43,6 +43,13 @@ inline bool g_iter_mode = false;
 // Best-of-N worker count for the relaxer/compressor. 0 = auto (use all hardware cores). Set once
 // before a solve (the exe exposes it as a CLI arg; the DLL leaves it 0 => all cores).
 inline unsigned g_n_workers = 0;
+// Per-THREAD worker override (fit_mode 3 portfolio, solver/group_fill.hpp): each portfolio task runs on its own
+// thread with its own best-of-N worker count so the total thread count stays at the caller's n_threads. 0 => use
+// g_n_workers (every other path: never set => byte-identical).
+inline thread_local unsigned g_n_workers_tl = 0;
+// Per-THREAD quiet flag: suppresses the fit-1 priority driver's progress lines on fit_mode 3 portfolio threads
+// (print-only; default false => unchanged output everywhere else).
+inline thread_local bool g_quiet_tl = false;
 
 // Max surrogate poles per part. 0 = default (48). The overlap proxy is O(poles^2), so a smaller cap
 // = faster per-eval at the cost of a coarser separation gradient (quality must be re-checked).

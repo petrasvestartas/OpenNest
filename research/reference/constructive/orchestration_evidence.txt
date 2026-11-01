@@ -1,0 +1,89 @@
+Managed orchestration evidence for NestFab v3
+Recorded 2026-10-19. Static decompilation observations, not a runtime trace.
+
+Evidence corpus
+Root: C:\Users\Petras\Documents\NestFab-decompiled\
+NestFab executable member evidence:
+ev_a6293dcc692324c6a6e6068c447ecc47eaaccaeb623df208c1e721e0d32b4b40
+MercuryManaged member evidence:
+ev_8df13e1bed8a650386c81d31e1f09e9295fdf488d5504af03284557f6a8e3348
+See evidence-index.json and managed-solver-findings.txt in that corpus.
+The following paths are relative to this corpus root. Line numbers refer to
+the saved decompiled files, not original proprietary source files.
+
+Observed normal Ribbon dispatch from the Ultra-associated flag to CNS
+
+managed\NestFab\ControlsEnhanced\RibbonNestControl.cs:
+931-934: StandardMode changes license enum values _0003/_0004 to _0002.
+940-943: TrialUltra changes the enum to _0003.
+946-948: enum _0003 or _0004 sets boolean field m__0003 true.
+3567: the general nesting branch constructs MercuryEnhanced.
+3574-3580: both configuration calls pass m__0003 as positional parameter
+_0012 and pass _0013:true. The true branch supplies four separate edge gaps;
+the false branch repeats a single edge-gap setting for all four edges.
+3582: invokes MercuryEnhanced._0002() to dispatch the configured calculation.
+
+managed\NestFab\AtlasManaged\MercuryEnhanced.cs:
+521: configuration signature declares bool _0012 and bool _0013.
+559: this._0011 = _0012; 560: this._0012 = _0013.
+641-656: when field _0011 is true, dispatch sets flag=false and calls _000E().
+The optional preceding _0007() call occurs only when field _0012 is false;
+the normal Ribbon calls above explicitly supplied true for that field.
+1977-1997: _000E() prepares the problem/global nesting angle, then calls _000F().
+2000-2005: _000F() constructs ManagedCNS and ProblemDefinitionNET.
+2011: passes the configured problem, part spacing, edge spacings, repeat
+preference and selected runtime through the managed CNS registration proxy.
+2026-2028: UseIntelligentMinimizeXOnCNS controls a further CNS objective option.
+2033-2041: selects and starts a computation thread for the managed CNS object.
+
+Inference supported by that chain: the ordinary Ribbon general-nesting path
+with the Ultra-associated license/trial flag selects CNS. This narrows the
+earlier report's unresolved UI-to-native-engine mapping. It does not establish
+that every UI operation or every Ultra mode uses CNS: special single-part and
+other branches precede this general branch. Numeric edition enum names remain
+obfuscated. No license state was changed, and no trial operation was invoked.
+
+Observed problem semantics
+
+managed\NestFab\AtlasManaged\MercuryEnhanced.cs:532-554 clones the problem,
+retains the global nesting angle, and records PartSpacing plus separate
+SheetSpacingLeft, Right, Top and Bottom. These are independent input settings.
+
+managed\MercuryManaged\MercuryManaged\ProblemDefinitionNET.cs:
+132-139 handles FixedAngle and AvailableAngles.
+224-254 handles an explicit AngleList instead of regular angular increments.
+260 onward combines per-part and global nesting orientation.
+310 passes geometry ID, quantity, angle vector, mirror flag, priority, placed
+state, sheet ID, angle increment, tilt angle and filler quantity to AddPart.
+Therefore quantity, optional filler copies and permitted orientations are
+separate data; a reconstruction should not silently replace them with defaults.
+
+managed\MercuryManaged\MercuryManaged\ManagedCNS.cs:
+235: RegisterProblem accepts partSpacing, four edge spacings, repeatPreference
+and runTime. It registers stock and parts against a CNS order.
+357: CNS_LaunchLocalComputation(m_Order, m_RunTime) starts native computation.
+1035: CNS_SetInterpartGap registers the requested interpart clearance.
+1155: CNS_AddPart receives the requested mandatory quantity.
+1278-1279 and 1367-1370 register orientation/reflection permissions.
+1515: CNS_GetNestedPart retrieves native placements for managed result assembly.
+Result assembly converts native angle units, restores the global orientation,
+accounts for reflection and reconstructs multiplicity/unplaced/filler results.
+
+Limits and implications for the independent implementation
+
+These files are obfuscated decompiler output with delegate proxies, repeated
+recovered names and artificial control flow. They are evidence of shipped
+behavior, not a buildable original project. The observations do not establish
+all native search heuristics, undocumented parameter values, commercial preset
+equivalence or runtime performance. The separate constructive solver is a new
+implementation; there is no claim that it reproduces the original Ultra result.
+
+The new native benchmark operates only on pre-offset solve geometry. That is
+an explicit adapter convention, not evidence that original CNS uses that same
+internal representation. Source geometry clearance and sheet margins must be
+checked independently after native output. Quantized pair collision predicates
+can differ from the original floating-point polygons at sub-grid distances.
+The stock-boundary rounding counterexample (width 4.000004 on stock width 4,
+scale 100000) was reproduced and independently rejected; the geometry owner
+subsequently added original-double bounds and inward stock lattice limits.
+That fix does not remove the need for independent pair/source validation.

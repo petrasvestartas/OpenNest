@@ -1,0 +1,290 @@
+{
+  "status": "REVIEWABLE_MIGRATION_MAP_NO_CODE_OR_BINARY_RENAME",
+  "recorded_utc": "2026-10-23T06:48:15.755825+00:00",
+  "instructions": "AGENTS.md: maintainedsource/namespaces/targets/filenames/interfaces/UI/futureoutputs useOpenNest; preserve thirdparty notices/provenance/immutableevidence; incremental references+validation; preserve unrelated changes.",
+  "git_snapshot": {
+    "modified_tracked": 39,
+    "untracked_entries": 7,
+    "entries": [
+      {
+        "status": " M",
+        "path": "CMakeLists.txt"
+      },
+      {
+        "status": " M",
+        "path": "docs/components/geometry.md"
+      },
+      {
+        "status": " M",
+        "path": "src/nest_physics_cpp/README.md"
+      },
+      {
+        "status": " M",
+        "path": "src/nest_physics_cpp/bench/np_bench.cpp"
+      },
+      {
+        "status": " M",
+        "path": "src/nest_physics_cpp/geometry/scene.hpp"
+      },
+      {
+        "status": " M",
+        "path": "src/nest_physics_cpp/geometry/shape.hpp"
+      },
+      {
+        "status": " M",
+        "path": "src/nest_physics_cpp/geometry/shape_ops.hpp"
+      },
+      {
+        "status": " M",
+        "path": "src/nest_physics_cpp/geometry/strip_packing.hpp"
+      },
+      {
+        "status": " M",
+        "path": "src/nest_physics_cpp/nest_physics_capi.cpp"
+      },
+      {
+        "status": " M",
+        "path": "src/nest_physics_cpp/nest_physics_capi.h"
+      },
+      {
+        "status": " M",
+        "path": "src/nest_physics_cpp/solver/driver.hpp"
+      },
+      {
+        "status": " M",
+        "path": "src/nest_physics_cpp/solver/evaluator.hpp"
+      },
+      {
+        "status": " M",
+        "path": "src/nest_physics_cpp/solver/optimizer.hpp"
+      },
+      {
+        "status": " M",
+        "path": "src/nest_physics_cpp/solver/overlap.hpp"
+      },
+      {
+        "status": " M",
+        "path": "src/nest_physics_cpp/solver/sampler.hpp"
+      },
+      {
+        "status": " M",
+        "path": "src/opennest_2/grasshopper/component_nest.cs"
+      },
+      {
+        "status": " M",
+        "path": "src/opennest_2/grasshopper/nest_options_catalog.cs"
+      },
+      {
+        "status": " M",
+        "path": "src/opennest_2/nest_lib/NestPhysicsWrapper/NestPhysicsWrapper.cs"
+      },
+      {
+        "status": " M",
+        "path": "src/opennest_2/nest_lib/NfpNestWrapper/NfpNestWrapper.cs"
+      },
+      {
+        "status": " M",
+        "path": "src/opennest_2/nest_lib/Rhino_Implementation/rhino_example_cpp.cs"
+      },
+      {
+        "status": " M",
+        "path": "src/opennest_2/nest_rhino_lib/curve_sampling.cs"
+      },
+      {
+        "status": " M",
+        "path": "src/opennest_2/nest_rhino_lib/nest_geo.cs"
+      },
+      {
+        "status": " M",
+        "path": "src/opennest_2/nest_rhino_lib/nest_geo_util.cs"
+      },
+      {
+        "status": " M",
+        "path": "src/opennest_2/nest_rhino_lib/nest_sheets.cs"
+      },
+      {
+        "status": " M",
+        "path": "src/opennest_2/nest_rhino_lib/polygon_offset.cs"
+      },
+      {
+        "status": " M",
+        "path": "src/opennest_2/opennest_2.csproj"
+      },
+      {
+        "status": " M",
+        "path": "src/opennest_cpp/bench/nfp_bench.cpp"
+      },
+      {
+        "status": " M",
+        "path": "src/opennest_cpp/src/GeneticAlgorithm.cpp"
+      },
+      {
+        "status": " M",
+        "path": "src/opennest_cpp/src/GeneticAlgorithm.h"
+      },
+      {
+        "status": " M",
+        "path": "src/opennest_cpp/src/NFP.h"
+      },
+      {
+        "status": " M",
+        "path": "src/opennest_cpp/src/NestConfig.h"
+      },
+      {
+        "status": " M",
+        "path": "src/opennest_cpp/src/NestingContext.cpp"
+      },
+      {
+        "status": " M",
+        "path": "src/opennest_cpp/src/NestingEngine.cpp"
+      },
+      {
+        "status": " M",
+        "path": "src/opennest_cpp/src/NfpWorker.cpp"
+      },
+      {
+        "status": " M",
+        "path": "src/opennest_cpp/src/NfpWorker.h"
+      },
+      {
+        "status": " M",
+        "path": "src/opennest_cpp/src/capi/nfp_nest_capi.cpp"
+      },
+      {
+        "status": " M",
+        "path": "src/opennest_cpp/src/capi/nfp_nest_capi.h"
+      },
+      {
+        "status": " M",
+        "path": "src/opennest_gh2/components/OpenNestCollisionComponent.cs"
+      },
+      {
+        "status": " M",
+        "path": "tools/nest_geo_harness/Program.cs"
+      },
+      {
+        "status": "??",
+        "path": "AGENTS.md"
+      },
+      {
+        "status": "??",
+        "path": "src/nest_constructive_cpp/"
+      },
+      {
+        "status": "??",
+        "path": "src/nest_physics_cpp/solver/bin_driver.hpp"
+      },
+      {
+        "status": "??",
+        "path": "src/opennest_2/grasshopper/ConstructiveRun.cs"
+      },
+      {
+        "status": "??",
+        "path": "src/opennest_2/grasshopper/OpenNestConstructiveComponent.cs"
+      },
+      {
+        "status": "??",
+        "path": "src/opennest_2/nest_lib/NestConstructiveWrapper.cs"
+      },
+      {
+        "status": "??",
+        "path": "tools/bench3dm/"
+      }
+    ],
+    "scope": "Read-only status; no reset/stash/stage/commit. Existing user changes remain in place."
+  },
+  "current_layout": {
+    "top_cmake": "CMakeLists.txt: project(opennest NONE), ExternalProject nfp_nest,nest_physics,nest_spectral plus optional nest_constructive.",
+    "current_constructive": "src/nest_constructive_cpp (untracked newengine), constructive_core STATIC/nest_constructive SHARED, constructive_bench, NC_ ABI/nc_*.",
+    "managed": "src/opennest_2/nest_lib/NestConstructiveWrapper.cs namespaceNestConstructive,DllImport nest_constructive; OpenNestConstructiveComponent UI alreadybrandedOpenNest.",
+    "reference_core": "Active Documents reference workspace remains separate and must not be renamed whileGUI/oracles run."
+  },
+  "next_portable_integration": {
+    "directory": "src/opennest_solver_cpp",
+    "purpose": "Independent portable integration of the currently verified C++ components alongside existing OpenNest engines; does not replace opennest_cpp or nest_constructive_cpp during bring-up.",
+    "cmake_targets": [
+      "opennest_solver_core",
+      "opennest_solver",
+      "opennest_solver_cli"
+    ],
+    "namespace": "opennest::solver",
+    "public_header": "include/opennest_solver.h",
+    "outputs": [
+      "opennest_solver.dll",
+      "libopennest_solver.dylib",
+      "libopennest_solver.so",
+      "opennest_solver_cli"
+    ],
+    "cmake_option": "OPENNEST_BUILD_SOLVER",
+    "required_boundary": "No installed commercial library, active Documents path, original-geometry callback or Python solver in production execution. Vendor/pin thirdparty dependencies with notices; GCC/math bitparity is a testedWindows scope, not established crossplatform parity."
+  },
+  "rename_map": [
+    {
+      "current": "reference/search/prepared_job_driver.cpp and prepared_geometry_bridge.*",
+      "proposed": "src/opennest_solver_cpp/app/opennest_solver_cli.cpp and src/geometry_bridge.*",
+      "status": "Copy maintainedimplementation into newportabletarget, preserve source/evidence hash ledger in separate archive; no active reference-path rename."
+    },
+    {
+      "current": "reference/clearance/default_problem_material.* and geometry/search component sources",
+      "proposed": "src/opennest_solver_cpp/src/geometry/default_material.* and named solver submodules",
+      "status": "Port only requiredbuildableCPP and tests; retained copyright/notices/provenance remain explicit."
+    },
+    {
+      "current": "recovered_search/recovered_clearance/recovered_geometry/recovered_multi/recovered::outer_job",
+      "proposed": "opennest::solver::search / opennest::solver::clearance / opennest::solver::geometry_metrics / opennest::solver::multi / opennest::solver::jobs",
+      "status": "Keep module namespacesdistinct to avoid merging incompatiblePoint/Polygon types."
+    },
+    {
+      "current": "recovered_prepared_job*.exe/recovered_*.dll and rc_/rm_/ro_ symbols",
+      "proposed": "opennest_solver_cli/opennest_geometry/opennest_math with versioned OpenNest C ABI",
+      "status": "Production port only; immutable old binaries/receipts keep original names and hashes."
+    },
+    {
+      "current": "future recovered_* experiment directories",
+      "proposed": "opennest_<purpose>_<sequence> directories and OpenNest engine labels",
+      "status": "Future outputs only; never massrewrite historical manifests or provenance tags."
+    }
+  ],
+  "reference_archive_map": [
+    {
+      "current": "tools/bench3dm/instance_to_nestfab.py",
+      "proposed_archive": "third_party_benchmark_adapters/instance_to_nestfab.py",
+      "reason": "External proprietaryformat adapter; preserve true vendorname rather than relabel its output asOpenNest."
+    },
+    {
+      "current": "tools/bench3dm/reference_eval.py, research5 REA_SOLVER_HANDOFF.txt/RESEARCH_5SHEETS.md/exp_nfp.py/exp_joint.py/groupfill_nfp.py reference-only branches",
+      "proposed_archive": "benchmark_reference/<original relativepath>",
+      "reason": "Original/reference layouts and diagnostic presets must not become portable solverinputs."
+    },
+    {
+      "current": "originalbinaries/nativecaptures/hashreceipts",
+      "proposed_archive": "Separate OpenNest referencearchive chosen byroot",
+      "reason": "Do not rename active Documents workspace or rewrite evidence; retain license/notices/attribution wherever required."
+    },
+    {
+      "current": "research/reference/constructive/",
+      "status": "APPLIED_UNCHANGED_BYTES",
+      "receipt": "research/reference/constructive/archive_receipt.json",
+      "scope": "Four historicalledgers, maintainedlinksupdated; originalnames/addresses/attribution remaininsidearchive."
+    }
+  ],
+  "bounded_changes_applied": [
+    "src/nest_constructive_cpp/README.md title?OpenNest constructive solver",
+    "same README sectionheading?Reference provenance; originalattribution/content retained.",
+    "Four unchanged constructive evidence/gaps ledgers moved to research/reference/constructive with hashreceipt and attribution README; maintained README link updated.",
+    "Maintained constructiveREADME provenance text points to separate archive without commercial/decompiled branding.",
+    "Removed commercial comparison from groupfill_nfp.py maintained docstring; behavior unchanged."
+  ],
+  "verification_for_future_migration": [
+    "CMakeconfigure/fullnativebuild+affectedCTest on Windows; standaloneconsumer link/CABI tests.",
+    "Update C#DllImport/copyrules and verify intendedwrapper path without changing existingengine defaults/componentGUIDs.",
+    "Portabletarget configure/build on Linux/macOS before claimingportablebehavior; compare numericresults per supportedruntime.",
+    "Run independent originalinstance strictgate on benchmark; namingdoesnotestablish58/5success."
+  ],
+  "not_performed": [
+    "No existing source directory/namespace/API/CMake target renamed.",
+    "No sharedDLL/EXE overwrite or build/test run.",
+    "No activeGUI/referenceworkspace move or immutableevidence rewrite."
+  ],
+  "naming_scope_clarification": "Target is maintained NestFab/decompiled branding. Generic nest_constructive filenames, targets, namespaces and ABI are not renamed merely because they contain nest; existingbindings remain unchanged."
+}

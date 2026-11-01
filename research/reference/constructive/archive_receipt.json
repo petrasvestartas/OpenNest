@@ -1,0 +1,30 @@
+﻿{
+    "status":  "PRESERVED_REFERENCE_LEDGERS",
+    "scope":  "Four historical reference files moved unchanged; original attribution, paths and observations retained. No active external workspace or binaries moved.",
+    "files":  [
+                  {
+                      "original_path":  "src/nest_constructive_cpp/docs/geometry_evidence.txt",
+                      "archive_path":  "research/reference/constructive/geometry_evidence.txt",
+                      "sha256":  "26d7ccca14b732a73bd6b476bd04034119cf6199f9cbf13bc71365c095d860d8",
+                      "bytes":  10925
+                  },
+                  {
+                      "original_path":  "src/nest_constructive_cpp/docs/orchestration_evidence.txt",
+                      "archive_path":  "research/reference/constructive/orchestration_evidence.txt",
+                      "sha256":  "e366436f88475aab6ea26211901fdf994ff432137d8e38eb35bdb64c2075bdcc",
+                      "bytes":  5338
+                  },
+                  {
+                      "original_path":  "src/nest_constructive_cpp/docs/remaining_search_gaps.txt",
+                      "archive_path":  "research/reference/constructive/remaining_search_gaps.txt",
+                      "sha256":  "a9356373758c5f1f8376ee65f4adb2f7f199f7c55e75cff3726b79785f4669ae",
+                      "bytes":  9540
+                  },
+                  {
+                      "original_path":  "src/nest_constructive_cpp/docs/search_evidence.txt",
+                      "archive_path":  "research/reference/constructive/search_evidence.txt",
+                      "sha256":  "56cfd429d85b2044977a636206ec1b99ea6f6935408298a37ffc5445b09c5a2b",
+                      "bytes":  20793
+                  }
+              ]
+}

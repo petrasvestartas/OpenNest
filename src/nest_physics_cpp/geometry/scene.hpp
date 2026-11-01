@@ -27,6 +27,28 @@ struct Part {
     RotationRange allowed_rotation;
     std::optional<usize> min_quality;
     SurrogateConfig surrogate_config;
+    // Optional cache of (rotation, bbox of the collision shape rotated by it) for every orientation the
+    // uniform sampler enumerates (solver/sampler.hpp rotated_bboxes). Filled once by build_part; the
+    // sampler uses it when its size matches the current rotation list and otherwise recomputes, so a
+    // Part without it (or a stale one) behaves exactly as before. Shared across Part copies.
+    std::shared_ptr<const std::vector<std::pair<f32, Rect>>> rot_bboxes;
+    // SMART orientation candidates (NP_SMART_ROT, continuous-rotation parts only): (r, rotated bbox) for
+    // the min-area-bounding-rectangle and longest-edge alignments + their quarter turns. Null => the
+    // sampler behaves exactly as before.
+    std::shared_ptr<const std::vector<std::pair<f32, Rect>>> smart_rots;
+    // NP_SMART_ROT_BIG: a big part samples its rotation ONLY from smart_rots and its coordinate-descent
+    // rotation refinement is clamped to +-g_smart_tilt around the nearest smart angle. Set by the C ABI
+    // (it needs the sheet area); false => unchanged behaviour.
+    bool smart_only = false;
+    // NP_BIG_PIN (fit 2 group-and-fill): a pinned part samples positions only inside the column (pitch
+    // pin_pitch, width pin_w) it currently sits in, and perturb_layout never swaps it across columns.
+    // pin_pitch == 0 => unpinned (unchanged behaviour).
+    f32 pin_pitch = 0.0f;
+    f32 pin_w = 0.0f;
+    // E1 (np_nest_prio, fit 1 only): 1 = MANDATORY (must be on the sheet), 0 = normal. Read only by the
+    // fit-1 priority driver (driver.hpp prio_fill_one: cut ranking + drop policy); the solver itself, LBF
+    // included, ignores it, so a priority run that drops nothing follows the plain run's trajectory.
+    int priority = 0;
 
     static Part make(usize id, SourceShape original_shape, RotationRange allowed_rotation,
                      std::optional<usize> min_quality, SurrogateConfig surrogate_config) {

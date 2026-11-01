@@ -6,6 +6,7 @@
 #include "../geometry/polygon.hpp"
 #include "../geometry/scene.hpp"
 #include <limits>
+#include <atomic>
 
 namespace nest {
 using namespace nest;
@@ -128,8 +129,21 @@ inline f32 containment_overlap_loss(const Polygon& s, Rect c_bbox) {
 struct OverlapEntry {
     f32 loss = 0.0f;
     f32 weight = 1.0f;
-    f32 weighted_loss() const { return weight * loss; }
+    // Loss-overflow guard (sparrow PR #161 analogue, always on): a GLS weight that escalated to +inf
+    // (x2.0 per round for ~128 rounds on an unpackable width) times a zero loss is NaN, which poisons every
+    // sum and comparison it enters. A zero loss contributes exactly +0 for every finite weight >= 1, so
+    // returning 0 for it is bit-identical on finite values.
+    f32 weighted_loss() const { return loss == 0.0f ? 0.0f : weight * loss; }
 };
+
+// NP_LOSS_GUARD=1 (default off): cap every GLS weight at g_gls_weight_cap (1e20) so weighted losses stay
+// finite. Without it a saturated weight is +inf, every worker's total weighted loss is +inf, and the
+// best-of-N pick in relax_round (`wl < best_wl`) silently degrades to "worker 0". Changes nothing while all
+// weights stay below the cap. g_gls_overflows counts weight updates that ended at +inf (diagnostic only).
+inline bool g_loss_guard = false;
+inline f32 g_gls_weight_cap = 1e20f;
+inline std::atomic<long long> g_gls_overflows{0};
+inline std::atomic<long long> g_gls_nan_hazards{0};   // of those, entries with zero loss: weight x loss would be NaN without the guard
 
 struct PairMatrix {
     usize size = 0;
@@ -266,6 +280,11 @@ struct OverlapTracker {
             if (e.loss == 0.0f) multiplier = GLS_WEIGHT_DECAY;
             else multiplier = GLS_WEIGHT_MIN_INC_RATIO + (GLS_WEIGHT_MAX_INC_RATIO - GLS_WEIGHT_MIN_INC_RATIO) * (e.loss / max_loss);
             e.weight = max_f(e.weight * multiplier, 1.0f);
+            if (!(e.weight <= F32_MAX)) {                                  // +inf (diagnostic counters only)
+                g_gls_overflows.fetch_add(1, std::memory_order_relaxed);
+                if (e.loss == 0.0f) g_gls_nan_hazards.fetch_add(1, std::memory_order_relaxed);   // 0 x inf
+            }
+            if (g_loss_guard && e.weight > g_gls_weight_cap) e.weight = g_gls_weight_cap;
         };
         for (auto& e : pair_collisions.data) upd(e);
         for (auto& e : container_collisions) upd(e);

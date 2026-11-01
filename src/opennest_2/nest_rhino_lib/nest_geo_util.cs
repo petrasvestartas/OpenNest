@@ -37,6 +37,10 @@ namespace nest_rhino_lib
                     ? rotations
                     : Enumerable.Repeat(0, curves.Count).ToList();
 
+            // Chord-cap reference for the WHOLE batch: hard_coded_input runs per part inside the loop below,
+            // before the later parts are known, so the largest ring diagonal is computed up front.
+            double? diagRef = nest_geo.batch_diagonal(curves.Where(a => a != null).SelectMany(a => a));
+
             // Place each curve into a separate nest object.
             int counter = 0;
             for (int i = 0; i < curves.Count; i++)
@@ -73,7 +77,7 @@ namespace nest_rhino_lib
                 // Ordered input is locally cleaned up.
                 if (hard_coded_input)
                 {
-                    nestGeo.hard_coded_input(ids, sp0, sp1);
+                    nestGeo.hard_coded_input(ids, sp0, sp1, diagRef);
 
                     var text = new TextEntity();
                     text.PlainText = number_of_copies[i].ToString();

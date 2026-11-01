@@ -1,0 +1,149 @@
+Confirmed search behavior and remaining reconstruction gaps -- 2026-10-19
+
+Primary source inspected directly during this follow-up:
+C:\Users\Petras\Documents\NestFab-decompiled\native-ghidra\libcns-unpacked.dll\decompiled.c
+Constants independently read from PE sections of inputs/libcns-unpacked.dll,
+image base0x652c0000. Addresses/line references below are static evidence, not
+observations of NestFab execution, defaults, or proof of an exact Ultra mapping.
+
+LOCAL PLACEMENT EVALUATION: CONCRETE, RICHER THAN OUR CURRENT EXTENT TIEBREAK
+
+654c9a70 (lines320647-320655,320691): calls evaluator virtual+0x10, obtains a
+candidate value from654c9920, and returns an integerized normalized score:
+    100000 * evaluator_scale * (raw_evaluation +500) / candidate_value
+The100000 constant is PE double at65d8dd28. The saturation threshold at65d8dd30
+is9.223372036854776e18. A zero denominator or excessive result yieldsINT64_MAX.
+The normal candidate loop65539510 compares this score and retains the smaller
+one (385909-385924; previously traced and retained in cns-solver-findings.txt).
+
+654c9920 (320531-320570): for a cluster, sums per-part values obtained via
+6552b920; for a single part, uses that part's value. It can multiply the sum by
+an explicit parameter or cluster property. Follow-up inspection of6552b920
+(377268-377364) proves it is an indexed value-table getter: ID atpart+0x50,
+128-entry blocks, initialized flag and stored value atentry+8. It does NOT by
+itself establish that the stored value equals area. That initialization remains
+untraced here; do not substitute area and call the formula an exact reproduction.
+
+655292c0 (376324-376335,376371-376372): accumulates integer weights and
+weight_i*subevaluation_i, then divides by total weight. It dispatches each
+subevaluator through virtual+0x10; one recognized target65528e10 forwards to
+6550c8e0. The latter (359667-359669) obtains pair geometry with654a4030 inmode1
+and routes through65514b70. That wrapper (365113-365121) selects a special case
+or calls6550dd90 with shifted row coordinates.
+
+6550dd90 (360447 onward; particularly360476-360508 and subsequent scalar/SIMD
+loops) sums overlaps of shifted horizontal intervals. Endpoint arithmetic is
+max(0,min(rightA,rightB)-max(leftA,leftB)). This is direct geometric evaluation,
+not merely a function-name inference. Exact semantics of every zone/offset,
+weight values and their UI configuration are not decoded. Calling this "contact
+perimeter", "waste area", or a particular gap penalty would exceed the evidence.
+
+Current independent engine: construction strategy ranks parts by size/length/
+aspect/portfolio policy, then retains nodes using quantity/area and stock extent
+with explicit compact-envelope tie-breaks. It does not implement the recovered
+weighted normalized evaluator family or its unknown part-value initialization.
+Potential improvement: compare a small, explicit portfolio of local compactness,
+contact/void and remaining-part-fit scores under the same bounded runtime and
+strict source validation. Such new weights are reconstruction choices until
+their original initialization is traced; no performance superiority is proven.
+
+ANGULAR SEARCH: DISCRETE STAGING IS PROVEN; CONTINUOUS REFINEMENT IS NOT
+
+65300f80 (41937-41999), a branch gated by context byte+0x1c, builds equal-length
+vectors. The assertion at41977 explicitly identifies them as:
+    deg_steps.size() == try_parts_ratio.size()
+PE doubles read directly:
+    65d7b320:5.0,15.0,30.0
+    65d7b340:0.2,0.33,0.8
+    65d7b268:1.0
+At41964-41973 a conditional branch (additional returned value<4 and context
+counter<51) checks an iteration-like value from65384f00 against settings+0xf8;
+when threshold reached, it appends1.0 to BOTH vectors. The settings parser at
+56373-56375 names+0xf8 nb_iterations_before_small_rotation_nesting.
+At41995-41999,652fe880 chooses an index; local_468 receives that try-part ratio,
+local_368 receives the selected degree step converted to int, and local_460=5.
+Therefore a staged5/15/30-degree portfolio, with conditional1-degree enablement,
+is concrete in this branch. Activation conditions and threshold defaults for
+the user's original job are not proven. The ratio's full downstream filtering
+semantics are not resolved merely by its assertion name.
+
+65478c40 (272303-272332) caches a result by integer parameter and two rounded
+coordinates; on miss it calls65482c80 (272371). That wrapper calls65482070
+(278940-278942).65482070 starts from base records obtained via654806c0(...,0),
+filters through65965d60, and in its larger-list branch can append records from
+654806c0(...,param_4), then sorts/uniques through654809e0 (278523-278563,
+278600-278718).654806c0 (277483-277520) returns a base vector for zero; otherwise
+caches by integer parameter and converts it to a normalized angular integer
+modulo3600000000000 before generating records. This supports discrete generated
+orientation sets. The exact mapping/filtering of every record field remains
+incomplete.
+
+No inspected function proves an optimizer that perturbs an already placed angle
+by +/-epsilon, performs angular line search, or differentiates a continuous
+rotation objective. Such a feature may exist elsewhere; its absence from this
+bounded trace is not proof that the entire commercial program lacks it.
+
+Current engine: uniform rotations plus optional hull-edge-derived orientations,
+bounded sampling and fallback across allowed variants. It lacks the recovered
+iteration-dependent5/15/30/1-degree schedule and paired part-try policy.
+Practical next experiment: stage finer angular sets later and on bounded subsets
+or rebuilt tails rather than eagerly computing every1-degree pair. This follows
+the observed discrete staging idea while avoiding the measured cold-cache cost;
+it must preserve explicit orientation restrictions. Exact original policy remains
+unknown. Merely adding more upfront angles is not equivalent to this evidence.
+
+HOLE REINSERTION: AN ACTUAL REPEATED POSTPROCESS, NOT JUST HOLE-AWARE COLLISION
+
+654dd850 (332888-332935) repeatedly calls654daab0, accumulates its returned
+renested count, stops when zero is returned, and diagnoses nb_iterations++<1000.
+The immediate diagnostic bytes decode RenestInHoles and hole_renester.cpp.
+654daab0 initializes copies/contexts (331049-331086), prepares interval geometry
+via655093a0/65509900 (331423-331424), evaluates current translated geometry with
+6550dd90 (331446-331460), and builds orientation candidates through65478c40.
+For param_6 in1..89 it obtains a90-step list at331463-331464, then also obtains
+the requested-parameter list at331534. Later it compares changed geometric
+quantities (331940-331953), commits changed placements into vectors (331994,
+332029,332067), and increments the renested count at332082.
+The wrapper's repeated successful-change loop is proven. Every eligibility rule,
+all geometry helper semantics and invocation defaults are not fully decoded.
+
+Current geometry supports material holes, proposes cavity vertex and center
+alignments, and validates them, but that is not the same as a dedicated repeated
+postprocess that removes/reorients/reinserts existing placements until no gain.
+Current limited compaction/rebuild paths should not be described as a faithful
+replacement for every original hole-renesting stage. A bounded remove-and-reinsert
+cavity pass is a justified independent feature to test, not a guaranteed fix for
+this58-part instance. No evidence yet establishes hole reinsertion as its blocker.
+
+LOOKAHEAD AND RETENTION: MULTI-LEVEL BUCKET SEARCH IS CONCRETE
+
+65545620 configures a capacity vector from settings+0x140 for settings+0x144
+slices (392840-392861). If multiplier+0x14c>1 it increases capacity in the final
+third (392863-392873). Bucket modes are selected at+0x154. Assertions name
+BestNodes/bucket_manager.hpp and AddOrReplaceEquiv/evaluated_object.hpp.
+393019 builds per-node placement state;393025-393067 retain or replace evaluated
+nodes under capacity and equivalence comparisons.393425-393426 expands through
+6553ac80 and655386b0.393723 sorts the next candidates;393900 updates bucket/node
+state and393913 loops while the candidate-node collection remains nonempty.
+Together these establish sequential multi-placement branching and bounded
+retention, rather than just independent one-placement scoring. They do not prove
+a fixed depth-two algorithm, a specific default beam width, or an exact lookahead
+evaluation horizon for Ultra.
+
+Current beam search is structurally similar but simpler. A benchmark withbeam1
+does not exercise meaningful retained alternatives. Original slice-dependent
+widths, equivalence rules, clusters/lattice candidates and full evaluator family
+are not reproduced. Larger bounded beams and complementary prefix archives are
+reasonable experiments, but increased width competes directly with geometry and
+orientation cost. Measure completed constructions per budget, not iteration count
+alone.
+
+WHAT CAN HONESTLY BE CALLED BETTER NOW
+
+The reconstruction exposes its budgets, geometry checks, source evidence and
+repeatable tests. Its bottleneck was measured and reduced (first real NFP pair
+from>30s to~19ms) within the new implementation. That is an improvement over our
+initial backend, not a comparison against NestFab's performance. Five-sheet58/58
+success, superior solution quality, exact original scoring, and exact Ultra
+behavior are not established by these observations. Report actual current run
+metrics separately; this file intentionally contains no changing best-count claim.

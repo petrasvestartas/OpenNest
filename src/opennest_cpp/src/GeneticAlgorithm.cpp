@@ -17,8 +17,7 @@ GeneticAlgorithm::GeneticAlgorithm(const std::vector<std::shared_ptr<NFP>>& adam
     std::vector<float> angles(adam.size());
     for (size_t i = 0; i < adam.size(); i++) {
         // Per-part rotation override (rotationCount > 0): draw from the part's own set.
-        int effRot = adam[i]->rotationCount > 0 ? adam[i]->rotationCount : Config.rotations;
-        angles[i] = static_cast<float>(std::floor(r.NextDouble() * effRot)) * (360.0f / effRot);
+        angles[i] = drawAngle(*adam[i]);
     }
 
     PopulationItem first;
@@ -29,6 +28,20 @@ GeneticAlgorithm::GeneticAlgorithm(const std::vector<std::shared_ptr<NFP>>& adam
     // Canonical: fill the rest of the population by mutating the seed.
     while (static_cast<int>(population.size()) < config.populationSize)
         population.push_back(this->mutate(population[0]));
+}
+
+float GeneticAlgorithm::drawAngle(const NFP& part) {
+    if (Config.smartRotations && part.rotationCount == 0 && !part.ownAngles.empty()) {
+        // Prefer the part's own sensible orientations half of the time (placement re-ranks all
+        // candidates anyway). Extra RNG draws only happen in smart mode -> legacy stays identical.
+        if (r.NextDouble() < 0.5) {
+            size_t k = static_cast<size_t>(std::floor(r.NextDouble() * part.ownAngles.size()));
+            if (k >= part.ownAngles.size()) k = part.ownAngles.size() - 1;
+            return part.ownAngles[k];
+        }
+    }
+    int effRot = part.rotationCount > 0 ? part.rotationCount : Config.rotations;
+    return static_cast<float>(std::floor(r.NextDouble() * effRot)) * (360.0f / effRot);
 }
 
 // Canonical C# mutate: per gene, prob 0.01*mutationRate to swap with the NEXT part, and independently
@@ -49,9 +62,7 @@ PopulationItem GeneticAlgorithm::mutate(const PopulationItem& p) {
             // Per-part rotation override: draw from THIS part's own orientation set
             // (rotationCount > 0), else the global setting. Same RNG call order either
             // way, so determinism holds when no overrides are present.
-            int effRot = clone.placements[i]->rotationCount > 0 ? clone.placements[i]->rotationCount
-                                                                : Config.rotations;
-            clone.Rotation[i] = static_cast<float>(std::floor(r.NextDouble() * effRot)) * (360.0f / effRot);
+            clone.Rotation[i] = drawAngle(*clone.placements[i]);
         }
     }
     return clone;

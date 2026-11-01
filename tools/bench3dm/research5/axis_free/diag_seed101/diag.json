@@ -1,0 +1,96 @@
+{
+ "px": 5.0,
+ "bias_mm": 3.5355339059327378,
+ "sheets": {
+  "0": {
+   "parts": [
+    2,
+    9,
+    15,
+    25
+   ],
+   "util": 66.52,
+   "free_pct": 33.48,
+   "free_components_after_50mm_erosion": 6,
+   "component_areas_pct": [
+    6.13,
+    2.89,
+    2.71,
+    2.36,
+    0.96,
+    0.59
+   ],
+   "largest_inscribed_rect_mm": [
+    460,
+    960
+   ],
+   "largest_rect_pos": [
+    5520,
+    1020
+   ],
+   "leftovers": {
+    "7": {
+     "name": "P007",
+     "area_pct": 4.41,
+     "bbox": [
+      3777,
+      402
+     ],
+     "fits": false,
+     "angles_that_fit": 0,
+     "angles_tested": 180,
+     "example": null
+    },
+    "8": {
+     "name": "P008",
+     "area_pct": 4.41,
+     "bbox": [
+      3777,
+      402
+     ],
+     "fits": false,
+     "angles_that_fit": 0,
+     "angles_tested": 180,
+     "example": null
+    },
+    "18": {
+     "name": "P018",
+     "area_pct": 3.44,
+     "bbox": [
+      2380,
+      262
+     ],
+     "fits": false,
+     "angles_that_fit": 0,
+     "angles_tested": 180,
+     "example": null
+    },
+    "21": {
+     "name": "P021",
+     "area_pct": 2.83,
+     "bbox": [
+      2002,
+      256
+     ],
+     "fits": false,
+     "angles_that_fit": 0,
+     "angles_tested": 180,
+     "example": null
+    },
+    "43": {
+     "name": "P043",
+     "area_pct": 0.63,
+     "bbox": [
+      556,
+      537
+     ],
+     "fits": false,
+     "angles_that_fit": 0,
+     "angles_tested": 180,
+     "example": null
+    }
+   },
+   "seconds": 51.5
+  }
+ }
+}

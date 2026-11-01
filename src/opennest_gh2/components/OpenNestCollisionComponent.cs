@@ -101,7 +101,7 @@ namespace opennest_gh2.components
             int starts = OptInt("starts", 1);
             int partHolesMode = OptToken("element_holes", 1);   // 0=Off 1=Fill 2=Fill First
             int poles = OptInt("poles", 48);
-            bool compactOn = OptToken("compact", 1) != 0;        // Off=>false, Bottom-Left/Multi=>true
+            int compactOn = OptToken("compact", 1);              // 0=Off 1=Bottom-Left 2=Multi (passed through to final_compact)
             int fitMode = OptToken("fit", 0);                    // default All parts=>0 (One sheet=>1)
 
             var run = new NpRun();
