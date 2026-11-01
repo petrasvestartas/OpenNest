@@ -9,11 +9,8 @@
 </head>
 <body>
 <header>
-  <h1>OpenNest <span>online</span></h1>
-  <nav>
-    <a id="latestViewer" href="#" target="_blank" rel="noopener" hidden>Latest result</a>
-    <a href="https://petrasvestartas.github.io/OpenNest/" target="_blank" rel="noopener">Docs</a>
-  </nav>
+  <h1>OpenNest</h1>
+  <nav><a id="latestViewer" href="#" target="_blank" rel="noopener" hidden>latest result</a></nav>
 </header>
 
 <main>
@@ -30,7 +27,7 @@
   <div id="app" hidden>
   <section class="card">
     <div class="row">
-      <label class="grow">Session file (.pb): closed polylines are parts, those in a group named <code>sheets</code> are sheets
+      <label class="grow">Session file (.pb) — closed polylines are parts, group <code>sheets</code> holds the sheets
         <input id="file" type="file" accept=".pb">
       </label>
     </div>
@@ -69,17 +66,17 @@
       <span id="status" class="muted"></span>
     </div>
     <div class="bar" id="progress" hidden><div id="barFill"></div></div>
-    <iframe id="jobFrame" class="viewer tall" title="session viewer" hidden></iframe>
+    <iframe id="jobFrame" class="viewer" title="session viewer" hidden></iframe>
     <div id="resultLinks" class="row wrap" hidden>
-      <a id="openViewer" class="button" target="_blank" rel="noopener">Open in session viewer</a>
-      <a id="dlPb" class="button" download>result.pb</a>
-      <a id="dlJson" class="button" download>result.json</a>
-      <a id="dlLog" class="button" target="_blank" rel="noopener">solver log</a>
+      <a id="openViewer" target="_blank" rel="noopener">open in viewer</a>
+      <a id="dlPb" download>result.pb</a>
+      <a id="dlJson" download>result.json</a>
+      <a id="dlLog" target="_blank" rel="noopener">solver log</a>
     </div>
   </section>
 
   <section class="card">
-    <h2>Recent jobs</h2>
+    <h2>Jobs</h2>
     <table id="jobs" class="jobs"><tbody></tbody></table>
   </section>
   </div>
