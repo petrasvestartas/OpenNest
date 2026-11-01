@@ -52,6 +52,9 @@ function showFrame(rec) {
 async function run() {
   const file = $("file").files[0];
   if (!file) { msg("Choose a session .pb file first", true); return; }
+  if ($("fitMode").value === "3" && +$("wall").value < 1800) {
+    msg("Group-and-fill places nothing until its first phase is done, which takes many minutes on a small server; choose at least 30 minutes, or use sheet by sheet to see progress.", true);
+  }
   const q = new URLSearchParams({
     spacing: $("spacing").value || "0", margin: $("margin").value || "0", rotations: $("rotations").value,
     fit_mode: $("fitMode").value, wall: $("wall").value, seed: $("seed").value || "0", name: file.name,
@@ -97,8 +100,9 @@ function follow(rec) {
 function showResult(j) {
   CURRENT = j;
   const utils = (j.sheets || []).map((s) => (100 * s.utilization).toFixed(1) + "%").join(", ");
-  $("status").textContent = `${j.status} · ${j.n_sheets} sheet(s)` + (utils ? ` · ${utils}` : "") +
-    (j.unplaced ? ` · ${j.unplaced} part(s) did not fit` : "") + ` · ${(j.wall_s || 0).toFixed(0)} s`;
+  const unplaced = !j.unplaced ? "" : j.status === "cancelled" ? ` · ${j.unplaced} part(s) not placed yet when it stopped` : ` · ${j.unplaced} part(s) did not fit`;
+  $("status").textContent = (j.status === "cancelled" ? "stopped at the time budget" : j.status) + ` · ${j.n_sheets} sheet(s)` +
+    (utils ? ` · ${utils}` : "") + unplaced + ` · ${(j.wall_s || 0).toFixed(0)} s`;
   $("openViewer").href = j.links.viewer;
   $("dlPb").href = j.links.result_pb;
   $("dlJson").href = j.links.result;
