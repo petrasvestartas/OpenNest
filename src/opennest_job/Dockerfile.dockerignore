@@ -1,0 +1,9 @@
+# BuildKit reads this file for src/opennest_job/Dockerfile (the context is the repository root).
+# Allow-list: only what the image build copies.
+*
+!src/nest_physics_cpp/geometry/**
+!src/nest_physics_cpp/solver/**
+!src/nest_physics_cpp/nest_physics_capi.cpp
+!src/nest_physics_cpp/nest_physics_capi.h
+!src/opennest_job/**
+src/opennest_job/build*
