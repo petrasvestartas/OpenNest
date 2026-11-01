@@ -6,12 +6,13 @@ use crate::db::{self, Job};
 use crate::worker::job_dir;
 use crate::AppState;
 use axum::body::Bytes;
-use axum::extract::{ConnectInfo, Path, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use futures_util::stream::Stream;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::convert::Infallible;
@@ -144,16 +145,49 @@ const MAX_VERTICES: usize = 4_000_000;
 const MAX_SHEET_COPIES: u64 = 1000;
 const MAX_PART_COPIES: usize = 20_000;
 
+#[derive(Deserialize, Default)]
+pub struct SubmitQuery {
+    spacing: Option<f64>,
+    margin: Option<f64>,
+    fit_mode: Option<i64>,
+    wall: Option<f64>,
+    seed: Option<i64>,
+    rotations: Option<i64>,
+    name: Option<String>,
+}
+
+/// Body: a serialized Session (.pb) with the query parameters as settings, or an `opennest.job/1`
+/// JSON document (Content-Type application/json).
 pub async fn submit(
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
+    Query(q): Query<SubmitQuery>,
     body: Bytes,
 ) -> ApiResult<Response> {
     let ip = client_ip(&state, &headers, &addr);
     require_password(&state, &headers, &ip).await?;
 
-    let mut job: Value = serde_json::from_slice(&body).map_err(|e| bad(format!("invalid JSON: {e}")))?;
+    let is_json = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).map(|v| v.contains("json")).unwrap_or(false)
+        || body.first() == Some(&b'{');
+    let mut warnings: Vec<String> = Vec::new();
+    let mut input_pb: Option<Bytes> = None;
+    let mut job: Value = if is_json {
+        serde_json::from_slice(&body).map_err(|e| bad(format!("invalid JSON: {e}")))?
+    } else {
+        let opts = crate::session_import::Opts {
+            spacing: q.spacing, margin: q.margin, fit_mode: q.fit_mode, wall_seconds: q.wall, seed: q.seed,
+            rotations: q.rotations, name: q.name.clone(),
+        };
+        let bytes = body.clone();
+        let imported = tokio::task::spawn_blocking(move || crate::session_import::session_to_job(&bytes, &opts))
+            .await
+            .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(bad)?;
+        warnings = imported.warnings;
+        input_pb = Some(body);
+        imported.job
+    };
     if job["schema"] != "opennest.job/1" {
         return Err(bad("job.schema must be \"opennest.job/1\""));
     }
@@ -198,8 +232,15 @@ pub async fn submit(
     tokio::fs::write(dir.join("job.json"), serde_json::to_vec(&job).unwrap_or_default())
         .await
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    // an empty scene from the first second, so a viewer opened on the job's link just waits
-    let _ = tokio::fs::write(dir.join("view.yaml"), crate::preview::empty_manifest(&format!("OpenNest job {id} (queued)"))).await;
+    // From the first second the job's scene shows the uploaded session itself (or waits, for a JSON job).
+    let manifest = match &input_pb {
+        Some(pb) => {
+            tokio::fs::write(dir.join("input.pb"), pb).await.map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            crate::preview::manifest(&format!("OpenNest job {id} (queued): input"), "input.pb", &[])
+        }
+        None => crate::preview::empty_manifest(&format!("OpenNest job {id} (queued)")),
+    };
+    let _ = tokio::fs::write(dir.join("view.yaml"), manifest).await;
     let j = Job {
         id: id.clone(),
         name,
@@ -224,7 +265,10 @@ pub async fn submit(
         db::queue_position(&c, j.created)?
     };
     state.wake.notify_one();
-    Ok((StatusCode::CREATED, Json(job_json(&state, &j, Some(pos)))).into_response())
+    let mut v = job_json(&state, &j, Some(pos));
+    v["warnings"] = json!(warnings);
+    v["summary"] = json!({"parts": copies, "sheets": sheet_copies, "spacing": job["spacing"], "margin": job["margin"]});
+    Ok((StatusCode::CREATED, Json(v)).into_response())
 }
 
 async fn load_job(state: &AppState, id: &str) -> ApiResult<Job> {
@@ -298,6 +342,7 @@ pub async fn job_file(State(state): State<Arc<AppState>>, Path((id, file)): Path
         "view.yaml" => ("view.yaml", "application/yaml"),
         "result.pb" => ("result.pb", "application/octet-stream"),
         "live.pb" => ("live.pb", "application/octet-stream"),
+        "input.pb" => ("input.pb", "application/octet-stream"),
         "job.json" => ("job.json", "application/json"),
         "solver.log" => ("solver.log", "text/plain; charset=utf-8"),
         _ => return Err(ApiError(StatusCode::NOT_FOUND, "no such file".into())),
@@ -397,53 +442,3 @@ pub async fn latest_manifest(State(state): State<Arc<AppState>>, Path(token): Pa
     Ok(r)
 }
 
-// ---------------------------------------------------------------------------------------------------
-// parts-only scene: what was loaded, before nesting (the page shows it in session_viewer)
-// ---------------------------------------------------------------------------------------------------
-pub async fn preview(
-    State(state): State<Arc<AppState>>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> ApiResult<Json<Value>> {
-    let ip = client_ip(&state, &headers, &addr);
-    require_password(&state, &headers, &ip).await?;
-    let job: Value = serde_json::from_slice(&body).map_err(|e| bad(format!("invalid JSON: {e}")))?;
-    let parts = job["parts"].as_array().ok_or_else(|| bad("job.parts must be an array"))?;
-    if parts.is_empty() || parts.len() > 20_000 {
-        return Err(bad("between 1 and 20000 parts"));
-    }
-    let mut placements = Vec::new();
-    for (i, p) in parts.iter().enumerate() {
-        let id = p.get("id").cloned().unwrap_or(Value::from(i as u64));
-        placements.push(json!({"part": id, "copy": 0, "sheet": -1, "tx": 0.0, "ty": 0.0, "angle": 0.0}));
-    }
-    let scene = json!({"parts": parts, "sheets": []});
-    let result = json!({"placements": placements});
-    let id = uuid::Uuid::new_v4().to_string();
-    let dir = state.cfg.data_dir.join("previews").join(&id);
-    let (d2, id2) = (dir.clone(), id.clone());
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let p = crate::preview::build(&scene, &result, &format!("parts {id2}"))?;
-        std::fs::create_dir_all(&d2).map_err(|e| e.to_string())?;
-        std::fs::write(d2.join("parts.pb"), &p.pb).map_err(|e| e.to_string())?;
-        std::fs::write(d2.join("view.yaml"), crate::preview::manifest("loaded parts", "parts.pb", &p.texts)).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .map_err(bad)?;
-    let base = format!("{}/api/previews/{}", state.cfg.public_url, id);
-    Ok(Json(json!({"id": id, "links": {"view_yaml": format!("{base}/view.yaml"), "viewer": viewer_link(&state, &format!("{base}/view.yaml"))}})))
-}
-
-pub async fn preview_file(State(state): State<Arc<AppState>>, Path((id, file)): Path<(String, String)>) -> ApiResult<Response> {
-    if uuid::Uuid::parse_str(&id).is_err() {
-        return Err(ApiError(StatusCode::NOT_FOUND, "no such preview".into()));
-    }
-    let (name, ct) = match file.as_str() {
-        "view.yaml" => ("view.yaml", "application/yaml"),
-        "parts.pb" => ("parts.pb", "application/octet-stream"),
-        _ => return Err(ApiError(StatusCode::NOT_FOUND, "no such file".into())),
-    };
-    file_response(state.cfg.data_dir.join("previews").join(id).join(name), ct).await
-}

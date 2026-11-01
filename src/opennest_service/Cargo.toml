@@ -25,10 +25,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # The viewer's own kernel writes the preview .pb, so the file is exactly what session_viewer reads.
 # Pinned to a reviewed commit; bump deliberately.
-session_rust = { git = "https://github.com/petrasvestartas/session_rust", rev = "8445d2149f59c5a1caebb1a3e605833bf21996f2", default-features = false }
-
-[dev-dependencies]
 prost = "0.14"
+session_rust = { git = "https://github.com/petrasvestartas/session_rust", rev = "8445d2149f59c5a1caebb1a3e605833bf21996f2", default-features = false }
 
 [profile.release]
 strip = true

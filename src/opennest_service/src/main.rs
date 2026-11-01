@@ -6,6 +6,7 @@ mod api;
 mod config;
 mod db;
 mod preview;
+mod session_import;
 mod worker;
 
 use axum::routing::{get, post};
@@ -44,6 +45,22 @@ async fn shutdown_signal() {
 
 #[tokio::main]
 async fn main() {
+    // `opennest_service --example-session out.pb` writes the format reference session and exits.
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(|a| a == "--example-session").unwrap_or(false) {
+        let out = args.get(2).cloned().unwrap_or_else(|| "example_session.pb".into());
+        std::fs::write(&out, session_import::example_session()).expect("cannot write the example");
+        println!("wrote {out}");
+        return;
+    }
+    // `opennest_service --job-to-session job.json out.pb` converts an opennest.job/1 document.
+    if args.get(1).map(|a| a == "--job-to-session").unwrap_or(false) {
+        let (inp, out) = (args.get(2).expect("job.json"), args.get(3).expect("out.pb"));
+        let job: serde_json::Value = serde_json::from_slice(&std::fs::read(inp).expect("cannot read the job")).expect("invalid JSON");
+        std::fs::write(out, session_import::job_to_session(&job).expect("conversion failed")).expect("cannot write");
+        println!("wrote {out}");
+        return;
+    }
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
@@ -84,8 +101,6 @@ async fn main() {
         .route("/api/jobs/{id}/events", get(api::events))
         .route("/api/jobs/{id}/result", get(api::result))
         .route("/api/jobs/{id}/{file}", get(api::job_file))
-        .route("/api/preview", post(api::preview))
-        .route("/api/previews/{id}/{file}", get(api::preview_file))
         .route("/live/{token}/view.yaml", get(api::latest_manifest))
         .fallback_service(ServeDir::new(&cfg.web_dir))
         .layer(RequestBodyLimitLayer::new(cfg.max_body_bytes))

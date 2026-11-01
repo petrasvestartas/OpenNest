@@ -26,8 +26,25 @@ cd src/opennest_service && cargo build --release
 OPENNEST_PASSWORD=choose-something-long OPENNEST_JOB_BIN=../../build/opennest_job/opennest_job ./target/release/opennest_service
 ```
 
-Open <http://localhost:8080>, enter the password, load a DXF / SVG / job JSON, pick a strategy and a
-time budget, press **Nest**. The layout is drawn while the solver runs.
+Open <http://localhost:8080>, enter the password, choose a session `.pb`, set spacing / margin, a
+strategy and a time budget, press **Nest**. The uploaded session, the layout while the solver runs
+and the final nest are shown in session_viewer.
+
+## Input: a session file
+
+The job is one serialized Session (`session_proto.Session`, the `.pb` that session_py / session_rust /
+session_cpp write and session_viewer reads):
+
+* every closed polyline is an outline; polylines under a tree group named **`sheets`** are the sheets,
+  all others are parts;
+* a closed polyline inside another one is its hole (part hole / sheet keep-out), by containment;
+* one polyline = one copy; draw a part twice to nest two; the part id is the polyline's name;
+* the session's transforms are applied; z is dropped;
+* optional settings can travel in the file as a `Component` named `opennest` whose `json_data` holds
+  `{"spacing": 10, "margin": 15, "params": {...}, "limits": {...}}`; the page's fields override them.
+
+`opennest_service --example-session out.pb` writes a reference file (`examples/clearance_session.pb`).
+The result is `result.pb`, a session with one group per used sheet (outline, keep-outs, placed parts).
 
 ## Configuration (environment)
 
@@ -59,18 +76,17 @@ unguessable UUID and works as a read-only link, so a result or viewer link can b
 | --- | --- | --- |
 | GET | `/api/info` | limits and settings (public) |
 | POST | `/api/login` | checks the password; returns the latest-result viewer link |
-| POST | `/api/jobs` | body: an `opennest.job/1` document; `limits.wall_seconds` and `params.fit_mode` are yours to set |
+| POST | `/api/jobs?spacing=&margin=&rotations=&fit_mode=&wall=&seed=&name=` | body: a session `.pb` (settings from the query), or an `opennest.job/1` JSON document (`Content-Type: application/json`) |
 | GET | `/api/jobs` | the last 100 jobs |
 | GET | `/api/jobs/{id}` | status, queue position, links, per-sheet utilisation |
 | GET | `/api/jobs/{id}/events` | Server-Sent Events: `start`, `progress` (with `layout`), `cap`, `cancel`, `done`, final `status` |
 | GET | `/api/jobs/{id}/result` | `opennest.result/1` |
-| GET | `/api/jobs/{id}/job.json`, `/solver.log`, `/view.yaml`, `/live.pb`, `/result.pb` | the job's files |
-| POST | `/api/preview` `{"parts": [...]}` | a parts-only session_viewer scene of what was loaded |
-| GET | `/api/previews/{id}/view.yaml`, `/parts.pb` | that scene's files |
+| GET | `/api/jobs/{id}/input.pb`, `/job.json`, `/solver.log`, `/view.yaml`, `/live.pb`, `/result.pb` | the job's files |
 | POST | `/api/jobs/{id}/cancel` | stop; the best layout so far is kept |
 | GET | `/live/{view_token}/view.yaml` | the latest finished result (stable link; token derived from the password) |
 
 ```sh
+curl -X POST "$URL/api/jobs?spacing=10&margin=15&fit_mode=3&wall=900" -H "Authorization: Bearer $PW" --data-binary @parts.pb
 curl -X POST "$URL/api/jobs" -H "Authorization: Bearer $PW" -H "Content-Type: application/json" --data @job.json
 curl -N "$URL/api/jobs/$ID/events"
 curl "$URL/api/jobs/$ID/result" > result.json
@@ -78,10 +94,10 @@ curl "$URL/api/jobs/$ID/result" > result.json
 
 ## session_viewer preview
 
-The page shows everything in session_viewer frames: the loaded parts (`/api/preview`), then the job's
-scene, whose `view.yaml` points at `live.pb` (rewritten every 3 s from the solver's in-progress
-layout) while it runs and at `result.pb` (sheets in a row along +x, millimetres, one group per sheet
-with its outline, keep-outs and parts) when it is done. The viewer opens it with its `?live=` mode, which
+The page shows the job's scene in a session_viewer frame: its `view.yaml` points at the uploaded
+`input.pb` while queued, at `live.pb` (rewritten every 3 s from the solver's in-progress layout)
+while it runs and at `result.pb` (sheets in a row along +x, millimetres, one group per sheet with its
+outline, keep-outs and parts) when it is done. The viewer opens it with its `?live=` mode, which
 polls the scene, so a tab left on the latest-result link shows each new result as it finishes:
 
 ```
@@ -104,6 +120,5 @@ SQLite file and the job folders live in the `opennest-data` volume.
 
 ```sh
 python -I src/opennest_service/tests/e2e.py --url http://localhost:8080 --password ...
-node src/opennest_service/tests/web_parsers.mjs http://localhost:8080 <password>
-cargo test --release      # preview .pb round-trip through session_rust
+cargo test --release      # session import of the example, preview .pb round-trip through session_rust
 ```
