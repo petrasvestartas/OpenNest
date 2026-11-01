@@ -35,6 +35,8 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
          CREATE INDEX IF NOT EXISTS jobs2_queue ON jobs2(status, created);
          CREATE INDEX IF NOT EXISTS jobs2_created ON jobs2(created);",
     )?;
+    // added later; ignore "duplicate column" on databases that already have it
+    let _ = c.execute_batch("ALTER TABLE jobs2 ADD COLUMN note TEXT");
     Ok(c)
 }
 
@@ -55,6 +57,7 @@ pub struct Job {
     pub unplaced: Option<i64>,
     pub wall_s: Option<f64>,
     pub error: Option<String>,
+    pub note: Option<String>,
     pub has_preview: bool,
     pub cancel_requested: bool,
 }
@@ -75,6 +78,7 @@ fn job_row(r: &rusqlite::Row) -> rusqlite::Result<Job> {
         unplaced: r.get("unplaced")?,
         wall_s: r.get("wall_s")?,
         error: r.get("error")?,
+        note: r.get("note")?,
         has_preview: r.get::<_, i64>("has_preview")? != 0,
         cancel_requested: r.get::<_, i64>("cancel_requested")? != 0,
     })
@@ -148,14 +152,15 @@ pub struct Finish<'a> {
     pub unplaced: Option<i64>,
     pub wall_s: Option<f64>,
     pub error: Option<String>,
+    pub note: Option<String>,
     pub has_preview: bool,
 }
 
 pub fn finish_job(c: &Connection, id: &str, f: &Finish) -> rusqlite::Result<()> {
     c.execute(
-        "UPDATE jobs2 SET status = ?2, finished = ?3, n_sheets = ?4, unplaced = ?5, wall_s = ?6, error = ?7, has_preview = ?8
+        "UPDATE jobs2 SET status = ?2, finished = ?3, n_sheets = ?4, unplaced = ?5, wall_s = ?6, error = ?7, has_preview = ?8, note = ?9
          WHERE id = ?1",
-        params![id, f.status, now(), f.n_sheets, f.unplaced, f.wall_s, f.error, f.has_preview as i64],
+        params![id, f.status, now(), f.n_sheets, f.unplaced, f.wall_s, f.error, f.has_preview as i64, f.note],
     )?;
     Ok(())
 }

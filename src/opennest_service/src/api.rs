@@ -256,6 +256,7 @@ pub async fn submit(
         unplaced: None,
         wall_s: None,
         error: None,
+        note: None,
         has_preview: false,
         cancel_requested: false,
     };

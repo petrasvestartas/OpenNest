@@ -154,7 +154,7 @@ async fn run_one(state: &Arc<AppState>, job: Job) -> Result<(), String> {
     }
     let result: Option<Value> =
         tokio::fs::read(&result_file).await.ok().and_then(|b| serde_json::from_slice(&b).ok());
-    let mut fin = Finish { status: "failed", n_sheets: None, unplaced: None, wall_s: Some(elapsed), error: None, has_preview: false };
+    let mut fin = Finish { status: "failed", n_sheets: None, unplaced: None, wall_s: Some(elapsed), error: None, note: None, has_preview: false };
     match (&status, &result) {
         (_, Some(r)) if r["status"] != "error" => {
             fin.status = match r["status"].as_str() {
@@ -165,6 +165,9 @@ async fn run_one(state: &Arc<AppState>, job: Job) -> Result<(), String> {
             };
             fin.n_sheets = r["n_sheets"].as_i64();
             fin.unplaced = r["quality"]["unplaced"].as_i64();
+            let strategy = r["strategy_used"].as_str().unwrap_or("");
+            let note = r["note"].as_str().unwrap_or("");
+            fin.note = (!strategy.is_empty() || !note.is_empty()).then(|| if note.is_empty() { strategy.to_string() } else { note.to_string() });
             fin.wall_s = Some(r["wall_s"].as_f64().unwrap_or(elapsed));
             if let Some(jj) = job_json.as_ref().clone() {
                 let (r2, d2, id2) = (r.clone(), dir.clone(), job.id.clone());

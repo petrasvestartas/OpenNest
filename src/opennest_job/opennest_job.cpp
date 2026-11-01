@@ -806,87 +806,113 @@ int main(int argc, char** argv) {
     std::vector<int> sid(n, -1);
     int n_sheets = 0;
 
+    // ---- strategy stages ----------------------------------------------------------------------------
+    // Group-and-fill (3) and global bin pack (2) prepare for a long time before they place anything, so
+    // stopped early they deliver nothing. They therefore run as stage 2 after a sheet-by-sheet stage 1
+    // that always produces a layout (stage 1 gets at most 40% of the wall cap). The result is whichever
+    // stage is better (fewer unplaced parts, then fewer sheets) and a stop at any moment keeps the best
+    // layout known so far.
+    struct Stage { const char* name; int fit_mode; double cap_end; };   // cap_end: absolute seconds, 0 = none
+    static const char* kNames[4] = {"sheet by sheet", "one sheet", "global bin pack", "group-and-fill"};
+    const int fm = std::clamp(job.params.fit_mode, 0, 3);
+    std::vector<Stage> stages;
+    if (fm >= 2) stages.push_back({kNames[0], 0, cap > 0 ? 0.4 * cap : 0.0});
+    stages.push_back({kNames[fm], fm, cap});
+
+    struct Layout {
+        bool have = false, completed = false;
+        std::string stage;
+        std::vector<double> tx, ty, ang;
+        std::vector<int> sid;
+        int n_sheets = 0, unplaced = 0;
+        bool clean = false;
+        int q_overlap = -1, q_oob = -1, q_unplaced = -1, q_demoted = -1;
+        long long rounds = 0;
+    };
+    auto better = [](const Layout& a, const Layout& b) {
+        if (!b.have) return a.have;
+        if (!a.have) return false;
+        if (a.unplaced != b.unplaced) return a.unplaced < b.unplaced;
+        return a.n_sheets < b.n_sheets;
+    };
+    Layout best;   // written by the main thread between stages only; read by the monitor during a stage
+
     // The opennest.result/1 document. Placements are expected already folded back to input coordinates.
     auto result_doc = [&](const std::string& status, const std::string& reason, const std::string& error, double wall,
-                          long long rounds, int nsh, bool clean, int q_overlap, int q_oob, int q_unplaced, int q_demoted,
-                          const std::vector<double>& tx, const std::vector<double>& ty, const std::vector<double>& ang,
-                          const std::vector<int>& sid) {
+                          const Layout& L, const std::string& note) {
         std::string o;
         o.reserve(256 + size_t(n) * 160);
         o += "{\n \"schema\": " + js::quote(kResultSchema) + ",\n";
         o += " \"status\": " + js::quote(status) + ",\n";
         if (!error.empty()) o += " \"error\": " + js::quote(error) + ",\n";
         if (!reason.empty()) o += " \"cancel_reason\": " + js::quote(reason) + ",\n";
+        o += " \"strategy_used\": " + js::quote(L.stage) + ",\n";
+        if (!note.empty()) o += " \"note\": " + js::quote(note) + ",\n";
         o += " \"engine\": {\"name\": \"nest_physics\", \"runner\": " + js::quote(std::string("opennest_job ") + OPENNEST_JOB_VERSION) +
              ", \"platform\": " + js::quote(platform_id()) + ", \"compiler\": " + js::quote(compiler_id()) + "},\n";
         o += " \"wall_s\": " + js::number(wall) + ",\n";
-        o += " \"rounds\": " + std::to_string(rounds) + ",\n";
+        o += " \"rounds\": " + std::to_string(L.rounds) + ",\n";
         std::vector<int> used;
         for (int k = 0; k < n; ++k)
-            if (sid[k] >= 0 && std::find(used.begin(), used.end(), sid[k]) == used.end()) used.push_back(sid[k]);
+            if (L.have && L.sid[size_t(k)] >= 0 && std::find(used.begin(), used.end(), L.sid[size_t(k)]) == used.end()) used.push_back(L.sid[size_t(k)]);
         std::sort(used.begin(), used.end());
-        o += " \"n_sheets\": " + std::to_string(nsh > 0 ? nsh : int(used.size())) + ",\n";
+        o += " \"n_sheets\": " + std::to_string(L.n_sheets > 0 ? L.n_sheets : int(used.size())) + ",\n";
         o += " \"sheets_used\": [";
         for (size_t k = 0; k < used.size(); ++k) o += (k ? "," : "") + std::to_string(used[k]);
         o += "],\n";
-        o += " \"quality\": {\"clean\": " + std::string(clean ? "true" : "false") + ", \"overlap_pairs\": " +
-             std::to_string(q_overlap) + ", \"out_of_bounds\": " + std::to_string(q_oob) + ", \"unplaced\": " +
-             std::to_string(q_unplaced) + ", \"demoted\": " + std::to_string(q_demoted) + "},\n";
+        o += " \"quality\": {\"clean\": " + std::string(L.clean ? "true" : "false") + ", \"overlap_pairs\": " +
+             std::to_string(L.q_overlap) + ", \"out_of_bounds\": " + std::to_string(L.q_oob) + ", \"unplaced\": " +
+             std::to_string(L.have ? L.unplaced : n) + ", \"demoted\": " + std::to_string(L.q_demoted) + "},\n";
         o += " \"frame\": " + js::quote(kFrame) + ",\n";
         o += " \"clearance\": {\"spacing\": " + js::number(job.spacing) + ", \"margin\": " + js::number(job.margin) + "},\n";
         o += " \"placements\": [\n";
         for (int k = 0; k < n; ++k) {
             const auto& pc = f.part_copies[size_t(k)];
+            const int sk = L.have ? L.sid[size_t(k)] : -1;
             o += "  {\"part\": " + js::dump(job.parts[pc.spec].id) + ", \"copy\": " + std::to_string(pc.copy) +
-                 ", \"sheet\": " + std::to_string(sid[k] >= 0 && sid[k] < ns ? sid[k] : -1);
-            if (sid[k] >= 0 && sid[k] < ns) {
-                const auto& sc = f.sheet_copies[size_t(sid[k])];
+                 ", \"sheet\": " + std::to_string(sk >= 0 && sk < ns ? sk : -1);
+            if (sk >= 0 && sk < ns) {
+                const auto& sc = f.sheet_copies[size_t(sk)];
                 o += ", \"sheet_id\": " + js::dump(job.sheets[sc.spec].id) + ", \"sheet_copy\": " + std::to_string(sc.copy);
             }
-            o += ", \"tx\": " + js::number(tx[k]) + ", \"ty\": " + js::number(ty[k]) + ", \"angle\": " + js::number(ang[k]) + "}";
+            const double x = L.have ? L.tx[size_t(k)] : 0.0, y = L.have ? L.ty[size_t(k)] : 0.0, a = L.have ? L.ang[size_t(k)] : 0.0;
+            o += ", \"tx\": " + js::number(x) + ", \"ty\": " + js::number(y) + ", \"angle\": " + js::number(a) + "}";
             o += (k + 1 < n ? ",\n" : "\n");
         }
         o += " ]\n}\n";
         return o;
     };
+    auto layout_json_folded = [&](const std::vector<double>& ftx, const std::vector<double>& fty, const std::vector<double>& fang, const std::vector<int>& fsid) {
+        std::string o = "[";
+        for (size_t k = 0; k < ftx.size(); ++k) {
+            if (k) o += ",";
+            o += "[" + std::to_string(fsid[k]) + "," + js::number(ftx[k]) + "," + js::number(fty[k]) + "," + js::number(fang[k]) + "]";
+        }
+        return o + "]";
+    };
 
-    // Monitor thread: progress events, the wall cap, and re-issuing a signal's cancel (np_nest clears the
-    // cancel flag on entry, so a signal that lands just before the solve starts must be repeated).
+    // Monitor thread (one per stage): progress events, the wall cap, the stage's own time share, and
+    // re-issuing a signal's cancel (np_nest clears the cancel flag on entry).
     std::mutex mu;
     std::condition_variable cv;
     bool done = false;
     std::atomic<bool> cap_hit{false};
     std::atomic<bool> file_stop{false};
-    std::thread monitor([&] {
+    std::atomic<bool> stage_timeout{false};
+    double stage_cap = 0.0;
+    std::string stage_name;
+    auto monitor_fn = [&] {
         std::vector<double> ptx(n), pty(n), pang(n);
         std::vector<int> psid(n);
         double next_event = opt.interval;
         unsigned file_checks = 0;
-        double cancel_at = -1.0;   // when the first cancel was issued
+        double cancel_at = -1.0;   // when the first cancel was issued in this stage
         std::unique_lock<std::mutex> lk(mu);
         while (!done) {
             cv.wait_for(lk, std::chrono::milliseconds(50), [&] { return done; });
             if (done) break;
             double t = elapsed();
             if (g_signal_stop.load()) np_cancel();
-            if (cancel_at < 0 && (g_signal_stop.load() || file_stop.load() || cap_hit.load())) cancel_at = t;
-            // A solver phase that does not look at the cancel flag for a long time (group-and-fill on a slow
-            // machine) must not turn a budget overrun into a lost result: after `grace`, write the best
-            // layout polled so far and leave without waiting for np_nest to return.
-            if (cancel_at >= 0 && t - cancel_at >= opt.grace) {
-                int pns = 0;
-                int placed = np_poll_layout(n, ptx.data(), pty.data(), pang.data(), psid.data(), &pns);
-                for (int k = 0; k < n; ++k) fold_back(job, f, k, ptx[k], pty[k], pang[k], psid[k]);
-                std::string reason = g_signal_stop.load() ? "signal" : file_stop.load() ? "cancel_file" : "wall_cap";
-                std::string o = result_doc("cancelled", reason + " (solver did not stop within the grace period; layout is the last polled snapshot, unverified)",
-                                           "", t, np_progress(), pns, false, -1, -1, n - placed, -1, ptx, pty, pang, psid);
-                try { write_atomic(opt.out, o); } catch (...) {}
-                events->line("{\"event\":\"done\",\"t\":" + js::number(t) + ",\"status\":\"cancelled\",\"n_sheets\":" +
-                             std::to_string(pns) + ",\"unplaced\":" + std::to_string(n - placed) + ",\"forced\":true}");
-                if (!opt.quiet) std::fprintf(stderr, "[opennest_job] cancelled: solver unresponsive for %.0fs after the cancel; wrote the polled layout (%d placed) and exiting\n", opt.grace, placed);
-                std::fflush(stderr);
-                std::_Exit(124);
-            }
             if (!opt.cancel_file.empty() && !file_stop.load() && ++file_checks % 5 == 0) {
                 std::error_code ec;
                 if (std::filesystem::exists(opt.cancel_file, ec)) {
@@ -900,49 +926,122 @@ int main(int argc, char** argv) {
                 events->line("{\"event\":\"cap\",\"t\":" + js::number(t) + "}");
             }
             if (cap_hit.load()) np_cancel();
+            if (stage_cap > 0 && t >= stage_cap && !stage_timeout.exchange(true)) {
+                np_cancel();
+                events->line("{\"event\":\"stage_end\",\"t\":" + js::number(t) + ",\"stage\":" + js::quote(stage_name) + "}");
+            }
+            if (stage_timeout.load()) np_cancel();
+            if (cancel_at < 0 && (g_signal_stop.load() || file_stop.load() || cap_hit.load() || stage_timeout.load())) cancel_at = t;
+            // A solver phase that does not look at the cancel flag for a long time must not turn a budget
+            // overrun into a lost result: after `grace`, write the best layout known and leave.
+            if (cancel_at >= 0 && t - cancel_at >= opt.grace) {
+                int pns = 0;
+                int placed = np_poll_layout(n, ptx.data(), pty.data(), pang.data(), psid.data(), &pns);
+                for (int k = 0; k < n; ++k) fold_back(job, f, k, ptx[k], pty[k], pang[k], psid[k]);
+                Layout snap;
+                snap.have = placed > 0; snap.stage = stage_name; snap.tx = ptx; snap.ty = pty; snap.ang = pang; snap.sid = psid;
+                snap.n_sheets = pns; snap.unplaced = n - placed; snap.rounds = np_progress();
+                const Layout& chosen = better(best, snap) ? best : snap;
+                std::string reason = g_signal_stop.load() ? "signal" : file_stop.load() ? "cancel_file" : "wall_cap";
+                std::string note = stage_name + " did not stop within the grace period; " +
+                                   (&chosen == &best ? "the earlier " + best.stage + " layout is returned" : "the last polled snapshot is returned (unverified)");
+                std::string o = result_doc("cancelled", reason, "", t, chosen, note);
+                try { write_atomic(opt.out, o); } catch (...) {}
+                events->line("{\"event\":\"done\",\"t\":" + js::number(t) + ",\"status\":\"cancelled\",\"n_sheets\":" +
+                             std::to_string(chosen.n_sheets) + ",\"unplaced\":" + std::to_string(chosen.have ? chosen.unplaced : n) + ",\"forced\":true}");
+                if (!opt.quiet) std::fprintf(stderr, "[opennest_job] cancelled: %s unresponsive for %.0fs after the cancel; wrote the best known layout and exiting\n", stage_name.c_str(), opt.grace);
+                std::fflush(stderr);
+                std::_Exit(124);
+            }
             if (t >= next_event) {
                 next_event = t + opt.interval;
                 int pns = 0;
                 int placed = np_poll_layout(n, ptx.data(), pty.data(), pang.data(), psid.data(), &pns);
-                std::string ev = "{\"event\":\"progress\",\"t\":" + js::number(t) + ",\"rounds\":" +
+                std::string ev = "{\"event\":\"progress\",\"t\":" + js::number(t) + ",\"stage\":" + js::quote(stage_name) + ",\"rounds\":" +
                                  std::to_string(np_progress()) + ",\"placed\":" + std::to_string(placed) +
                                  ",\"n_sheets\":" + std::to_string(pns);
-                if (opt.events_layout) ev += ",\"layout\":" + layout_json(job, f, ptx, pty, pang, psid);
+                if (opt.events_layout) {
+                    // while this stage has nothing yet, show the best layout from the earlier stage
+                    if (placed == 0 && best.have) {
+                        ev += ",\"placed\":" + std::to_string(n - best.unplaced) + ",\"n_sheets\":" + std::to_string(best.n_sheets) +
+                              ",\"layout\":" + layout_json_folded(best.tx, best.ty, best.ang, best.sid);
+                    } else {
+                        ev += ",\"layout\":" + layout_json(job, f, ptx, pty, pang, psid);
+                    }
+                }
                 events->line(ev + "}");
             }
         }
-    });
+    };
 
-    np_cancel_reset();
-    int rc = np_nest(n, f.pvc.data(), f.pxy.data(), f.prot.data(),
-                     ns, f.svc.data(), f.sxy.data(), f.shc.data(), f.hvc.data(), f.hxy.data(),
-                     f.phc.data(), f.phvc.data(), f.phxy.data(), &job.params,
-                     tx.data(), ty.data(), ang.data(), sid.data(), &n_sheets);
-    {
-        std::lock_guard<std::mutex> lk(mu);
-        done = true;
+    int last_rc = 0;
+    bool stopped = false;   // a global cancel (cap, file, signal) ends the run after the current stage
+    for (size_t si = 0; si < stages.size() && !stopped; ++si) {
+        const Stage& st = stages[si];
+        if (st.cap_end > 0 && elapsed() >= st.cap_end) continue;   // stage 1 used everything: no time left
+        stage_cap = st.cap_end > 0 && si + 1 < stages.size() ? st.cap_end : 0.0;   // only a stage with a successor has a share
+        stage_name = st.name;
+        stage_timeout.store(false);
+        NpParams p = job.params;
+        p.fit_mode = st.fit_mode;
+        std::fill(tx.begin(), tx.end(), 0.0); std::fill(ty.begin(), ty.end(), 0.0); std::fill(ang.begin(), ang.end(), 0.0);
+        std::fill(sid.begin(), sid.end(), -1);
+        n_sheets = 0;
+        events->line("{\"event\":\"stage\",\"t\":" + js::number(elapsed()) + ",\"stage\":" + js::quote(st.name) + ",\"fit_mode\":" + std::to_string(st.fit_mode) + "}");
+        if (!opt.quiet) std::fprintf(stderr, "[opennest_job] stage %zu/%zu: %s\n", si + 1, stages.size(), st.name);
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            done = false;
+        }
+        std::thread monitor(monitor_fn);
+        np_cancel_reset();
+        int rc = np_nest(n, f.pvc.data(), f.pxy.data(), f.prot.data(),
+                         ns, f.svc.data(), f.sxy.data(), f.shc.data(), f.hvc.data(), f.hxy.data(),
+                         f.phc.data(), f.phvc.data(), f.phxy.data(), &p,
+                         tx.data(), ty.data(), ang.data(), sid.data(), &n_sheets);
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            done = true;
+        }
+        cv.notify_all();
+        monitor.join();
+        last_rc = rc;
+        for (int k = 0; k < n; ++k) fold_back(job, f, k, tx[k], ty[k], ang[k], sid[k]);
+        Layout L;
+        L.have = rc == 0;
+        L.stage = st.name;
+        L.tx = tx; L.ty = ty; L.ang = ang; L.sid = sid;
+        L.n_sheets = n_sheets;
+        int q_cancelled = -1;
+        L.clean = np_last_quality(&L.q_overlap, &L.q_oob, &L.q_unplaced, &q_cancelled, &L.q_demoted) != 0;
+        L.unplaced = L.q_unplaced >= 0 ? L.q_unplaced : int(std::count(sid.begin(), sid.end(), -1));
+        L.rounds = np_progress();
+        L.completed = rc == 0 && q_cancelled != 1 && !stage_timeout.load() && !cap_hit.load() && !file_stop.load() && !g_signal_stop.load();
+        if (!opt.quiet)
+            std::fprintf(stderr, "[opennest_job] stage %s: rc=%d sheets=%d unplaced=%d clean=%d %s\n", st.name, rc, n_sheets, L.unplaced,
+                         L.clean, L.completed ? "(completed)" : "(stopped)");
+        if (better(L, best)) best = L;
+        stopped = cap_hit.load() || file_stop.load() || g_signal_stop.load();
     }
-    cv.notify_all();
-    monitor.join();
     double wall = elapsed();
-    for (int k = 0; k < n; ++k) fold_back(job, f, k, tx[k], ty[k], ang[k], sid[k]);
 
-    int q_overlap = -1, q_oob = -1, q_unplaced = -1, q_cancelled = -1, q_demoted = -1;
-    int clean = np_last_quality(&q_overlap, &q_oob, &q_unplaced, &q_cancelled, &q_demoted);
-    long long rounds = np_progress();
-    bool cancelled = cap_hit.load() || g_signal_stop.load() || file_stop.load() || q_cancelled == 1;
-    // "partial" = the solve finished but some parts fit on no sheet (too big, or too few sheets given).
-    std::string status = rc != 0 ? "error" : cancelled ? "cancelled" : (q_unplaced > 0 ? "partial" : "ok");
-
-    std::string reason = g_signal_stop.load() ? "signal" : file_stop.load() ? "cancel_file" : cap_hit.load() ? "wall_cap" : "solver";
-    std::string o = result_doc(status, cancelled ? reason : "", rc != 0 ? "np_nest returned " + std::to_string(rc) : "",
-                               wall, rounds, n_sheets, clean != 0, q_overlap, q_oob, q_unplaced, q_demoted, tx, ty, ang, sid);
+    if (!best.have) return fail_result("np_nest returned " + std::to_string(last_rc));
+    const bool cancelled = stopped;
+    std::string status = cancelled ? "cancelled" : (best.unplaced > 0 ? "partial" : "ok");
+    std::string reason = !cancelled ? "" : g_signal_stop.load() ? "signal" : file_stop.load() ? "cancel_file" : "wall_cap";
+    std::string note;
+    if (stages.size() == 2 && best.stage == stages[0].name)
+        note = std::string(stages[1].name) + (stopped ? " did not finish within the time budget" : " did not improve on it") + "; layout from " + best.stage;
+    else if (!best.completed)
+        note = best.stage + " was stopped before it finished; best layout so far";
+    std::string o = result_doc(status, reason, "", wall, best, note);
     try { write_atomic(opt.out, o); } catch (const std::exception& e) { return fail_result(e.what()); }
     events->line("{\"event\":\"done\",\"t\":" + js::number(wall) + ",\"status\":" + js::quote(status) +
-                 ",\"n_sheets\":" + std::to_string(n_sheets) + ",\"unplaced\":" + std::to_string(q_unplaced) + "}");
+                 ",\"n_sheets\":" + std::to_string(best.n_sheets) + ",\"unplaced\":" + std::to_string(best.unplaced) +
+                 ",\"strategy_used\":" + js::quote(best.stage) + "}");
     if (!opt.quiet)
-        std::fprintf(stderr, "[opennest_job] %s rc=%d wall=%.1fs sheets=%d unplaced=%d overlaps=%d clean=%d\n",
-                     status.c_str(), rc, wall, n_sheets, q_unplaced, q_overlap, clean);
-    if (rc != 0) return 1;
+        std::fprintf(stderr, "[opennest_job] %s wall=%.1fs sheets=%d unplaced=%d overlaps=%d clean=%d strategy=%s%s%s\n",
+                     status.c_str(), wall, best.n_sheets, best.unplaced, best.q_overlap, best.clean, best.stage.c_str(),
+                     note.empty() ? "" : " | ", note.c_str());
     return cancelled ? 124 : 0;
 }
