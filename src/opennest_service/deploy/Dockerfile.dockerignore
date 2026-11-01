@@ -1,0 +1,13 @@
+# BuildKit reads this for deploy/Dockerfile (context = repository root). Allow-list.
+*
+!src/nest_physics_cpp/geometry/**
+!src/nest_physics_cpp/solver/**
+!src/nest_physics_cpp/nest_physics_capi.cpp
+!src/nest_physics_cpp/nest_physics_capi.h
+!src/opennest_cpp/src/clipper2/**
+!src/opennest_job/**
+src/opennest_job/build*
+!src/opennest_service/Cargo.toml
+!src/opennest_service/Cargo.lock
+!src/opennest_service/src/**
+!src/opennest_service/web/**

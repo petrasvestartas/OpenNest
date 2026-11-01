@@ -1,0 +1,41 @@
+# OpenNest on one Linux server: the service (API + workers + web page) behind Caddy, which gets and
+# renews the HTTPS certificate for $OPENNEST_DOMAIN automatically.
+#
+#   cp .env.example .env     # then edit it
+#   docker compose up -d --build
+#
+# Run from this folder (src/opennest_service/deploy); the build context is the repository root.
+services:
+  opennest:
+    build:
+      context: ../../..
+      dockerfile: src/opennest_service/deploy/Dockerfile
+    image: opennest-service:0.1.0
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      OPENNEST_PUBLIC_URL: https://${OPENNEST_DOMAIN}
+      OPENNEST_TRUST_PROXY: "1"
+    volumes:
+      - opennest-data:/data
+    expose:
+      - "8080"
+
+  caddy:
+    image: caddy:2.8
+    restart: unless-stopped
+    depends_on: [opennest]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      OPENNEST_DOMAIN: ${OPENNEST_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  opennest-data:
+  caddy-data:
+  caddy-config:

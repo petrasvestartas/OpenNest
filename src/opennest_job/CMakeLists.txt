@@ -19,12 +19,16 @@ endif()
 
 set(OPENNEST_JOB_VERSION "0.1.0" CACHE STRING "Version stamp reported by opennest_job --version")
 set(NEST_PHYSICS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../nest_physics_cpp)
+# Clipper2 (Boost licence) vendored with the NFP engine; used for the spacing / margin offsets.
+set(CLIPPER2_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../opennest_cpp/src)
+set(CLIPPER2_SOURCES ${CLIPPER2_ROOT}/clipper2/clipper.engine.cpp ${CLIPPER2_ROOT}/clipper2/clipper.offset.cpp
+                     ${CLIPPER2_ROOT}/clipper2/clipper.rectclip.cpp)
 
 # Fully static Linux binary (runs in a scratch/distroless container, no libstdc++ version coupling).
 option(OPENNEST_JOB_STATIC "Link opennest_job statically (GCC/Clang)" OFF)
 
-add_executable(opennest_job opennest_job.cpp ${NEST_PHYSICS_DIR}/nest_physics_capi.cpp)
-target_include_directories(opennest_job PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${NEST_PHYSICS_DIR})
+add_executable(opennest_job opennest_job.cpp ${NEST_PHYSICS_DIR}/nest_physics_capi.cpp ${CLIPPER2_SOURCES})
+target_include_directories(opennest_job PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${NEST_PHYSICS_DIR} ${CLIPPER2_ROOT})
 target_compile_definitions(opennest_job PRIVATE OPENNEST_JOB_VERSION="${OPENNEST_JOB_VERSION}")
 
 # Same optimisation as the shipped DLL: -O3 / /O2, NO fast-math and NO -march=native, so a binary built on

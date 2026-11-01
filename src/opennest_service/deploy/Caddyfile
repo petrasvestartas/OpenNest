@@ -1,0 +1,7 @@
+{$OPENNEST_DOMAIN} {
+	encode zstd gzip
+	# Server-Sent Events must not be buffered.
+	reverse_proxy opennest:8080 {
+		flush_interval -1
+	}
+}

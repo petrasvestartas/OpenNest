@@ -18,6 +18,7 @@ WORKDIR /src
 COPY src/nest_physics_cpp/geometry          src/nest_physics_cpp/geometry
 COPY src/nest_physics_cpp/solver            src/nest_physics_cpp/solver
 COPY src/nest_physics_cpp/nest_physics_capi.cpp src/nest_physics_cpp/nest_physics_capi.h src/nest_physics_cpp/
+COPY src/opennest_cpp/src/clipper2          src/opennest_cpp/src/clipper2
 COPY src/opennest_job                       src/opennest_job
 ARG OPENNEST_JOB_VERSION=0.1.0
 RUN cmake -S src/opennest_job -B /build -DCMAKE_BUILD_TYPE=Release -DOPENNEST_JOB_STATIC=ON \

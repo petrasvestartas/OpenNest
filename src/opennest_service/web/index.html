@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenNest Online</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1' y='1' width='14' height='14' fill='none' stroke='black' stroke-width='2'/%3E%3Crect x='4' y='4' width='5' height='4' fill='black'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>OpenNest <span>online</span></h1>
+  <nav>
+    <a href="https://petrasvestartas.github.io/OpenNest/" target="_blank" rel="noopener">Docs</a>
+  </nav>
+</header>
+
+<main>
+  <section id="account" class="card">
+    <h2>Account</h2>
+    <div class="row">
+      <label class="grow">API key
+        <input id="apiKey" type="password" autocomplete="off" placeholder="onk_… (leave empty for a free preview)">
+      </label>
+      <button id="saveKey" type="button">Use key</button>
+    </div>
+    <div class="row">
+      <label class="grow">Email
+        <input id="email" type="email" placeholder="you@example.com">
+      </label>
+      <button id="signup" type="button">Create free account</button>
+    </div>
+    <p id="accountInfo" class="muted">Without a key you can run free 30-second previews.</p>
+    <div id="buy" hidden></div>
+  </section>
+
+  <section class="card">
+    <h2>1 · Parts</h2>
+    <p class="muted">DXF (closed polylines, circles, or LINE/ARC loops), SVG (any closed shape) or an <code>opennest.job/1</code> JSON. Curves inside a part become its holes.</p>
+    <div class="row">
+      <label class="grow">Files
+        <input id="files" type="file" multiple accept=".dxf,.svg,.json">
+      </label>
+      <label>Copies of each
+        <input id="qty" type="number" min="1" value="1">
+      </label>
+      <label>Scale
+        <input id="scale" type="number" step="any" value="1" title="multiply coordinates, e.g. 25.4 for inches to mm">
+      </label>
+    </div>
+    <p id="partsInfo" class="muted">No parts loaded.</p>
+    <svg id="partsView" class="drawing" aria-label="parts preview"></svg>
+  </section>
+
+  <section class="card">
+    <h2>2 · Sheets and clearances</h2>
+    <div class="grid">
+      <label>Sheet width <input id="sheetW" type="number" step="any" value="3000"></label>
+      <label>Sheet height <input id="sheetH" type="number" step="any" value="1500"></label>
+      <label>Sheets available <input id="sheetN" type="number" min="1" value="5"></label>
+      <label>Spacing between parts <input id="spacing" type="number" step="any" min="0" value="5"></label>
+      <label>Margin to sheet edge <input id="margin" type="number" step="any" min="0" value="10"></label>
+      <label>Rotation
+        <select id="rotations">
+          <option value="0">free</option>
+          <option value="4">90° steps</option>
+          <option value="2">180° steps</option>
+          <option value="1">none</option>
+        </select>
+      </label>
+    </div>
+    <p id="jobSheetsNote" class="muted" hidden>The loaded job JSON defines its own sheets and clearances; these fields are ignored.</p>
+  </section>
+
+  <section class="card">
+    <h2>3 · Run</h2>
+    <div class="row">
+      <label class="grow">Quality
+        <select id="tier"></select>
+      </label>
+      <button id="run" type="button" class="primary" disabled>Nest</button>
+      <button id="cancel" type="button" hidden>Cancel</button>
+    </div>
+    <div id="progress" hidden>
+      <div class="bar"><div id="barFill"></div></div>
+      <p id="progressText" class="muted"></p>
+    </div>
+  </section>
+
+  <section id="resultCard" class="card" hidden>
+    <h2>Result</h2>
+    <p id="resultInfo"></p>
+    <div class="row wrap">
+      <a id="openViewer" class="button" target="_blank" rel="noopener">Open in session viewer</a>
+      <button id="dlSvg" type="button">Download SVG</button>
+      <button id="dlDxf" type="button">Download DXF</button>
+      <button id="dlJson" type="button">Download result JSON</button>
+    </div>
+    <svg id="resultView" class="drawing tall" aria-label="nesting result"></svg>
+  </section>
+
+  <section id="log" class="card" hidden>
+    <h2>Messages</h2>
+    <ul id="messages"></ul>
+  </section>
+</main>
+
+<footer class="muted">OpenNest · <span id="svcInfo"></span></footer>
+<script src="app.js"></script>
+</body>
+</html>

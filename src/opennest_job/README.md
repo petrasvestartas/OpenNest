@@ -39,6 +39,7 @@ opennest_job - -   < job.json > result.json        # stdin / stdout
 | `--events-layout` | Include the current best layout in every progress event (for a live preview). |
 | `--interval <s>` | Seconds between progress events (default 2). |
 | `--max-wall <s>` | Operator wall-clock cap. The job's `limits.wall_seconds` can only lower it. |
+| `--cancel-file <path>` | Stop (keeping the best layout) as soon as this file exists; works on every OS. |
 
 Exit codes: `0` ok or partial, `1` error (invalid job or solver failure), `2` usage, `124` cancelled.
 SIGTERM / SIGINT (`docker stop`, Ctrl+C) and the wall cap stop the solver at its next round; the best
@@ -53,6 +54,8 @@ service must start the worker with a clean environment and never pass user-suppl
 {
   "schema": "opennest.job/1",
   "units": "mm",
+  "spacing": 10,
+  "margin": 15,
   "parts": [
     {"id": "A", "qty": 4, "rotations": 0,
      "outer": [[0, 0], [200, 0], [200, 100], [0, 100]],
@@ -69,7 +72,11 @@ service must start the worker with a clean environment and never pass user-suppl
 ```
 
 * Rings are `[[x, y], ...]`, clockwise or counter-clockwise, open (a closing duplicate point is ignored),
-  at least 3 vertices. Spacing / clearance is applied upstream: offset parts and sheets before submitting.
+  at least 3 vertices, in the units of `units` (informational).
+* `spacing` (minimum distance between parts) and `margin` (minimum distance from a part to a sheet edge
+  or sheet hole) are applied here with round-joined offsets (Clipper2), like the Grasshopper intake:
+  part outlines grow by spacing/2, part holes shrink by spacing/2, sheets shrink and sheet holes grow by
+  margin - spacing/2. Leave both 0 when the geometry is already offset (the bench3dm instances are).
 * `id` is any JSON value and is echoed back in the result. `qty` defaults to 1, `count` to 1.
 * `rotations`: `0` = free continuous rotation, `N > 0` = only N orientations (360/N degree steps,
   `1` = fixed).
@@ -93,7 +100,7 @@ call:
 | `pole_max` | 48 | |
 | `final_compact` | 1 | |
 | `n_threads` | 0 (= 4) | fit_mode 3 portfolio threads |
-| `simplify_tolerance`, `spacing` | 0 | `spacing` is ignored by the solver |
+| `simplify_tolerance`, `spacing` | 0 | `params.spacing` is ignored by the solver: use the top-level `spacing` |
 
 ## Result: `opennest.result/1`
 
@@ -116,9 +123,10 @@ call:
   `cancel_reason`: `signal`, `wall_cap` or `solver`) or `error` (with `error`).
 * One placement per part copy, in job order. `sheet` is the index among all sheet copies (sheet-major),
   `-1` when unplaced.
-* Placing a part: rotate its input geometry about the world origin by `angle` (radians,
-  counter-clockwise), translate by `(tx, ty)`, then add the bounding-box minimum of the sheet's outer
-  ring.
+* Placing a part: rotate its input geometry about the origin by `angle` (radians,
+  counter-clockwise), then translate by `(tx, ty)`. The result is in the coordinates the sheet was
+  given in, so a sheet at (5000, 2000) gets parts around (5000, 2000).
+* `clearance` echoes the spacing and margin that were applied.
 
 ## Progress events
 
@@ -135,6 +143,9 @@ With `--events-layout`, each progress event also carries `"layout": [[sheet, tx,
 copy, in job order.
 
 ## Benchmark
+
+`tools/opennest_job_check.py job.json result.json` checks a result independently (shapely): parts
+inside their sheets, at least `spacing` apart and `margin` from edges and keep-outs.
 
 `tools/bench3dm/opennest_job_io.py` converts a bench3dm instance into a job and the result back into a
 `placements.json` for `tools/bench3dm/evaluate.py`, so the worker can be checked against the existing

@@ -11,6 +11,7 @@
 // 2 usage, 124 cancelled (wall cap or signal; the best-so-far layout is still written).
 #include "json_mini.hpp"
 #include "nest_physics_capi.h"
+#include "clipper2/clipper.h"   // vendored in src/opennest_cpp/src (spacing / margin offsets)
 
 #include <algorithm>
 #include <atomic>
@@ -43,8 +44,8 @@ namespace js = opennest::json;
 constexpr const char* kJobSchema = "opennest.job/1";
 constexpr const char* kResultSchema = "opennest.result/1";
 constexpr const char* kFrame =
-    "sheet-local: rotate the input part about the world origin by angle (radians, counter-clockwise), then "
-    "translate by (tx, ty); add the bounding-box minimum of the sheet's outer ring for world coordinates";
+    "sheet coordinates: rotate the input part about the origin by angle (radians, counter-clockwise), then "
+    "translate by (tx, ty); the result lies in the coordinates the sheet's outer ring was given in";
 
 std::atomic<bool> g_signal_stop{false};
 
@@ -102,6 +103,8 @@ struct Job {
     std::vector<SheetSpec> sheets;
     NpParams params{};
     double wall_seconds = 0.0;   // 0 = no cap from the job
+    double spacing = 0.0;        // minimum distance between parts (applied here as offsets)
+    double margin = 0.0;         // minimum distance from a part to a sheet edge or sheet hole
 };
 
 int as_int(const Value& v, const std::string& what, long long lo, long long hi) {
@@ -197,7 +200,7 @@ void read_params(const Value* pv, Job& job, int total_sheets) {
 }
 
 Job read_job(const Value& root) {
-    check_keys(root, "job", {"schema", "units", "name", "parts", "sheets", "params", "limits"});
+    check_keys(root, "job", {"schema", "units", "name", "spacing", "margin", "parts", "sheets", "params", "limits"});
     const Value* schema = root.find("schema");
     if (!schema || !schema->is_string() || schema->str != kJobSchema)
         throw std::runtime_error(std::string("job.schema must be \"") + kJobSchema + "\"");
@@ -239,6 +242,13 @@ Job read_job(const Value& root) {
     }
     if (total_sheets < 1) throw std::runtime_error("job.sheets has no sheet with count >= 1");
     read_params(root.find("params"), job, total_sheets);
+    for (const char* k : {"spacing", "margin"}) {
+        if (const Value* v = root.find(k)) {
+            double d = v->as_number(k);
+            if (!std::isfinite(d) || d < 0) throw std::runtime_error(std::string("job.") + k + " must be finite and >= 0");
+            (std::string(k) == "spacing" ? job.spacing : job.margin) = d;
+        }
+    }
     if (const Value* lim = root.find("limits"); lim && !lim->is_null()) {
         check_keys(*lim, "limits", {"wall_seconds"});
         if (const Value* ws = lim->find("wall_seconds")) {
@@ -251,6 +261,91 @@ Job read_job(const Value& root) {
 }
 
 // ---------------------------------------------------------------------------------------------------------
+// Spacing / margin. nest_physics ignores NpParams.spacing, so clearances are applied to the solve
+// geometry before solving, with ROUND joins like the Grasshopper intake (nest_geo.offset_nesting_boundary):
+//   part outer  grows  by spacing/2          part hole   shrinks by spacing/2 (parts may nest inside)
+//   sheet outer shrinks by margin-spacing/2  sheet hole  grows   by margin-spacing/2
+// Two parts then keep `spacing` between them and `margin` to a sheet edge or keep-out. Offsetting never
+// moves a ring's frame, so the returned transforms apply unchanged to the ORIGINAL geometry. Round joins
+// are chords inscribed in the true arc, so each offset is pushed `tol` further in the conservative
+// direction (obstacles grow, free regions shrink) and the chords can never eat into the clearance.
+// ---------------------------------------------------------------------------------------------------------
+double ring_area(const Ring& r) {
+    double a = 0.0;
+    size_t n = r.size() / 2;
+    for (size_t i = 0, j = n - 1; i < n; j = i++) a += r[2 * j] * r[2 * i + 1] - r[2 * i] * r[2 * j + 1];
+    return 0.5 * a;
+}
+
+// Offset one closed ring by `delta` (> 0 grows it). Returns the largest resulting ring, or an empty
+// ring when it vanishes (a hole that closes up, a sheet smaller than twice its margin).
+Ring offset_ring(const Ring& r, double delta, double tol) {
+    if (delta == 0.0) return r;
+    double ext = 0.0;
+    for (double v : r) ext = std::max(ext, std::fabs(v));
+    ext += std::fabs(delta);
+    // Integer grid: as fine as possible while keeping coordinates well inside Clipper's int64 range.
+    double scale = 1e4;
+    while (scale > 1.0 && ext * scale > 4e15) scale /= 10.0;
+    Clipper2Lib::Path64 p;
+    p.reserve(r.size() / 2);
+    for (size_t k = 0; k + 1 < r.size(); k += 2)
+        p.emplace_back(int64_t(std::llround(r[k] * scale)), int64_t(std::llround(r[k + 1] * scale)));
+    Clipper2Lib::ClipperOffset co(2.0, std::max(tol * scale, 1.0));   // arc tolerance in grid units
+    co.AddPath(p, Clipper2Lib::JoinType::Round, Clipper2Lib::EndType::Polygon);
+    Clipper2Lib::Paths64 sol;
+    co.Execute(delta * scale, sol);
+    Ring best;
+    double best_a = 0.0;
+    for (const auto& q : sol) {
+        if (q.size() < 3) continue;
+        Ring c;
+        c.reserve(q.size() * 2);
+        for (const auto& pt : q) { c.push_back(double(pt.x) / scale); c.push_back(double(pt.y) / scale); }
+        double a = std::fabs(ring_area(c));
+        if (a > best_a) { best_a = a; best = std::move(c); }
+    }
+    return best;
+}
+
+// Returns a human-readable problem, or "" when every ring survived.
+std::string apply_clearances(Job& job) {
+    if (job.spacing <= 0.0 && job.margin <= 0.0) return "";
+    const double half = 0.5 * job.spacing;
+    const double tol = std::max(0.002 * std::max(job.spacing, job.margin), 1e-6);
+    const double sheet_d = job.margin - half;   // > 0: sheets shrink / sheet holes grow
+    for (size_t k = 0; k < job.parts.size(); ++k) {
+        PartSpec& p = job.parts[k];
+        if (half > 0) {
+            Ring o = offset_ring(p.outer, half + tol, tol);
+            if (o.size() < 6) return "parts[" + std::to_string(k) + "]: outer offset failed";
+            p.outer = std::move(o);
+            std::vector<Ring> holes;
+            for (const Ring& h : p.holes) {
+                Ring s = offset_ring(h, -(half + tol), tol);
+                if (s.size() >= 6) holes.push_back(std::move(s));   // a hole too small for any part vanishes
+            }
+            p.holes = std::move(holes);
+        }
+    }
+    if (sheet_d != 0.0) {
+        for (size_t k = 0; k < job.sheets.size(); ++k) {
+            SheetSpec& s = job.sheets[k];
+            Ring o = offset_ring(s.outer, -sheet_d - tol, tol);
+            if (o.size() < 6) return "sheets[" + std::to_string(k) + "]: no usable area left after the margin";
+            s.outer = std::move(o);
+            std::vector<Ring> holes;
+            for (const Ring& h : s.holes) {
+                Ring g = offset_ring(h, sheet_d + tol, tol);
+                if (g.size() >= 6) holes.push_back(std::move(g));
+            }
+            s.holes = std::move(holes);
+        }
+    }
+    return "";
+}
+
+// ---------------------------------------------------------------------------------------------------------
 // Flat C-ABI arrays (one solver part per copy, part-major; one solver sheet per sheet copy, sheet-major)
 // ---------------------------------------------------------------------------------------------------------
 struct Flat {
@@ -258,6 +353,7 @@ struct Flat {
     std::vector<Copy> part_copies, sheet_copies;
     std::vector<int> pvc, prot, phc, phvc, svc, shc, hvc;
     std::vector<double> pxy, phxy, sxy, hxy;
+    std::vector<double> sheet_min_x, sheet_min_y;   // bbox min of each solved sheet ring (solver frame origin)
 };
 
 void push_ring(const Ring& r, std::vector<int>& counts, std::vector<double>& xy) {
@@ -281,6 +377,10 @@ Flat flatten(const Job& job) {
         const SheetSpec& sh = job.sheets[s];
         for (int c = 0; c < sh.count; ++c) {
             f.sheet_copies.push_back({s, c});
+            double mx = sh.outer[0], my = sh.outer[1];
+            for (size_t k = 0; k + 1 < sh.outer.size(); k += 2) { mx = std::min(mx, sh.outer[k]); my = std::min(my, sh.outer[k + 1]); }
+            f.sheet_min_x.push_back(mx);
+            f.sheet_min_y.push_back(my);
             push_ring(sh.outer, f.svc, f.sxy);
             f.shc.push_back(int(sh.holes.size()));
             for (const Ring& h : sh.holes) push_ring(h, f.hvc, f.hxy);
@@ -345,7 +445,7 @@ private:
 };
 
 struct Options {
-    std::string in, out, events;
+    std::string in, out, events, cancel_file;
     bool events_layout = false;
     bool quiet = false;
     double interval = 2.0;
@@ -356,7 +456,7 @@ struct Options {
     if (msg) std::fprintf(stderr, "opennest_job: %s\n", msg);
     std::fprintf(stderr,
         "usage: opennest_job <job.json|-> <result.json|-> [--events <file>] [--events-layout]\n"
-        "                    [--interval <s>] [--max-wall <s>] [--quiet] | --version\n");
+        "                    [--interval <s>] [--max-wall <s>] [--cancel-file <path>] [--quiet] | --version\n");
     std::exit(2);
 }
 
@@ -374,6 +474,7 @@ Options parse_args(int argc, char** argv) {
             return d;
         };
         if (a == "--events") o.events = next();
+        else if (a == "--cancel-file") o.cancel_file = next();
         else if (a == "--events-layout") o.events_layout = true;
         else if (a == "--interval") o.interval = next_num();
         else if (a == "--max-wall") o.max_wall = next_num();
@@ -428,6 +529,7 @@ int main(int argc, char** argv) {
     } catch (const std::exception& e) {
         return fail_result(std::string("invalid job: ") + e.what());
     }
+    if (std::string err = apply_clearances(job); !err.empty()) return fail_result("invalid job: " + err);
     Flat f = flatten(job);
     const int n = int(f.part_copies.size());
     const int ns = int(f.sheet_copies.size());
@@ -455,16 +557,26 @@ int main(int argc, char** argv) {
     std::condition_variable cv;
     bool done = false;
     std::atomic<bool> cap_hit{false};
+    std::atomic<bool> file_stop{false};
     std::thread monitor([&] {
         std::vector<double> ptx(n), pty(n), pang(n);
         std::vector<int> psid(n);
         double next_event = opt.interval;
+        unsigned file_checks = 0;
         std::unique_lock<std::mutex> lk(mu);
         while (!done) {
             cv.wait_for(lk, std::chrono::milliseconds(50), [&] { return done; });
             if (done) break;
             double t = elapsed();
             if (g_signal_stop.load()) np_cancel();
+            if (!opt.cancel_file.empty() && !file_stop.load() && ++file_checks % 5 == 0) {
+                std::error_code ec;
+                if (std::filesystem::exists(opt.cancel_file, ec)) {
+                    file_stop.store(true);
+                    events->line("{\"event\":\"cancel\",\"t\":" + js::number(t) + "}");
+                }
+            }
+            if (file_stop.load()) np_cancel();
             if (cap > 0 && t >= cap && !cap_hit.exchange(true)) {
                 np_cancel();
                 events->line("{\"event\":\"cap\",\"t\":" + js::number(t) + "}");
@@ -495,11 +607,13 @@ int main(int argc, char** argv) {
     cv.notify_all();
     monitor.join();
     double wall = elapsed();
+    for (int k = 0; k < n; ++k)
+        if (sid[k] >= 0 && sid[k] < ns) { tx[k] += f.sheet_min_x[size_t(sid[k])]; ty[k] += f.sheet_min_y[size_t(sid[k])]; }
 
     int q_overlap = -1, q_oob = -1, q_unplaced = -1, q_cancelled = -1, q_demoted = -1;
     int clean = np_last_quality(&q_overlap, &q_oob, &q_unplaced, &q_cancelled, &q_demoted);
     long long rounds = np_progress();
-    bool cancelled = cap_hit.load() || g_signal_stop.load() || q_cancelled == 1;
+    bool cancelled = cap_hit.load() || g_signal_stop.load() || file_stop.load() || q_cancelled == 1;
     // "partial" = the solve finished but some parts fit on no sheet (too big, or too few sheets given).
     std::string status = rc != 0 ? "error" : cancelled ? "cancelled" : (q_unplaced > 0 ? "partial" : "ok");
 
@@ -509,7 +623,7 @@ int main(int argc, char** argv) {
     o += "{\n \"schema\": " + js::quote(kResultSchema) + ",\n";
     o += " \"status\": " + js::quote(status) + ",\n";
     if (rc != 0) o += " \"error\": " + js::quote("np_nest returned " + std::to_string(rc)) + ",\n";
-    if (cancelled) o += std::string(" \"cancel_reason\": ") + (g_signal_stop.load() ? "\"signal\"" : cap_hit.load() ? "\"wall_cap\"" : "\"solver\"") + ",\n";
+    if (cancelled) o += std::string(" \"cancel_reason\": ") + (g_signal_stop.load() ? "\"signal\"" : file_stop.load() ? "\"cancel_file\"" : cap_hit.load() ? "\"wall_cap\"" : "\"solver\"") + ",\n";
     o += " \"engine\": {\"name\": \"nest_physics\", \"runner\": " + js::quote(std::string("opennest_job ") + OPENNEST_JOB_VERSION) +
          ", \"platform\": " + js::quote(platform_id()) + ", \"compiler\": " + js::quote(compiler_id()) + "},\n";
     o += " \"wall_s\": " + js::number(wall) + ",\n";
@@ -526,6 +640,7 @@ int main(int argc, char** argv) {
          std::to_string(q_overlap) + ", \"out_of_bounds\": " + std::to_string(q_oob) + ", \"unplaced\": " +
          std::to_string(q_unplaced) + ", \"demoted\": " + std::to_string(q_demoted) + "},\n";
     o += " \"frame\": " + js::quote(kFrame) + ",\n";
+    o += " \"clearance\": {\"spacing\": " + js::number(job.spacing) + ", \"margin\": " + js::number(job.margin) + "},\n";
     o += " \"placements\": [\n";
     for (int k = 0; k < n; ++k) {
         const auto& pc = f.part_copies[size_t(k)];

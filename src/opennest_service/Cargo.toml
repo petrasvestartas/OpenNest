@@ -1,0 +1,37 @@
+[package]
+name = "opennest_service"
+version = "0.1.0"
+edition = "2021"
+description = "OpenNest web service: job queue, accounts and credits around the opennest_job worker"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "opennest_service"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "fs", "time", "signal", "sync", "io-util"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "limit", "trace"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+uuid = { version = "1", features = ["v4"] }
+rand = "0.8"
+sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"
+base64 = "0.22"
+futures-util = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# The viewer's own kernel writes the preview .pb, so the file is exactly what session_viewer reads.
+# Pinned to a reviewed commit; bump deliberately.
+session_rust = { git = "https://github.com/petrasvestartas/session_rust", rev = "8445d2149f59c5a1caebb1a3e605833bf21996f2", default-features = false }
+
+[dev-dependencies]
+prost = "0.14"
+
+[profile.release]
+strip = true
