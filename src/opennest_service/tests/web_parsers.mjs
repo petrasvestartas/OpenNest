@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const base = process.argv[2] || "http://localhost:8080";
+const PW = process.argv[3] || process.env.OPENNEST_PASSWORD || "";
+const auth = (o = {}) => ({ ...o, headers: { ...(o.headers || {}), Authorization: "Bearer " + PW } });
 let fails = 0;
 const check = (ok, what) => { console.log((ok ? "  ok    " : "  FAIL  ") + what); if (!ok) fails++; };
 
@@ -17,7 +19,7 @@ let downloaded = null;
 const ctx = {
   console, Math, JSON, Map, Set, Array, Object, Number, String, Promise, setTimeout, Blob,
   localStorage: { getItem: () => null, setItem() {} },
-  fetch: (u, o) => fetch(new URL(u, base), o),
+  fetch: (u, o) => fetch(new URL(u, base), auth(o)),
   URL: { createObjectURL: (b) => { downloaded = b; return "blob:x"; }, revokeObjectURL() {} },
   document: { getElementById: el, createElement: el, createElementNS: el, head: el(), body: el() },
   window: {},
@@ -58,14 +60,14 @@ const stadium = parts.find((p) => { const b = ctx.bbox([p.outer]); return b[0] >
 const sa = 100 * 50 + Math.PI * 625;
 check(stadium && Math.abs(Math.abs(ctx.area(stadium.outer)) - sa) / sa < 0.002, `LINE+ARC loop chained, area ${stadium && Math.abs(ctx.area(stadium.outer)).toFixed(1)} ~ ${sa.toFixed(1)}`);
 
-console.log("2. nest it on the service (free preview)");
+console.log("2. nest it on the service");
 const job = {
   schema: "opennest.job/1", units: "mm", spacing: 4, margin: 6,
   parts: parts.map((p, i) => ({ id: p.name, qty: 3, rotations: 0, outer: p.outer, holes: p.holes })),
   sheets: [{ id: "s", count: 3, outer: [[0, 0], [600, 0], [600, 300], [0, 300]] }],
-  params: { iter_mode: 1, iter_budget: 2000, num_rotations: 360, seed: 1 },
+  params: { iter_mode: 1, iter_budget: 2000, num_rotations: 360, seed: 1 }, limits: { wall_seconds: 120 },
 };
-const sub = await (await fetch(`${base}/api/jobs?tier=preview`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(job) })).json();
+const sub = await (await fetch(`${base}/api/jobs`, auth({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(job) }))).json();
 check(!!sub.id, `submitted ${sub.id || JSON.stringify(sub)}`);
 let rec;
 for (let k = 0; k < 120; k++) {

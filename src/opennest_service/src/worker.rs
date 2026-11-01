@@ -2,8 +2,7 @@
 //!
 //! The process gets a CLEAN environment (only NP_WORKERS, set by the service, plus what Windows needs to
 //! start a process), a wall cap enforced twice (`--max-wall` inside the solver, a hard kill a minute
-//! later out here) and a cancel file the API creates on request. Billing: the reservation taken at
-//! submission is the tier cap; the job is charged its wall time and the rest is refunded.
+//! later out here) and a cancel file the API creates on request.
 
 use crate::db::{self, Finish, Job};
 use crate::preview;
@@ -59,13 +58,14 @@ async fn run_one(state: &Arc<AppState>, job: Job) -> Result<(), String> {
     if job.cancel_requested {
         let _ = tokio::fs::write(&cancel_file, b"").await;
     }
-    tracing::info!(job = %job.id, tier = %job.tier, cap = job.wall_cap, "start");
+    tracing::info!(job = %job.id, fit_mode = job.fit_mode, cap = job.wall_cap, "start");
 
     let mut cmd = tokio::process::Command::new(&state.cfg.job_bin);
     cmd.arg(&job_file)
         .arg(&result_file)
         .arg("--events")
         .arg(&events_file)
+        .arg("--events-layout")
         .arg("--interval")
         .arg("1")
         .arg("--max-wall")
@@ -110,19 +110,9 @@ async fn run_one(state: &Arc<AppState>, job: Job) -> Result<(), String> {
     };
     let elapsed = started.elapsed().as_secs_f64();
 
-    let tier = crate::config::tier(&job.tier);
-    let billed = tier.map(|t| t.billed).unwrap_or(true);
     let result: Option<Value> =
         tokio::fs::read(&result_file).await.ok().and_then(|b| serde_json::from_slice(&b).ok());
-    let mut fin = Finish {
-        status: "failed",
-        charged: 0.0,
-        n_sheets: None,
-        unplaced: None,
-        wall_s: Some(elapsed),
-        error: None,
-        has_preview: false,
-    };
+    let mut fin = Finish { status: "failed", n_sheets: None, unplaced: None, wall_s: Some(elapsed), error: None, has_preview: false };
     match (&status, &result) {
         (_, Some(r)) if r["status"] != "error" => {
             fin.status = match r["status"].as_str() {
@@ -133,17 +123,12 @@ async fn run_one(state: &Arc<AppState>, job: Job) -> Result<(), String> {
             };
             fin.n_sheets = r["n_sheets"].as_i64();
             fin.unplaced = r["quality"]["unplaced"].as_i64();
-            let solver_wall = r["wall_s"].as_f64().unwrap_or(elapsed);
-            fin.wall_s = Some(solver_wall);
-            if billed {
-                fin.charged = solver_wall.ceil().max(1.0).min(job.reserved);
-            }
+            fin.wall_s = Some(r["wall_s"].as_f64().unwrap_or(elapsed));
             let job_json: Option<Value> =
                 tokio::fs::read(&job_file).await.ok().and_then(|b| serde_json::from_slice(&b).ok());
             if let Some(jj) = job_json {
                 let (r2, d2, id2) = (r.clone(), dir.clone(), job.id.clone());
-                let made = tokio::task::spawn_blocking(move || write_preview(&jj, &r2, &d2, &id2)).await;
-                match made {
+                match tokio::task::spawn_blocking(move || write_preview(&jj, &r2, &d2, &id2)).await {
                     Ok(Ok(())) => fin.has_preview = true,
                     Ok(Err(e)) => tracing::warn!(job = %job.id, "preview: {e}"),
                     Err(e) => tracing::warn!(job = %job.id, "preview task: {e}"),
@@ -155,8 +140,8 @@ async fn run_one(state: &Arc<AppState>, job: Job) -> Result<(), String> {
         (Ok(s), None) => fin.error = Some(format!("solver exited ({s}) without a result")),
     }
     let c = state.db.lock().await;
-    db::finish_job(&c, &job, &fin).map_err(|e| e.to_string())?;
-    tracing::info!(job = %job.id, status = fin.status, wall = elapsed, charged = fin.charged, "done");
+    db::finish_job(&c, &job.id, &fin).map_err(|e| e.to_string())?;
+    tracing::info!(job = %job.id, status = fin.status, wall = elapsed, "done");
     Ok(())
 }
 

@@ -30,17 +30,7 @@ services:
         value: "1"
       - key: OPENNEST_THREADS_PER_JOB
         value: "1"               # ~75% of the plan's CPUs (6 for 8c-16g); change together with `plan`
-      - key: OPENNEST_SIGNUP_CREDITS
-        value: "600"
-      - key: OPENNEST_ANON_PREVIEW
-        value: "1"
-      - key: OPENNEST_ADMIN_TOKEN
+      - key: OPENNEST_PASSWORD
         generateValue: true      # read it in the dashboard (Environment)
       - key: OPENNEST_PUBLIC_URL
         sync: false              # https://opennest.onrender.com or your custom domain, no trailing slash
-      - key: OPENNEST_PADDLE_SECRET
-        sync: false
-      - key: OPENNEST_PADDLE_CLIENT_TOKEN
-        sync: false
-      - key: OPENNEST_PADDLE_PRICES
-        sync: false

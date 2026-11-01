@@ -28,6 +28,23 @@ def ring(pts):
     return p
 
 
+def real_rings(rings):
+    """Drop holes that enclose nothing (the worker ignores them too)."""
+    out = []
+    for h in rings or []:
+        r = ring(h)
+        if len(set(r)) < 3:
+            continue
+        a = 0.0
+        for i in range(len(r)):
+            x1, y1 = r[i - 1]; x2, y2 = r[i]
+            a += x1 * y2 - x2 * y1
+        w = max(x for x, _ in r) - min(x for x, _ in r); hgt = max(y for _, y in r) - min(y for _, y in r)
+        if abs(a) / 2 > 1e-9 * (w * w + hgt * hgt) + 1e-12:
+            out.append(r)
+    return out
+
+
 def place(points, angle, tx, ty):
     c, s = math.cos(angle), math.sin(angle)
     return [(c * x - s * y + tx, s * x + c * y + ty) for x, y in points]
@@ -51,13 +68,13 @@ def main(argv=None) -> int:
             continue
         p = parts[json.dumps(pl["part"])]
         outer = place(ring(p["outer"]), pl["angle"], pl["tx"], pl["ty"])
-        holes = [place(ring(h), pl["angle"], pl["tx"], pl["ty"]) for h in p.get("holes", []) or []]
+        holes = [place(h, pl["angle"], pl["tx"], pl["ty"]) for h in real_rings(p.get("holes"))]
         by_sheet.setdefault(pl["sheet"], []).append((f"{pl['part']}#{pl['copy']}", Polygon(outer, holes)))
     min_edge = min_hole = min_pair = math.inf
     for sid, items in sorted(by_sheet.items()):
         spec = sheet_specs[sid]
         sheet = Polygon(ring(spec["outer"]))
-        sheet_holes = [Polygon(ring(h)) for h in spec.get("holes", []) or []]
+        sheet_holes = [Polygon(h) for h in real_rings(spec.get("holes"))]
         for name, poly in items:
             if not sheet.buffer(tol).contains(poly):
                 problems.append(f"sheet {sid}: {name} not inside the sheet")

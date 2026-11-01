@@ -62,3 +62,7 @@ footer { padding-bottom: 24px; }
   .row { flex-direction: column; align-items: stretch; }
   .drawing.tall { height: 300px; }
 }
+.jobs { width: 100%; border-collapse: collapse; font-size: 13px; }
+.jobs td { padding: 4px 8px 4px 0; border-top: 1px solid var(--line); white-space: nowrap; }
+.jobs td.name { white-space: normal; max-width: 260px; overflow-wrap: anywhere; }
+.jobs a { color: var(--fg); }

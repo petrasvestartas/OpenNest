@@ -11,29 +11,24 @@
 <header>
   <h1>OpenNest <span>online</span></h1>
   <nav>
+    <a id="latestViewer" href="#" target="_blank" rel="noopener" hidden>Latest result in session viewer</a>
     <a href="https://petrasvestartas.github.io/OpenNest/" target="_blank" rel="noopener">Docs</a>
   </nav>
 </header>
 
 <main>
-  <section id="account" class="card">
-    <h2>Account</h2>
+  <section id="loginCard" class="card">
+    <h2>Password</h2>
     <div class="row">
-      <label class="grow">API key
-        <input id="apiKey" type="password" autocomplete="off" placeholder="onk_… (leave empty for a free preview)">
+      <label class="grow">Password
+        <input id="password" type="password" autocomplete="current-password">
       </label>
-      <button id="saveKey" type="button">Use key</button>
+      <button id="login" type="button" class="primary">Unlock</button>
     </div>
-    <div class="row">
-      <label class="grow">Email
-        <input id="email" type="email" placeholder="you@example.com">
-      </label>
-      <button id="signup" type="button">Create free account</button>
-    </div>
-    <p id="accountInfo" class="muted">Without a key you can run free 30-second previews.</p>
-    <div id="buy" hidden></div>
+    <p id="loginInfo" class="muted">The password is in the server's .env file (OPENNEST_PASSWORD).</p>
   </section>
 
+  <div id="app" hidden>
   <section class="card">
     <h2>1 · Parts</h2>
     <p class="muted">DXF (closed polylines, circles, or LINE/ARC loops), SVG (any closed shape) or an <code>opennest.job/1</code> JSON. Curves inside a part become its holes.</p>
@@ -74,16 +69,34 @@
 
   <section class="card">
     <h2>3 · Run</h2>
-    <div class="row">
-      <label class="grow">Quality
-        <select id="tier"></select>
+    <div class="grid">
+      <label>Strategy
+        <select id="fitMode">
+          <option value="0">fewest sheets, sheet by sheet (fast)</option>
+          <option value="2">global bin pack (all sheets at once)</option>
+          <option value="3" selected>group-and-fill (best sheet count, slowest)</option>
+        </select>
       </label>
+      <label>Time budget
+        <select id="wall">
+          <option value="60">1 minute</option>
+          <option value="300">5 minutes</option>
+          <option value="900" selected>15 minutes</option>
+          <option value="1800">30 minutes</option>
+          <option value="3600">60 minutes</option>
+        </select>
+      </label>
+      <label>Seed <input id="seed" type="number" min="0" value="1"></label>
+    </div>
+    <div class="row">
       <button id="run" type="button" class="primary" disabled>Nest</button>
       <button id="cancel" type="button" hidden>Cancel</button>
+      <span id="svcInfo" class="muted"></span>
     </div>
     <div id="progress" hidden>
       <div class="bar"><div id="barFill"></div></div>
       <p id="progressText" class="muted"></p>
+      <svg id="liveView" class="drawing" aria-label="layout so far"></svg>
     </div>
   </section>
 
@@ -95,9 +108,16 @@
       <button id="dlSvg" type="button">Download SVG</button>
       <button id="dlDxf" type="button">Download DXF</button>
       <button id="dlJson" type="button">Download result JSON</button>
+      <a id="dlLog" class="button" target="_blank" rel="noopener">Solver log</a>
     </div>
     <svg id="resultView" class="drawing tall" aria-label="nesting result"></svg>
   </section>
+
+  <section class="card">
+    <h2>Recent jobs</h2>
+    <table id="jobs" class="jobs"><tbody></tbody></table>
+  </section>
+  </div>
 
   <section id="log" class="card" hidden>
     <h2>Messages</h2>
@@ -105,7 +125,7 @@
   </section>
 </main>
 
-<footer class="muted">OpenNest · <span id="svcInfo"></span></footer>
+<footer class="muted">OpenNest</footer>
 <script src="app.js"></script>
 </body>
 </html>

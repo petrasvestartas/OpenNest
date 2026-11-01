@@ -1,15 +1,16 @@
 """End-to-end test of a running opennest_service (standard library only).
 
-    python -I src/opennest_service/tests/e2e.py --url http://localhost:8080 --admin-token dev-admin
+    python -I src/opennest_service/tests/e2e.py --url http://localhost:8080 --password <OPENNEST_PASSWORD>
 
-Covers: anonymous preview with SSE progress, signup, a billed job with reservation / charge / refund,
-cancellation (running and queued), insufficient credits, input validation, the viewer files and the
-account's latest-result link. Exit 0 when every check passes.
+Covers: password check, a job with SSE progress (with live layouts), the result and viewer files, the
+latest-result link, cancelling a running and a queued job, input validation, the job list.
+Exit 0 when every check passes.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -19,6 +20,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 EXAMPLES = HERE.parent.parent / "opennest_job" / "examples"
 FAILS: list[str] = []
+PW = ""
 
 
 def check(cond: bool, what: str) -> None:
@@ -27,15 +29,14 @@ def check(cond: bool, what: str) -> None:
         FAILS.append(what)
 
 
-def call(url: str, method: str = "GET", body=None, key: str | None = None, admin: str | None = None):
+def call(url: str, method: str = "GET", body=None, password: str | None = None):
     data = None if body is None else (body if isinstance(body, bytes) else json.dumps(body).encode())
     req = urllib.request.Request(url, data=data, method=method)
     if data is not None:
         req.add_header("Content-Type", "application/json")
-    if key:
-        req.add_header("Authorization", f"Bearer {key}")
-    if admin:
-        req.add_header("X-Admin-Token", admin)
+    pw = PW if password is None else password
+    if pw:
+        req.add_header("Authorization", f"Bearer {pw}")
     try:
         with urllib.request.urlopen(req, timeout=60) as r:
             raw = r.read()
@@ -49,7 +50,6 @@ def call(url: str, method: str = "GET", body=None, key: str | None = None, admin
 
 
 def sse(url: str, timeout: float = 600):
-    """Read Server-Sent Events until the final `status` event; returns [(event, data)]."""
     out, ev = [], None
     with urllib.request.urlopen(url, timeout=timeout) as r:
         for raw in r:
@@ -74,23 +74,39 @@ def wait_done(base: str, jid: str, timeout: float = 600) -> dict:
 
 
 def main() -> int:
+    global PW
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default="http://localhost:8080")
-    ap.add_argument("--admin-token", default="dev-admin")
+    ap.add_argument("--password", default=os.environ.get("OPENNEST_PASSWORD", ""))
     a = ap.parse_args()
     base = a.url.rstrip("/")
+    PW = a.password
     small = json.loads((EXAMPLES / "small.json").read_text())
-    small.pop("limits", None)          # let the tier cap decide the reservation
     clearance = json.loads((EXAMPLES / "clearance.json").read_text())
+    long = json.loads(json.dumps(small))
+    long["params"]["iter_budget"] = 50_000_000
+    long["limits"] = {"wall_seconds": 600}
 
-    print("1. anonymous free preview with live progress")
-    st, rec = call(f"{base}/api/jobs?tier=preview", "POST", clearance)
-    check(st == 201 and rec["status"] == "queued", f"submit preview -> 201 queued ({st})")
+    print("1. password")
+    st, _ = call(f"{base}/api/login", "POST", password="")
+    check(st == 401, f"no password -> 401 ({st})")
+    st, _ = call(f"{base}/api/login", "POST", password="wrong-password")
+    check(st == 401, f"wrong password -> 401 ({st})")
+    st, r = call(f"{base}/api/login", "POST")
+    check(st == 200 and r["ok"] and r["latest_viewer"].startswith("https://"), "right password -> ok + latest viewer link")
+    st, _ = call(f"{base}/api/jobs", "POST", small, password="")
+    check(st == 401, "submit without password -> 401")
+
+    print("2. a job with live progress")
+    st, rec = call(f"{base}/api/jobs", "POST", clearance)
+    check(st == 201 and rec["status"] == "queued" and rec["wall_cap"] == 120, f"submit -> 201 queued, cap from the job ({st}, {rec.get('wall_cap')})")
     events = sse(rec["links"]["events"])
     kinds = [e for e, _ in events]
     check("start" in kinds and "done" in kinds and kinds[-1] == "status", f"SSE start..done..status ({kinds[:3]}..{kinds[-2:]})")
+    layouts = [d for e, d in events if e == "progress" and d.get("layout")]
+    check(bool(layouts) and len(layouts[0]["layout"]) == 26, "progress events carry the live layout")
     final = events[-1][1]
-    check(final["status"] == "ok" and final["charged"] == 0, f"preview finished ok and free ({final['status']}, {final['charged']})")
+    check(final["status"] == "ok", f"finished ok ({final['status']})")
     st, res = call(rec["links"]["result"])
     check(st == 200 and res["schema"] == "opennest.result/1" and res["quality"]["clean"], "result.json clean")
     check(res["clearance"] == {"spacing": 10, "margin": 15}, "spacing/margin applied by the worker")
@@ -98,97 +114,66 @@ def main() -> int:
     check(st == 200 and b"result.pb" in y and b"live: true" in y, "view.yaml served")
     st, pb = call(rec["links"]["result_pb"])
     check(st == 200 and isinstance(pb, bytes) and len(pb) > 1000, f"result.pb served ({len(pb) if isinstance(pb, bytes) else pb} bytes)")
-    check(rec["links"]["viewer"].startswith("https://petrasvestartas.github.io/session/?live="), "viewer link")
+    st, jj = call(rec["links"]["job"])
+    check(st == 200 and jj["schema"] == "opennest.job/1", "job.json served")
+    st, log = call(f"{base}/api/jobs/{rec['id']}/solver.log")
+    check(st == 200, "solver.log served")
     st, j = call(f"{base}/api/jobs/{rec['id']}")
-    check(st == 200 and len(j.get("sheets", [])) == j["n_sheets"], "per-sheet utilisation in the job record")
-
-    print("2. anonymous limits")
-    st, e = call(f"{base}/api/jobs?tier=standard", "POST", small)
-    check(st == 401, f"billed tier without a key -> 401 ({st})")
-
-    print("3. signup and account")
-    email = f"e2e-{int(time.time())}@example.com"
-    st, s = call(f"{base}/api/signup", "POST", {"email": email})
-    check(st == 200 and s["api_key"].startswith("onk_") and s["account"]["credits"] == 600, "signup gives a key and 600 credits")
-    key = s["api_key"]
-    st, _ = call(f"{base}/api/signup", "POST", {"email": email})
-    check(st == 409, f"duplicate email -> 409 ({st})")
-    st, _ = call(f"{base}/api/me", key="onk_wrong")
-    check(st == 401, "unknown key -> 401")
-
-    print("4. billed job: reserve the cap, charge the seconds used, refund the rest")
-    st, rec = call(f"{base}/api/jobs?tier=standard", "POST", small, key=key)
-    check(st == 201 and rec["reserved"] == 300, f"standard job queued with 300 reserved ({st})")
-    _, me = call(f"{base}/api/me", key=key)
-    bal = me["account"]["credits"]
-    # 300 while the job is queued/running; already refunded if it finished first (it takes ~1 s)
-    check(abs(bal - 300) < 1e-9 or 590 <= bal < 600, f"balance after reserving 300 = {bal}")
-    j = wait_done(base, rec["id"])
-    check(j["status"] in ("ok", "partial") and 1 <= j["charged"] <= 5, f"charged the seconds used ({j['charged']} for {j['wall_s']:.2f} s)")
-    _, me = call(f"{base}/api/me", key=key)
-    check(abs(me["account"]["credits"] - (600 - j["charged"])) < 1e-9, f"refund leaves {me['account']['credits']}")
-    check(me["account"]["latest_job"] == rec["id"], "latest_job updated")
-    st, ly = call(me["latest_view_yaml"])
+    check(st == 200 and len(j.get("sheets", [])) == j["n_sheets"] and j["has_preview"], "per-sheet utilisation + preview flag")
+    st, ly = call(r["latest_view_yaml"])
     check(st == 200 and rec["id"].encode() in ly, "/live/<token>/view.yaml names the latest job")
+    st, _ = call(f"{base}/live/0000000000000000000000000000dead/view.yaml")
+    check(st == 404, "wrong view token -> 404")
 
-    print("5. cancel a running job: best layout kept, charged only the seconds used")
-    long = json.loads(json.dumps(small))
-    long["params"]["iter_budget"] = 50_000_000
-    st, rec = call(f"{base}/api/jobs?tier=standard", "POST", long, key=key)
+    print("3. cancel a running job: best layout kept")
+    st, rec = call(f"{base}/api/jobs", "POST", long)
     check(st == 201, "long job queued")
     time.sleep(4)
-    st, c = call(f"{base}/api/jobs/{rec['id']}/cancel", "POST", key=key)
+    st, c = call(f"{base}/api/jobs/{rec['id']}/cancel", "POST")
     check(st == 200 and c["status"] in ("cancelling", "cancelled"), f"cancel accepted ({c})")
     j = wait_done(base, rec["id"])
-    check(j["status"] == "cancelled" and j["charged"] <= 10 and j["n_sheets"] >= 1, f"cancelled with a layout ({j['status']}, charged {j['charged']}, {j['n_sheets']} sheet)")
+    check(j["status"] == "cancelled" and (j["n_sheets"] or 0) >= 1, f"cancelled with a layout ({j['status']}, {j['n_sheets']} sheet)")
+    st, _ = call(f"{base}/api/jobs/{rec['id']}/cancel", "POST", password="")
+    check(st == 401, "cancel without password -> 401")
 
-    print("6. insufficient credits")
-    st, e = call(f"{base}/api/jobs?tier=deep", "POST", small, key=key)
-    check(st == 402, f"deep reserves 1800 > balance -> 402 ({st}: {e.get('error') if isinstance(e, dict) else e})")
+    print("4. queue: a second job waits, cancelling it while queued closes it")
+    st, r1 = call(f"{base}/api/jobs", "POST", long)
+    st, r2 = call(f"{base}/api/jobs", "POST", long)
+    time.sleep(2)
+    _, j2 = call(f"{base}/api/jobs/{r2['id']}")
+    if j2["status"] == "queued":
+        call(f"{base}/api/jobs/{r2['id']}/cancel", "POST")
+        _, j2 = call(f"{base}/api/jobs/{r2['id']}")
+        check(j2["status"] == "cancelled" and j2["wall_s"] is None, "queued job cancelled without running")
+    else:
+        check(False, f"expected the second job to queue behind the first (got {j2['status']}; slots > 1?)")
+    call(f"{base}/api/jobs/{r1['id']}/cancel", "POST")
+    wait_done(base, r1["id"])
+    wait_done(base, r2["id"])
 
-    print("7. validation")
-    st, e = call(f"{base}/api/jobs?tier=preview", "POST", b"{not json")
+    print("5. validation")
+    st, e = call(f"{base}/api/jobs", "POST", b"{not json")
     check(st == 400, f"invalid JSON -> 400 ({st})")
-    st, e = call(f"{base}/api/jobs?tier=preview", "POST", {"schema": "x"})
+    st, e = call(f"{base}/api/jobs", "POST", {"schema": "x"})
     check(st == 400, f"wrong schema -> 400 ({st})")
     bad = json.loads(json.dumps(small)); bad["parts"][0]["qyt"] = 3
-    st, rec = call(f"{base}/api/jobs?tier=standard", "POST", bad, key=key)
+    st, rec = call(f"{base}/api/jobs", "POST", bad)
     j = wait_done(base, rec["id"]) if st == 201 else {}
-    check(j.get("status") == "failed" and "qyt" in (j.get("error") or "") and j.get("charged") == 0,
-          f"worker rejects an unknown key, nothing charged ({j.get('status')}: {j.get('error')})")
-    st, e = call(f"{base}/api/jobs?tier=nope", "POST", small, key=key)
-    check(st == 400, "unknown tier -> 400")
+    check(j.get("status") == "failed" and "qyt" in (j.get("error") or ""), f"worker rejects an unknown key ({j.get('status')}: {j.get('error')})")
     st, e = call(f"{base}/api/jobs/not-a-uuid")
     check(st == 404, "bad job id -> 404")
+    huge = json.loads(json.dumps(small)); huge["limits"] = {"wall_seconds": 10 ** 9}
+    st, rec = call(f"{base}/api/jobs", "POST", huge)
+    _, info = call(f"{base}/api/info")
+    check(st == 201 and rec["wall_cap"] == info["max_wall_seconds"], f"wall cap clamped to the server maximum ({rec.get('wall_cap')})")
+    call(f"{base}/api/jobs/{rec['id']}/cancel", "POST")
+    wait_done(base, rec["id"])
 
-    print("8. admin")
-    st, e = call(f"{base}/api/admin/jobs", admin="wrong")
-    check(st == 401, "wrong admin token -> 401")
-    st, acc = call(f"{base}/api/admin/accounts", "POST", {"email": f"ops-{int(time.time())}@example.com", "credits": 3600}, admin=a.admin_token)
-    check(st == 200 and acc["account"]["credits"] == 3600, "admin creates an account with credits")
-    st, jl = call(f"{base}/api/admin/jobs", admin=a.admin_token)
-    check(st == 200 and len(jl["jobs"]) >= 4, f"admin job list ({len(jl.get('jobs', []))})")
-
-    print("9. queued-job cancel refunds in full")
-    k2 = acc["api_key"]
-    recs = []
-    for _ in range(3):
-        st, r = call(f"{base}/api/jobs?tier=standard", "POST", long, key=k2)
-        recs.append(r)
-    _, before = call(f"{base}/api/me", key=k2)
-    queued = [r for r in recs if call(f"{base}/api/jobs/{r['id']}")[1]["status"] == "queued"]
-    if queued:
-        call(f"{base}/api/jobs/{queued[-1]['id']}/cancel", "POST", key=k2)
-        _, j = call(f"{base}/api/jobs/{queued[-1]['id']}")
-        _, after = call(f"{base}/api/me", key=k2)
-        check(j["status"] == "cancelled" and abs(after["account"]["credits"] - before["account"]["credits"] - 300) < 1e-9,
-              "queued job cancelled and its 300 credits returned")
-    else:
-        check(False, "expected a queued job behind the 2 running slots")
-    for r in recs:
-        call(f"{base}/api/jobs/{r['id']}/cancel", "POST", key=k2)
-    for r in recs:
-        wait_done(base, r["id"])
+    print("6. job list")
+    st, lst = call(f"{base}/api/jobs")
+    check(st == 200 and len(lst["jobs"]) >= 6 and all("links" in j for j in lst["jobs"]), f"list ({len(lst.get('jobs', []))} jobs)")
+    st, _ = call(f"{base}/api/jobs", password="")
+    check(st == 401, "list without password -> 401")
 
     print()
     print("PASS" if not FAILS else f"FAIL: {len(FAILS)} check(s)")

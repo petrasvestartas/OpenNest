@@ -25,6 +25,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <sstream>
@@ -83,19 +84,46 @@ std::string platform_id() {
 // ---------------------------------------------------------------------------------------------------------
 using Ring = std::vector<double>;   // interleaved x,y, open (no closing duplicate)
 
+double ring_area(const Ring& r) {
+    double a = 0.0;
+    size_t n = r.size() / 2;
+    for (size_t i = 0, j = n - 1; i < n; j = i++) a += r[2 * j] * r[2 * i + 1] - r[2 * i] * r[2 * j + 1];
+    return 0.5 * a;
+}
+
+struct BBox { double x0, y0, x1, y1; };
+BBox bbox_of(const Ring& r) {
+    BBox b{r[0], r[1], r[0], r[1]};
+    for (size_t k = 0; k + 1 < r.size(); k += 2) {
+        b.x0 = std::min(b.x0, r[k]); b.x1 = std::max(b.x1, r[k]);
+        b.y0 = std::min(b.y0, r[k + 1]); b.y1 = std::max(b.y1, r[k + 1]);
+    }
+    return b;
+}
+
+// False for a ring that encloses (almost) nothing relative to its own extent.
+bool ring_has_area(const Ring& r) {
+    if (r.size() < 6) return false;
+    BBox b = bbox_of(r);
+    double ext2 = (b.x1 - b.x0) * (b.x1 - b.x0) + (b.y1 - b.y0) * (b.y1 - b.y0);
+    return std::fabs(ring_area(r)) > 1e-9 * ext2 + 1e-12;
+}
+
 struct PartSpec {
     Value id;
     int qty = 1;
     int rotations = 0;
     Ring outer;
     std::vector<Ring> holes;
+    double shift_x = 0.0, shift_y = 0.0;   // input bbox min: the rings above are relative to it (see prepare_geometry)
 };
 
 struct SheetSpec {
     Value id;
     int count = 1;
-    Ring outer;
-    std::vector<Ring> holes;
+    Ring outer;                           // after prepare_geometry: the usable area's bounding rectangle
+    std::vector<Ring> holes;              // after prepare_geometry: input holes + keep-outs outside the outline
+    double shift_x = 0.0, shift_y = 0.0;
 };
 
 struct Job {
@@ -137,7 +165,20 @@ std::vector<Ring> read_holes(const Value* v, const std::string& what) {
     std::vector<Ring> out;
     if (!v || v->is_null()) return out;
     const auto& arr = v->as_array(what.c_str());
-    for (size_t k = 0; k < arr.size(); ++k) out.push_back(read_ring(arr[k], what + "[" + std::to_string(k) + "]"));
+    for (size_t k = 0; k < arr.size(); ++k) {
+        // A hole that encloses nothing (fewer than 3 distinct vertices, or collinear) is ignored rather
+        // than rejecting the job: CAD exports and sampled outlines produce them. Everything else that is
+        // wrong with a hole (not numbers, not a ring) is still an error.
+        Ring r;
+        try {
+            r = read_ring(arr[k], what + "[" + std::to_string(k) + "]");
+        } catch (const std::runtime_error& e) {
+            if (std::strstr(e.what(), "at least 3 distinct")) continue;
+            throw;
+        }
+        if (!ring_has_area(r)) continue;
+        out.push_back(std::move(r));
+    }
     return out;
 }
 
@@ -261,86 +302,266 @@ Job read_job(const Value& root) {
 }
 
 // ---------------------------------------------------------------------------------------------------------
-// Spacing / margin. nest_physics ignores NpParams.spacing, so clearances are applied to the solve
-// geometry before solving, with ROUND joins like the Grasshopper intake (nest_geo.offset_nesting_boundary):
-//   part outer  grows  by spacing/2          part hole   shrinks by spacing/2 (parts may nest inside)
-//   sheet outer shrinks by margin-spacing/2  sheet hole  grows   by margin-spacing/2
-// Two parts then keep `spacing` between them and `margin` to a sheet edge or keep-out. Offsetting never
-// moves a ring's frame, so the returned transforms apply unchanged to the ORIGINAL geometry. Round joins
-// are chords inscribed in the true arc, so each offset is pushed `tol` further in the conservative
-// direction (obstacles grow, free regions shrink) and the chords can never eat into the clearance.
+// Solve geometry. Three things happen to every ring before it reaches the solver.
+//
+// 1. FRAME. Each part (outer + holes together) and each sheet (outer + holes) is moved to its own
+//    bounding-box minimum, in double. The solver casts coordinates to float32 as it reads them
+//    (nest_physics_capi.cpp read_poly), so a part drawn 50 m from the origin would be quantised to
+//    4 um; near its own origin the grid is ~1000x finer. The shift is folded back into the returned
+//    transforms (placed = R*(p - m) + t = R*p + (t - R*m)).
+//
+// 2. CLEARANCES. nest_physics ignores NpParams.spacing, so round-join offsets are applied here like
+//    the Grasshopper intake (nest_geo.offset_nesting_boundary): a part outer grows by spacing/2, a
+//    part hole shrinks by spacing/2, a sheet outer shrinks by margin - spacing/2 and a sheet hole grows
+//    by it (the other way round when margin < spacing/2). Every offset is pushed a little further on the
+//    SAFE side - obstacles bigger, free regions smaller - by the arc-chord sagitta `tol` plus the
+//    simplification distance `eps` of step 3, so neither can eat into the requested clearance.
+//
+// 3. SOLVER-SAFE RINGS. The solver rejects a ring whose non-adjacent edges touch after float32
+//    rounding (geometry/polygon.hpp Polygon::create) and silently DROPS a sheet keep-out that fails.
+//    Offsets of sampled outlines produce such rings (vertices closer than the float grid, micro-
+//    zigzags). Each ring is therefore simplified with Ramer-Douglas-Peucker (deviation <= eps) and
+//    checked with a copy of the solver's own float32 edge test in the solver's own frame; a ring that
+//    still touches is remade with doubled eps, up to half the offset distance, after which the job is
+//    rejected naming the ring. Nothing is dropped silently.
+//
+// The solver reads a sheet outer only as a bounding box, so a non-rectangular sheet is passed as that
+// box plus keep-outs = box minus the (shrunk) outline.
 // ---------------------------------------------------------------------------------------------------------
-double ring_area(const Ring& r) {
-    double a = 0.0;
-    size_t n = r.size() / 2;
-    for (size_t i = 0, j = n - 1; i < n; j = i++) a += r[2 * j] * r[2 * i + 1] - r[2 * i] * r[2 * j + 1];
-    return 0.5 * a;
+void shift_ring(Ring& r, double dx, double dy) {
+    for (size_t k = 0; k + 1 < r.size(); k += 2) { r[k] += dx; r[k + 1] += dy; }
 }
 
-// Offset one closed ring by `delta` (> 0 grows it). Returns the largest resulting ring, or an empty
-// ring when it vanishes (a hole that closes up, a sheet smaller than twice its margin).
-Ring offset_ring(const Ring& r, double delta, double tol) {
-    if (delta == 0.0) return r;
-    double ext = 0.0;
-    for (double v : r) ext = std::max(ext, std::fabs(v));
-    ext += std::fabs(delta);
-    // Integer grid: as fine as possible while keeping coordinates well inside Clipper's int64 range.
-    double scale = 1e4;
-    while (scale > 1.0 && ext * scale > 4e15) scale /= 10.0;
+// The float32 bbox minimum the solver subtracts from a ring's float32 coordinates (build_part / the
+// sheet reader use min_f over the float values, not a double minimum cast afterwards).
+std::pair<float, float> f32_frame(const Ring& r) {
+    float fx = std::numeric_limits<float>::max(), fy = fx;
+    for (size_t k = 0; k + 1 < r.size(); k += 2) {
+        float x = float(r[k]), y = float(r[k + 1]);
+        fx = x < fx ? x : fx;
+        fy = y < fy ? y : fy;
+    }
+    return {fx, fy};
+}
+
+// The solver's edge test, float32 arithmetic included (geometry/primitives.hpp edge_intersection).
+bool f32_edges_touch(float x1, float y1, float x2, float y2, float x3, float y3, float x4, float y4) {
+    auto mn = [](float a, float b) { return a < b ? a : b; };
+    auto mx = [](float a, float b) { return a > b ? a : b; };
+    if (mx(mn(x1, x2), mn(x3, x4)) > mn(mx(x1, x2), mx(x3, x4))) return false;
+    if (mx(mn(y1, y2), mn(y3, y4)) > mn(mx(y1, y2), mx(y3, y4))) return false;
+    float t_nom = (x2 - x4) * (y4 - y3) - (y2 - y4) * (x4 - x3);
+    float t_den = (x2 - x1) * (y4 - y3) - (y2 - y1) * (x4 - x3);
+    float u_nom = (x2 - x4) * (y2 - y1) - (y2 - y4) * (x2 - x1);
+    float u_den = (x2 - x1) * (y4 - y3) - (y2 - y1) * (x4 - x3);
+    if (t_den == 0.0f || u_den == 0.0f) return false;   // parallel: the solver accepts these
+    float t = t_nom / t_den, u = u_nom / u_den;
+    return t >= 0.0f && t <= 1.0f && u >= 0.0f && u <= 1.0f;
+}
+
+// True when the solver would reject the ring: cast to float32 as it reads, subtract the float frame
+// origin (fx, fy), drop consecutive duplicates (clean_ring), then test every pair of non-adjacent
+// edges with the solver's edge test. A swept pair loop keeps this near-linear for long outlines.
+bool solver_rejects(const Ring& r, float fx, float fy) {
+    std::vector<float> x, y;
+    x.reserve(r.size() / 2);
+    y.reserve(r.size() / 2);
+    for (size_t k = 0; k + 1 < r.size(); k += 2) {
+        float px = float(r[k]) - fx, py = float(r[k + 1]) - fy;
+        if (!x.empty() && x.back() == px && y.back() == py) continue;
+        x.push_back(px);
+        y.push_back(py);
+    }
+    if (x.size() >= 2 && x.front() == x.back() && y.front() == y.back()) { x.pop_back(); y.pop_back(); }
+    const size_t n = x.size();
+    if (n < 3) return true;
+    std::vector<size_t> order(n);
+    for (size_t k = 0; k < n; ++k) order[k] = k;
+    auto lo = [&](size_t e) { return std::min(x[e], x[(e + 1) % n]); };
+    auto hi = [&](size_t e) { return std::max(x[e], x[(e + 1) % n]); };
+    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return lo(a) < lo(b); });
+    for (size_t ia = 0; ia < n; ++ia) {
+        const size_t i = order[ia], i2 = (i + 1) % n;
+        for (size_t ib = ia + 1; ib < n && lo(order[ib]) <= hi(i); ++ib) {
+            const size_t j = order[ib], j2 = (j + 1) % n;
+            if (j == i2 || i == j2) continue;   // neighbours share a vertex (the solver skips them too)
+            if (f32_edges_touch(x[i], y[i], x[i2], y[i2], x[j], y[j], x[j2], y[j2])) return true;
+        }
+    }
+    return false;
+}
+
+Clipper2Lib::Path64 to_path64(const Ring& r, double scale) {
     Clipper2Lib::Path64 p;
     p.reserve(r.size() / 2);
     for (size_t k = 0; k + 1 < r.size(); k += 2)
         p.emplace_back(int64_t(std::llround(r[k] * scale)), int64_t(std::llround(r[k + 1] * scale)));
-    Clipper2Lib::ClipperOffset co(2.0, std::max(tol * scale, 1.0));   // arc tolerance in grid units
-    co.AddPath(p, Clipper2Lib::JoinType::Round, Clipper2Lib::EndType::Polygon);
-    Clipper2Lib::Paths64 sol;
-    co.Execute(delta * scale, sol);
-    Ring best;
-    double best_a = 0.0;
-    for (const auto& q : sol) {
-        if (q.size() < 3) continue;
-        Ring c;
-        c.reserve(q.size() * 2);
-        for (const auto& pt : q) { c.push_back(double(pt.x) / scale); c.push_back(double(pt.y) / scale); }
-        double a = std::fabs(ring_area(c));
-        if (a > best_a) { best_a = a; best = std::move(c); }
-    }
-    return best;
+    return p;
 }
 
-// Returns a human-readable problem, or "" when every ring survived.
-std::string apply_clearances(Job& job) {
-    if (job.spacing <= 0.0 && job.margin <= 0.0) return "";
+Ring to_ring(const Clipper2Lib::Path64& q, double scale) {
+    Ring c;
+    c.reserve(q.size() * 2);
+    for (const auto& pt : q) { c.push_back(double(pt.x) / scale); c.push_back(double(pt.y) / scale); }
+    return c;
+}
+
+double grid_scale(double ext) {
+    double scale = 1e4;   // integer grid, well inside Clipper's int64 range
+    while (scale > 1.0 && ext * scale > 4e15) scale /= 10.0;
+    return scale;
+}
+
+double ring_extent(const Ring& r) {
+    double ext = 0.0;
+    for (double v : r) ext = std::max(ext, std::fabs(v));
+    return ext;
+}
+
+// Offset a closed ring by `delta` with round joins and simplify the pieces with RDP(eps). The extra
+// `tol + eps` goes to the safe side: outward for an obstacle, inward for a free region. Returns every
+// resulting piece, largest area first (an offset can split a region, or make it vanish).
+std::vector<Ring> offset_ring(const Ring& r, double delta, bool obstacle, double tol, double eps) {
+    const double scale = grid_scale(ring_extent(r) + std::fabs(delta) + tol + eps + 1.0);
+    Clipper2Lib::ClipperOffset co(2.0, std::max(tol * scale, 1.0));   // arc tolerance in grid units
+    co.AddPath(to_path64(r, scale), Clipper2Lib::JoinType::Round, Clipper2Lib::EndType::Polygon);
+    Clipper2Lib::Paths64 sol;
+    co.Execute((delta + (obstacle ? 1.0 : -1.0) * (tol + eps)) * scale, sol);
+    std::vector<Ring> out;
+    for (const auto& q0 : sol) {
+        if (q0.size() < 3) continue;
+        Clipper2Lib::Path64 q = Clipper2Lib::TrimCollinear(Clipper2Lib::RamerDouglasPeucker(q0, eps * scale), false);
+        if (q.size() < 3) continue;
+        Ring c = to_ring(q, scale);
+        if (ring_has_area(c)) out.push_back(std::move(c));
+    }
+    std::sort(out.begin(), out.end(), [](const Ring& a, const Ring& b) { return std::fabs(ring_area(a)) > std::fabs(ring_area(b)); });
+    return out;
+}
+
+// eps schedule shared by every ring: starts at the sagitta / float floor, doubles on each retry, and
+// never exceeds half the offset distance (or 64 floors when there is no offset).
+struct EpsPlan {
+    double tol, eps, eps_max;
+    EpsPlan(const Ring& r, double delta) {
+        tol = std::max(0.002 * std::fabs(delta), 1e-6);
+        eps = std::max(tol, (ring_extent(r) + 1.0) * 1e-6);
+        eps_max = std::max(0.5 * std::fabs(delta), 64.0 * eps);
+    }
+    bool grow() { if (eps * 2.0 > eps_max) return false; eps *= 2.0; return true; }
+};
+
+static bool g_verbose_geometry = std::getenv("OPENNEST_JOB_GEOMETRY_LOG") != nullptr;
+
+// Offset `r` and make every piece solver-safe. `frame` is the ring whose float32 bbox minimum the
+// solver subtracts (nullptr: each piece's own). Returns "" and the pieces, or the problem.
+std::string make_safe(const Ring& r, double delta, bool obstacle, const Ring* frame, const std::string& what,
+                      std::vector<Ring>& out) {
+    EpsPlan plan(r, delta);
+    for (int attempt = 0;; ++attempt) {
+        out = offset_ring(r, delta, obstacle, plan.tol, plan.eps);
+        bool ok = true;
+        for (const Ring& c : out) {
+            auto [fx, fy] = f32_frame(frame ? *frame : c);
+            if (solver_rejects(c, fx, fy)) { ok = false; break; }
+        }
+        if (ok) {
+            if (attempt && g_verbose_geometry)
+                std::fprintf(stderr, "[opennest_job] %s: solver-safe after %d retr%s (eps %.4g)\n", what.c_str(), attempt, attempt == 1 ? "y" : "ies", plan.eps);
+            return "";
+        }
+        if (!plan.grow())
+            return what + ": edges keep touching at float32 precision even after simplifying by " + js::number(plan.eps) +
+                   "; clean the outline (remove zigzags / duplicate vertices) or increase the clearance";
+    }
+}
+
+// Keep-outs of a sheet = bounding rectangle minus the usable pieces. An island of usable sheet enclosed
+// by a cut-out cannot be expressed (a hole inside a keep-out), so it is an error.
+std::string sheet_keepouts(const std::vector<Ring>& usable, const Ring& rect, const std::string& what, std::vector<Ring>& keepouts) {
+    double ext = ring_extent(rect) + 1.0;
+    const double scale = grid_scale(ext);
+    Clipper2Lib::Clipper64 clip;
+    clip.AddSubject({to_path64(rect, scale)});
+    Clipper2Lib::Paths64 clips;
+    for (const Ring& u : usable) clips.push_back(to_path64(u, scale));
+    clip.AddClip(clips);
+    Clipper2Lib::PolyTree64 tree;
+    clip.Execute(Clipper2Lib::ClipType::Difference, Clipper2Lib::FillRule::NonZero, tree);
+    keepouts.clear();
+    for (const auto& child : tree) {
+        if (child->Count() > 0) return what + ": a piece of usable sheet lies inside a cut-out; split the sheet into separate sheets";
+        Clipper2Lib::Path64 q = Clipper2Lib::TrimCollinear(child->Polygon(), false);
+        if (q.size() < 3) continue;
+        Ring c = to_ring(q, scale);
+        if (ring_has_area(c)) keepouts.push_back(std::move(c));
+    }
+    return "";
+}
+
+// Returns "" or a human-readable problem. Always runs (step 1 and 3 apply even without clearances).
+std::string prepare_geometry(Job& job) {
     const double half = 0.5 * job.spacing;
-    const double tol = std::max(0.002 * std::max(job.spacing, job.margin), 1e-6);
-    const double sheet_d = job.margin - half;   // > 0: sheets shrink / sheet holes grow
+    const double sheet_d = job.margin - half;   // > 0: sheets shrink / sheet holes grow; < 0: the other way
     for (size_t k = 0; k < job.parts.size(); ++k) {
         PartSpec& p = job.parts[k];
-        if (half > 0) {
-            Ring o = offset_ring(p.outer, half + tol, tol);
-            if (o.size() < 6) return "parts[" + std::to_string(k) + "]: outer offset failed";
-            p.outer = std::move(o);
-            std::vector<Ring> holes;
-            for (const Ring& h : p.holes) {
-                Ring s = offset_ring(h, -(half + tol), tol);
-                if (s.size() >= 6) holes.push_back(std::move(s));   // a hole too small for any part vanishes
-            }
-            p.holes = std::move(holes);
+        const std::string what = "parts[" + std::to_string(k) + "]";
+        if (!ring_has_area(p.outer)) return what + ".outer has no area";
+        BBox b = bbox_of(p.outer);
+        p.shift_x = b.x0;
+        p.shift_y = b.y0;
+        shift_ring(p.outer, -b.x0, -b.y0);
+        for (Ring& h : p.holes) shift_ring(h, -b.x0, -b.y0);
+        std::vector<Ring> pieces;
+        if (std::string e = make_safe(p.outer, half, true, nullptr, what + ".outer", pieces); !e.empty()) return e;
+        if (pieces.empty()) return what + ".outer vanished";
+        p.outer = std::move(pieces[0]);   // an outward offset has one outer; a pocket it seals is dropped (solid: safe)
+        std::vector<Ring> holes;
+        for (size_t h = 0; h < p.holes.size(); ++h) {
+            // A hole that cannot be made solver-safe is left out: the solver then treats that area as
+            // solid, which only loses a place to nest small parts, never clearance.
+            std::vector<Ring> hp;
+            std::string e = make_safe(p.holes[h], -half, false, &p.outer, what + ".holes[" + std::to_string(h) + "]", hp);
+            if (!e.empty()) { std::fprintf(stderr, "[opennest_job] %s (hole ignored)\n", e.c_str()); continue; }
+            for (Ring& piece : hp) holes.push_back(std::move(piece));   // a shrinking hole may split: every piece is a cavity
         }
+        p.holes = std::move(holes);
     }
-    if (sheet_d != 0.0) {
-        for (size_t k = 0; k < job.sheets.size(); ++k) {
-            SheetSpec& s = job.sheets[k];
-            Ring o = offset_ring(s.outer, -sheet_d - tol, tol);
-            if (o.size() < 6) return "sheets[" + std::to_string(k) + "]: no usable area left after the margin";
-            s.outer = std::move(o);
-            std::vector<Ring> holes;
-            for (const Ring& h : s.holes) {
-                Ring g = offset_ring(h, sheet_d + tol, tol);
-                if (g.size() >= 6) holes.push_back(std::move(g));
-            }
-            s.holes = std::move(holes);
+    for (size_t k = 0; k < job.sheets.size(); ++k) {
+        SheetSpec& s = job.sheets[k];
+        const std::string what = "sheets[" + std::to_string(k) + "]";
+        if (!ring_has_area(s.outer)) return what + ".outer has no area";
+        BBox b = bbox_of(s.outer);
+        s.shift_x = b.x0;
+        s.shift_y = b.y0;
+        shift_ring(s.outer, -b.x0, -b.y0);
+        for (Ring& h : s.holes) shift_ring(h, -b.x0, -b.y0);
+        // Usable area: the outline shrunk by the margin (the solver never tests this ring itself, only
+        // the keep-outs derived from it, so the retry loop below is driven by those).
+        EpsPlan plan(s.outer, -sheet_d);
+        Ring rect;
+        std::vector<Ring> keepouts;
+        for (;;) {
+            std::vector<Ring> usable = offset_ring(s.outer, -sheet_d, false, plan.tol, plan.eps);
+            if (usable.empty()) return what + ": no usable area is left after the margin";
+            BBox u = bbox_of(usable[0]);
+            for (const Ring& piece : usable) { BBox c = bbox_of(piece); u.x0 = std::min(u.x0, c.x0); u.y0 = std::min(u.y0, c.y0); u.x1 = std::max(u.x1, c.x1); u.y1 = std::max(u.y1, c.y1); }
+            rect = {u.x0, u.y0, u.x1, u.y0, u.x1, u.y1, u.x0, u.y1};
+            if (std::string e = sheet_keepouts(usable, rect, what, keepouts); !e.empty()) return e;
+            auto [fx, fy] = f32_frame(rect);
+            bool ok = true;
+            for (const Ring& ko : keepouts) if (solver_rejects(ko, fx, fy)) { ok = false; break; }
+            if (ok) break;
+            if (!plan.grow()) return what + ".outer: the outline's keep-outs keep touching at float32 precision; simplify the outline";
         }
+        std::vector<Ring> holes = std::move(keepouts);
+        for (size_t h = 0; h < s.holes.size(); ++h) {
+            std::vector<Ring> hp;
+            if (std::string e = make_safe(s.holes[h], sheet_d, true, &rect, what + ".holes[" + std::to_string(h) + "]", hp); !e.empty()) return e;
+            if (!hp.empty()) holes.push_back(std::move(hp[0]));   // a grown keep-out has one outer; a pocket it seals stays forbidden (safe)
+        }
+        s.outer = std::move(rect);
+        s.holes = std::move(holes);
     }
     return "";
 }
@@ -445,7 +666,7 @@ private:
 };
 
 struct Options {
-    std::string in, out, events, cancel_file;
+    std::string in, out, events, cancel_file, dump_geometry;
     bool events_layout = false;
     bool quiet = false;
     double interval = 2.0;
@@ -475,6 +696,7 @@ Options parse_args(int argc, char** argv) {
         };
         if (a == "--events") o.events = next();
         else if (a == "--cancel-file") o.cancel_file = next();
+        else if (a == "--dump-geometry") o.dump_geometry = next();
         else if (a == "--events-layout") o.events_layout = true;
         else if (a == "--interval") o.interval = next_num();
         else if (a == "--max-wall") o.max_wall = next_num();
@@ -493,12 +715,25 @@ Options parse_args(int argc, char** argv) {
     return o;
 }
 
-std::string layout_json(const std::vector<double>& tx, const std::vector<double>& ty,
+// Fold the local frames back: the solver placed the part ring relative to its bbox minimum m on a sheet
+// ring relative to its bbox minimum, so placed = R*(p - m) + t_solver + sheet_min + sheet_shift.
+void fold_back(const Job& job, const Flat& f, int k, double& tx, double& ty, double ang, int sheet) {
+    if (sheet < 0 || size_t(sheet) >= f.sheet_copies.size()) return;
+    const PartSpec& p = job.parts[f.part_copies[size_t(k)].spec];
+    const SheetSpec& sh = job.sheets[f.sheet_copies[size_t(sheet)].spec];
+    const double c = std::cos(ang), s = std::sin(ang);
+    tx = tx - (c * p.shift_x - s * p.shift_y) + f.sheet_min_x[size_t(sheet)] + sh.shift_x;
+    ty = ty - (s * p.shift_x + c * p.shift_y) + f.sheet_min_y[size_t(sheet)] + sh.shift_y;
+}
+
+std::string layout_json(const Job& job, const Flat& f, const std::vector<double>& tx, const std::vector<double>& ty,
                         const std::vector<double>& ang, const std::vector<int>& sid) {
     std::string o = "[";
     for (size_t k = 0; k < tx.size(); ++k) {
+        double x = tx[k], y = ty[k];
+        fold_back(job, f, int(k), x, y, ang[k], sid[k]);
         if (k) o += ",";
-        o += "[" + std::to_string(sid[k]) + "," + js::number(tx[k]) + "," + js::number(ty[k]) + "," + js::number(ang[k]) + "]";
+        o += "[" + std::to_string(sid[k]) + "," + js::number(x) + "," + js::number(y) + "," + js::number(ang[k]) + "]";
     }
     return o + "]";
 }
@@ -529,7 +764,24 @@ int main(int argc, char** argv) {
     } catch (const std::exception& e) {
         return fail_result(std::string("invalid job: ") + e.what());
     }
-    if (std::string err = apply_clearances(job); !err.empty()) return fail_result("invalid job: " + err);
+    if (std::string err = prepare_geometry(job); !err.empty()) return fail_result("invalid job: " + err);
+    if (!opt.dump_geometry.empty()) {   // debug: the exact rings the solver receives (after clearances)
+        auto ring_json = [](const Ring& r) {
+            std::string o = "[";
+            for (size_t k = 0; k + 1 < r.size(); k += 2) o += (k ? ",[" : "[") + js::number(r[k]) + "," + js::number(r[k + 1]) + "]";
+            return o + "]";
+        };
+        std::string d = "{\"parts\":[";
+        for (size_t k = 0; k < job.parts.size(); ++k) {
+            d += (k ? "," : "") + std::string("{\"id\":") + js::dump(job.parts[k].id) + ",\"outer\":" + ring_json(job.parts[k].outer) + ",\"holes\":[";
+            for (size_t h = 0; h < job.parts[k].holes.size(); ++h) d += (h ? "," : "") + ring_json(job.parts[k].holes[h]);
+            d += "]}";
+        }
+        d += "],\"sheets\":[";
+        for (size_t k = 0; k < job.sheets.size(); ++k) d += (k ? "," : "") + std::string("{\"outer\":") + ring_json(job.sheets[k].outer) + "}";
+        d += "]}\n";
+        try { write_atomic(opt.dump_geometry, d); } catch (const std::exception& e) { return fail_result(e.what()); }
+    }
     Flat f = flatten(job);
     const int n = int(f.part_copies.size());
     const int ns = int(f.sheet_copies.size());
@@ -589,7 +841,7 @@ int main(int argc, char** argv) {
                 std::string ev = "{\"event\":\"progress\",\"t\":" + js::number(t) + ",\"rounds\":" +
                                  std::to_string(np_progress()) + ",\"placed\":" + std::to_string(placed) +
                                  ",\"n_sheets\":" + std::to_string(pns);
-                if (opt.events_layout) ev += ",\"layout\":" + layout_json(ptx, pty, pang, psid);
+                if (opt.events_layout) ev += ",\"layout\":" + layout_json(job, f, ptx, pty, pang, psid);
                 events->line(ev + "}");
             }
         }
@@ -607,8 +859,7 @@ int main(int argc, char** argv) {
     cv.notify_all();
     monitor.join();
     double wall = elapsed();
-    for (int k = 0; k < n; ++k)
-        if (sid[k] >= 0 && sid[k] < ns) { tx[k] += f.sheet_min_x[size_t(sid[k])]; ty[k] += f.sheet_min_y[size_t(sid[k])]; }
+    for (int k = 0; k < n; ++k) fold_back(job, f, k, tx[k], ty[k], ang[k], sid[k]);
 
     int q_overlap = -1, q_oob = -1, q_unplaced = -1, q_cancelled = -1, q_demoted = -1;
     int clean = np_last_quality(&q_overlap, &q_oob, &q_unplaced, &q_cancelled, &q_demoted);

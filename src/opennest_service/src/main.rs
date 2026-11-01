@@ -1,9 +1,8 @@
-//! OpenNest web service: accepts nesting jobs over HTTP, runs them with the `opennest_job` worker,
-//! bills accounts in credits, and publishes each result as JSON and as a session_viewer scene.
-//! Configuration is environment-only; see README.md.
+//! OpenNest web service, single-user edition: one password, a job queue running the `opennest_job`
+//! worker, live progress, results as JSON and as session_viewer scenes. Configuration is
+//! environment-only; see README.md.
 
 mod api;
-mod billing;
 mod config;
 mod db;
 mod preview;
@@ -27,8 +26,8 @@ pub struct AppState {
     pub limiter: Mutex<HashMap<String, Vec<Instant>>>,
 }
 
-/// Ctrl+C, or SIGTERM from a platform restart (Render, docker stop, systemd). Jobs still running at that
-/// moment are closed and refunded by `db::recover_interrupted` on the next start.
+/// Ctrl+C, or SIGTERM from a platform restart (docker stop, systemd). Jobs still running at that
+/// moment are closed by `db::recover_interrupted` on the next start.
 async fn shutdown_signal() {
     #[cfg(unix)]
     {
@@ -59,11 +58,8 @@ async fn main() {
     let conn = db::open(&cfg.data_dir.join("opennest.sqlite")).expect("cannot open the database");
     match db::recover_interrupted(&conn) {
         Ok(0) => {}
-        Ok(n) => tracing::warn!("closed and refunded {n} job(s) interrupted by the last shutdown"),
+        Ok(n) => tracing::warn!("closed {n} job(s) interrupted by the last shutdown"),
         Err(e) => tracing::error!("recovery: {e}"),
-    }
-    if cfg.admin_token.is_none() {
-        tracing::warn!("OPENNEST_ADMIN_TOKEN is not set: the admin endpoints are disabled");
     }
     tracing::info!(
         bind = %cfg.bind, slots = cfg.slots, threads_per_job = cfg.threads_per_job,
@@ -77,13 +73,11 @@ async fn main() {
     });
     tokio::spawn(worker::run(state.clone()));
 
-    // Bearer-token auth, no cookies: any origin may call the API (the docs site, session_viewer, scripts).
     let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any);
     let app = Router::new()
         .route("/healthz", get(api::health))
         .route("/api/info", get(api::info))
-        .route("/api/signup", post(api::signup))
-        .route("/api/me", get(api::me))
+        .route("/api/login", post(api::login))
         .route("/api/jobs", post(api::submit).get(api::list_jobs))
         .route("/api/jobs/{id}", get(api::get_job))
         .route("/api/jobs/{id}/cancel", post(api::cancel))
@@ -91,10 +85,6 @@ async fn main() {
         .route("/api/jobs/{id}/result", get(api::result))
         .route("/api/jobs/{id}/{file}", get(api::job_file))
         .route("/live/{token}/view.yaml", get(api::latest_manifest))
-        .route("/api/admin/accounts", post(api::admin_create_account))
-        .route("/api/admin/accounts/{id}/credits", post(api::admin_credits))
-        .route("/api/admin/jobs", get(api::admin_jobs))
-        .route("/api/webhooks/paddle", post(billing::paddle_webhook))
         .fallback_service(ServeDir::new(&cfg.web_dir))
         .layer(RequestBodyLimitLayer::new(cfg.max_body_bytes))
         .layer(cors)

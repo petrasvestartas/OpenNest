@@ -9,6 +9,7 @@ const store = {
 };
 
 let INFO = null;            // /api/info
+let UNLOCKED = false;
 let PARTS = [];             // [{name, outer:[[x,y]], holes:[[[x,y]]]}]
 let LOADED_JOB = null;      // a whole opennest.job/1 loaded from JSON
 let CURRENT = null;         // {job, jobRecord, result}
@@ -22,8 +23,8 @@ function msg(text, bad = false) {
   $("messages").prepend(li);
 }
 
-function key() { return ($("apiKey").value || "").trim(); }
-function authHeaders() { return key() ? { Authorization: "Bearer " + key() } : {}; }
+function password() { return ($("password").value || "").trim(); }
+function authHeaders() { return password() ? { Authorization: "Bearer " + password() } : {}; }
 
 async function api(path, opts = {}) {
   const r = await fetch(API + path, { ...opts, headers: { ...(opts.headers || {}), ...authHeaders() } });
@@ -437,50 +438,60 @@ function exportDxf() {   // AutoCAD R12: POLYLINE / VERTEX / SEQEND, one layer p
 // ------------------------------------------------------------------------------------------------
 // UI
 // ------------------------------------------------------------------------------------------------
-async function refreshAccount() {
-  if (!key()) { $("accountInfo").textContent = "Without a key you can run free 30-second previews."; updateTiers(false); return; }
+function fmtTime(ts) { return new Date(ts * 1000).toLocaleString(); }
+const FIT_NAMES = { 0: "sheet by sheet", 1: "one sheet", 2: "global bin pack", 3: "group-and-fill" };
+
+async function unlock() {
   try {
-    const me = await api("/api/me");
-    const a = me.account;
-    $("accountInfo").innerHTML = "";
-    const t = document.createElement("span");
-    t.textContent = `${a.email} · ${Math.floor(a.credits)} credits (seconds of compute) · `;
-    const link = document.createElement("a");
-    link.href = me.latest_viewer; link.target = "_blank"; link.rel = "noopener";
-    link.textContent = "your latest result in the session viewer";
-    $("accountInfo").append(t, link);
-    updateTiers(true);
-    setupBuy(a);
-  } catch (e) { $("accountInfo").textContent = "Key not accepted: " + e.message; updateTiers(false); }
+    const r = await api("/api/login", { method: "POST" });
+    UNLOCKED = true;
+    store.set("opennest_pw", password());
+    $("loginCard").hidden = true; $("app").hidden = false;
+    $("latestViewer").href = r.latest_viewer; $("latestViewer").hidden = false;
+    refreshJobs();
+  } catch (e) { $("loginInfo").textContent = e.message; UNLOCKED = false; }
 }
-function updateTiers(hasKey) {
-  const sel = $("tier"); const prev = sel.value; sel.innerHTML = "";
-  for (const t of (INFO && INFO.tiers) || []) {
-    const o = document.createElement("option");
-    o.value = t.name; o.disabled = t.billed && !hasKey;
-    o.textContent = `${t.name}: ${t.description}${t.billed ? "" : " (free)"}${t.billed && !hasKey ? " (needs an account)" : ""}`;
-    sel.appendChild(o);
-  }
-  sel.value = [...sel.options].some((o) => o.value === prev && !o.disabled) ? prev : (hasKey ? "standard" : "preview");
+
+async function refreshJobs() {
+  if (!UNLOCKED) return;
+  try {
+    const r = await api("/api/jobs");
+    const tb = $("jobs").tBodies[0]; tb.innerHTML = "";
+    for (const j of r.jobs.slice(0, 30)) {
+      const tr = document.createElement("tr");
+      const cells = [
+        fmtTime(j.created),
+        j.name || "(no name)",
+        `${j.part_copies} parts`,
+        FIT_NAMES[j.fit_mode] || j.fit_mode,
+        j.status + (j.n_sheets != null ? ` · ${j.n_sheets} sheet(s)` : "") + (j.unplaced ? ` · ${j.unplaced} unplaced` : "") + (j.wall_s ? ` · ${Math.round(j.wall_s)} s` : ""),
+      ];
+      cells.forEach((t, i) => { const td = document.createElement("td"); td.textContent = t; if (i === 1) td.className = "name"; tr.appendChild(td); });
+      const td = document.createElement("td");
+      if (["ok", "partial", "cancelled"].includes(j.status) && j.n_sheets) {
+        const a = document.createElement("a"); a.href = "#"; a.textContent = "show";
+        a.onclick = (ev) => { ev.preventDefault(); openJob(j.id); };
+        const v = document.createElement("a"); v.href = j.links.viewer; v.target = "_blank"; v.rel = "noopener"; v.textContent = "viewer";
+        td.append(a, " · ", v);
+      } else if (["queued", "running"].includes(j.status)) {
+        const a = document.createElement("a"); a.href = "#"; a.textContent = "follow";
+        a.onclick = (ev) => { ev.preventDefault(); CURRENT = { job: null, jobRecord: j, result: null }; $("progress").hidden = false; $("cancel").hidden = false; follow(j); };
+        td.appendChild(a);
+      }
+      tr.appendChild(td); tb.appendChild(tr);
+    }
+  } catch (e) { msg("Could not list jobs: " + e.message, true); }
 }
-function setupBuy(account) {
-  const box = $("buy");
-  if (!INFO || !INFO.paddle || !INFO.paddle.prices.length) { box.hidden = true; return; }
-  box.hidden = false; box.innerHTML = "";
-  for (const p of INFO.paddle.prices) {
-    const b = document.createElement("button");
-    b.type = "button"; b.textContent = `Buy ${Math.round(p.credits / 60)} compute minutes`;
-    b.onclick = () => window.Paddle && window.Paddle.Checkout.open({
-      items: [{ priceId: p.id, quantity: 1 }], customer: { email: account.email }, customData: { account_id: account.id },
-    });
-    box.appendChild(b);
-  }
-  if (!window.Paddle) {
-    const s = document.createElement("script");
-    s.src = "https://cdn.paddle.com/paddle/v2/paddle.js";
-    s.onload = () => window.Paddle.Initialize({ token: INFO.paddle.client_token });
-    document.head.appendChild(s);
-  }
+
+async function openJob(id) {
+  try {
+    const rec = await api(`/api/jobs/${id}`);
+    const job = await api(`/api/jobs/${id}/job.json`);
+    const result = await api(`/api/jobs/${id}/result`);
+    CURRENT = { job, jobRecord: rec, result };
+    showResult();
+    $("resultCard").scrollIntoView({ behavior: "smooth" });
+  } catch (e) { msg("Could not open the job: " + e.message, true); }
 }
 
 async function loadFiles() {
@@ -493,7 +504,7 @@ async function loadFiles() {
       if (/\.json$/i.test(f.name)) {
         const j = JSON.parse(text);
         if (j.schema !== "opennest.job/1") throw new Error("not an opennest.job/1 file");
-        LOADED_JOB = j;
+        LOADED_JOB = j; if (!LOADED_JOB.name) LOADED_JOB.name = f.name;
         PARTS.push(...j.parts.map((p, i) => ({ name: String(p.id ?? i), outer: p.outer, holes: p.holes || [], qty: p.qty ?? 1 })));
         continue;
       }
@@ -513,61 +524,85 @@ async function loadFiles() {
 }
 
 function buildJob() {
-  if (LOADED_JOB) return JSON.parse(JSON.stringify(LOADED_JOB));
-  const W = +$("sheetW").value, H = +$("sheetH").value, N = Math.max(1, Math.round(+$("sheetN").value));
-  if (!(W > 0 && H > 0)) throw new Error("set a sheet width and height");
-  const qty = Math.max(1, Math.round(+$("qty").value || 1));
-  const rot = +$("rotations").value;
-  return {
-    schema: "opennest.job/1", units: "mm",
-    spacing: Math.max(0, +$("spacing").value || 0), margin: Math.max(0, +$("margin").value || 0),
-    parts: PARTS.map((p, i) => ({ id: p.name || `part ${i + 1}`, qty: p.qty ?? qty, rotations: rot, outer: p.outer, holes: p.holes })),
-    sheets: [{ id: `sheet ${W}x${H}`, count: N, outer: [[0, 0], [W, 0], [W, H], [0, H]] }],
-    params: { iter_mode: 1, iter_budget: 4000, num_rotations: rot === 0 ? 360 : rot, seed: 1 },
-  };
+  let job;
+  if (LOADED_JOB) job = JSON.parse(JSON.stringify(LOADED_JOB));
+  else {
+    const W = +$("sheetW").value, H = +$("sheetH").value, N = Math.max(1, Math.round(+$("sheetN").value));
+    if (!(W > 0 && H > 0)) throw new Error("set a sheet width and height");
+    const qty = Math.max(1, Math.round(+$("qty").value || 1));
+    const rot = +$("rotations").value;
+    const names = [...$("files").files].map((f) => f.name).join(", ");
+    job = {
+      schema: "opennest.job/1", units: "mm", name: names,
+      spacing: Math.max(0, +$("spacing").value || 0), margin: Math.max(0, +$("margin").value || 0),
+      parts: PARTS.map((p, i) => ({ id: p.name || `part ${i + 1}`, qty: p.qty ?? qty, rotations: rot, outer: p.outer, holes: p.holes })),
+      sheets: [{ id: `sheet ${W}x${H}`, count: N, outer: [[0, 0], [W, 0], [W, H], [0, H]] }],
+      params: { num_rotations: rot === 0 ? 3600 : rot },
+    };
+  }
+  job.params = job.params || {};
+  job.params.fit_mode = +$("fitMode").value;
+  job.params.iter_mode = 1;
+  job.params.iter_budget = job.params.iter_budget || 4000;
+  job.params.seed = Math.max(0, Math.round(+$("seed").value || 0));
+  job.limits = { wall_seconds: +$("wall").value };
+  return job;
 }
 
 async function run() {
   let job;
   try { job = buildJob(); } catch (e) { msg(e.message, true); return; }
-  const tier = $("tier").value;
   $("run").disabled = true; $("resultCard").hidden = true;
   $("progress").hidden = false; $("barFill").style.width = "0"; $("progressText").textContent = "Submitting…";
+  $("liveView").innerHTML = "";
   let rec;
   try {
-    rec = await api(`/api/jobs?tier=${encodeURIComponent(tier)}`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(job),
-    });
+    rec = await api("/api/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(job) });
   } catch (e) { msg("Submit failed: " + e.message, true); $("run").disabled = false; $("progress").hidden = true; return; }
   CURRENT = { job, jobRecord: rec, result: null };
   $("cancel").hidden = false;
   $("progressText").textContent = rec.queue_position ? `Queued (${rec.queue_position} ahead)…` : "Starting…";
+  refreshJobs();
   follow(rec);
+}
+
+// Draw the solver's in-progress layout: [[sheet, tx, ty, angle], ...] per part copy, in job order.
+function drawLive(layout) {
+  const job = CURRENT && CURRENT.job;
+  if (!job) return;
+  const copies = [];
+  job.parts.forEach((p, i) => { for (let c = 0; c < (p.qty ?? 1); c++) copies.push({ part: p.id ?? i, copy: c }); });
+  if (layout.length !== copies.length) return;
+  const result = { placements: layout.map((l, k) => ({ ...copies[k], sheet: l[0], tx: l[1], ty: l[2], angle: l[3] })) };
+  try { drawInto($("liveView"), layoutResult(job, result).sheets); } catch { /* partial data */ }
 }
 
 function follow(rec) {
   if (SOURCE) SOURCE.close();
   SOURCE = new EventSource(rec.links.events);
   const cap = rec.wall_cap;
+  let lastDraw = 0;
   SOURCE.addEventListener("progress", (e) => {
     const p = JSON.parse(e.data);
     $("barFill").style.width = Math.min(100, (100 * p.t) / cap) + "%";
     $("progressText").textContent = `Running · ${p.t.toFixed(0)} s of at most ${cap.toFixed(0)} s · ${p.rounds.toLocaleString()} solver rounds` +
       (p.placed ? ` · ${p.placed} placed on ${p.n_sheets} sheet(s) so far` : "");
+    if (p.layout && p.placed && Date.now() - lastDraw > 1500) { lastDraw = Date.now(); drawLive(p.layout); }
   });
   SOURCE.addEventListener("cap", () => { $("progressText").textContent = "Time budget reached, keeping the best layout…"; });
   SOURCE.addEventListener("status", async (e) => {
     SOURCE.close(); SOURCE = null;
     const j = JSON.parse(e.data);
-    $("cancel").hidden = true; $("run").disabled = false; $("barFill").style.width = "100%";
+    $("cancel").hidden = true; $("run").disabled = !PARTS.length; $("barFill").style.width = "100%";
+    refreshJobs();
     if (j.status === "failed") { $("progressText").textContent = "Failed: " + (j.error || "unknown error"); msg("Job failed: " + (j.error || ""), true); return; }
-    $("progressText").textContent = `Finished (${j.status}) in ${(j.wall_s || 0).toFixed(1)} s` + (j.charged ? ` · ${j.charged} credits used` : "");
+    $("progressText").textContent = `Finished (${j.status}) in ${(j.wall_s || 0).toFixed(1)} s`;
     try {
+      if (!CURRENT.job) CURRENT.job = await api(`/api/jobs/${j.id}/job.json`);
       CURRENT.result = await api(`/api/jobs/${j.id}/result`);
       CURRENT.jobRecord = j;
       showResult();
     } catch (err) { msg("Could not load the result: " + err.message, true); }
-    refreshAccount();
   });
   SOURCE.onerror = () => { /* EventSource reconnects by itself */ };
 }
@@ -578,8 +613,10 @@ function showResult() {
   $("resultCard").hidden = false;
   const utils = L.sheets.map((s) => (100 * s.util).toFixed(1) + "%").join(", ");
   $("resultInfo").textContent = `${L.sheets.length} sheet(s) used · utilisation ${utils}` +
-    (L.unplaced ? ` · ${L.unplaced} part(s) did not fit` : " · every part placed");
+    (L.unplaced ? ` · ${L.unplaced} part(s) did not fit` : " · every part placed") +
+    (jobRecord.status === "cancelled" ? " · stopped early" : "");
   $("openViewer").href = jobRecord.links.viewer;
+  $("dlLog").href = `/api/jobs/${jobRecord.id}/solver.log`;
   drawInto($("resultView"), L.sheets);
 }
 
@@ -589,21 +626,10 @@ async function cancelJob() {
   catch (e) { msg("Cancel failed: " + e.message, true); }
 }
 
-async function signup() {
-  const email = ($("email").value || "").trim();
-  if (!email) { msg("Enter an email address first", true); return; }
-  try {
-    const r = await api("/api/signup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) });
-    $("apiKey").value = r.api_key; store.set("opennest_key", r.api_key);
-    msg(`Account created with ${Math.floor(r.account.credits)} free credits. Your API key is saved in this browser; copy it somewhere safe, it is shown only once.`);
-    refreshAccount();
-  } catch (e) { msg("Signup failed: " + e.message, true); }
-}
-
 async function init() {
-  $("apiKey").value = store.get("opennest_key") || "";
-  $("saveKey").onclick = () => { store.set("opennest_key", key()); refreshAccount(); };
-  $("signup").onclick = signup;
+  $("password").value = store.get("opennest_pw") || "";
+  $("login").onclick = unlock;
+  $("password").addEventListener("keydown", (e) => { if (e.key === "Enter") unlock(); });
   $("files").onchange = loadFiles;
   $("scale").onchange = () => $("files").files.length && loadFiles();
   $("run").onclick = run;
@@ -613,9 +639,9 @@ async function init() {
   $("dlJson").onclick = () => download("opennest_result.json", JSON.stringify(CURRENT.result, null, 1), "application/json");
   try {
     INFO = await api("/api/info");
-    $("svcInfo").textContent = `service ${INFO.version} · ${INFO.slots} worker slot(s) × ${INFO.threads_per_job} threads`;
+    $("svcInfo").textContent = `${INFO.slots} job(s) at a time × ${INFO.threads_per_job} threads`;
+    for (const o of $("wall").options) if (+o.value > INFO.max_wall_seconds) o.disabled = true;
   } catch (e) { msg("Service not reachable: " + e.message, true); }
-  updateTiers(false);
-  refreshAccount();
+  if (password()) unlock();
 }
 init();
