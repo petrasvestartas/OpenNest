@@ -61,6 +61,16 @@ async fn main() {
         println!("wrote {out}");
         return;
     }
+    // `opennest_service --session-to-job in.pb out.json` shows how a session file is read.
+    if args.get(1).map(|a| a == "--session-to-job").unwrap_or(false) {
+        let (inp, out) = (args.get(2).expect("in.pb"), args.get(3).expect("out.json"));
+        let imp = session_import::session_to_job(&std::fs::read(inp).expect("cannot read the session"), &session_import::Opts::default())
+            .unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1) });
+        for w in &imp.warnings { eprintln!("warning: {w}"); }
+        std::fs::write(out, serde_json::to_vec_pretty(&imp.job).unwrap()).expect("cannot write");
+        println!("wrote {out}: {} parts, {} sheets", imp.job["parts"].as_array().map(|a| a.len()).unwrap_or(0), imp.job["sheets"].as_array().map(|a| a.len()).unwrap_or(0));
+        return;
+    }
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();

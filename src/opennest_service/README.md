@@ -39,11 +39,14 @@ session_cpp write and session_viewer reads):
   all others are parts;
 * a closed polyline inside another one is its hole (part hole / sheet keep-out), by containment;
 * one polyline = one copy; draw a part twice to nest two; the part id is the polyline's name;
+* outlines must not overlap in the drawing (containment decides what is a hole), as in any cut file;
 * the session's transforms are applied; z is dropped;
 * optional settings can travel in the file as a `Component` named `opennest` whose `json_data` holds
   `{"spacing": 10, "margin": 15, "params": {...}, "limits": {...}}`; the page's fields override them.
 
-`opennest_service --example-session out.pb` writes a reference file (`examples/clearance_session.pb`).
+`opennest_service --example-session out.pb` writes a reference file (`examples/clearance_session.pb`);
+`--job-to-session job.json out.pb` converts an `opennest.job/1` document (parts laid out in a row) and
+`--session-to-job in.pb out.json` shows how a session file is read.
 The result is `result.pb`, a session with one group per used sheet (outline, keep-outs, placed parts).
 
 ## Configuration (environment)

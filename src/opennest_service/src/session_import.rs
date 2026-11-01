@@ -270,7 +270,9 @@ pub fn session_to_job(bytes: &[u8], opts: &Opts) -> Result<Imported, String> {
 }
 
 /// An `opennest.job/1` document as a session file (`parts` and `sheets` groups, holes as nested
-/// polylines, qty / count as repeated polylines, settings in an `opennest` component).
+/// polylines, qty / count as repeated polylines, settings in an `opennest` component). Parts are
+/// laid out in a row and sheets in a row below them: in a job every ring is in its own coordinates,
+/// while a drawing's containment rule needs outlines that do not overlap.
 pub fn job_to_session(job: &Value) -> Result<Vec<u8>, String> {
     use session_rust::{Color, Point, Polyline as Pl, Session as S};
     let ring = |v: &Value| -> Option<Vec<[f64; 2]>> {
@@ -287,27 +289,45 @@ pub fn job_to_session(job: &Value) -> Result<Vec<u8>, String> {
         p.linecolor = Color::new(0.1, 0.1, 0.1, 1.0);
         p
     };
-    let name = job["name"].as_str().unwrap_or("opennest job");
-    let mut s = S::new(name);
-    let parts = s.add_group("parts");
+    let bbox = |r: &[[f64; 2]]| r.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+    let shift = |r: &[[f64; 2]], dx: f64, dy: f64| -> Vec<[f64; 2]> { r.iter().map(|p| [p[0] + dx, p[1] + dy]).collect() };
+    // (id, outer, holes) per copy
+    let mut part_items: Vec<(String, Vec<[f64; 2]>, Vec<Vec<[f64; 2]>>)> = Vec::new();
     for (i, p) in job["parts"].as_array().ok_or("job.parts missing")?.iter().enumerate() {
         let id = match &p["id"] { Value::String(t) => t.clone(), Value::Null => format!("part {i}"), other => other.to_string() };
         let outer = ring(&p["outer"]).ok_or_else(|| format!("parts[{i}].outer invalid"))?;
         let holes: Vec<Vec<[f64; 2]>> = p["holes"].as_array().map(|h| h.iter().filter_map(ring).collect()).unwrap_or_default();
-        for _ in 0..p["qty"].as_u64().unwrap_or(1).max(1) {
-            s.add_polyline(pl(&outer, &id), Some(&parts));
-            for h in &holes { s.add_polyline(pl(h, &format!("{id} hole")), Some(&parts)); }
-        }
+        for _ in 0..p["qty"].as_u64().unwrap_or(1).max(1) { part_items.push((id.clone(), outer.clone(), holes.clone())); }
     }
-    let sheets = s.add_group("sheets");
+    let mut sheet_items: Vec<(String, Vec<[f64; 2]>, Vec<Vec<[f64; 2]>>)> = Vec::new();
     for (i, sh) in job["sheets"].as_array().ok_or("job.sheets missing")?.iter().enumerate() {
         let id = match &sh["id"] { Value::String(t) => t.clone(), Value::Null => format!("sheet {i}"), other => other.to_string() };
         let outer = ring(&sh["outer"]).ok_or_else(|| format!("sheets[{i}].outer invalid"))?;
         let holes: Vec<Vec<[f64; 2]>> = sh["holes"].as_array().map(|h| h.iter().filter_map(ring).collect()).unwrap_or_default();
-        for _ in 0..sh["count"].as_u64().unwrap_or(1).max(1) {
-            s.add_polyline(pl(&outer, &id), Some(&sheets));
-            for h in &holes { s.add_polyline(pl(h, &format!("{id} keep-out")), Some(&sheets)); }
-        }
+        for _ in 0..sh["count"].as_u64().unwrap_or(1).max(1) { sheet_items.push((id.clone(), outer.clone(), holes.clone())); }
+    }
+    let widest = part_items.iter().chain(sheet_items.iter()).map(|(_, o, _)| { let b = bbox(o); b[2] - b[0] }).fold(1.0, f64::max);
+    let gap = 0.05 * widest;
+    let name = job["name"].as_str().unwrap_or("opennest job");
+    let mut s = S::new(name);
+    let parts = s.add_group("parts");
+    let (mut x, mut row_h) = (0.0, 0.0_f64);
+    for (id, outer, holes) in &part_items {
+        let b = bbox(outer);
+        let (dx, dy) = (x - b[0], -b[1]);
+        s.add_polyline(pl(&shift(outer, dx, dy), id), Some(&parts));
+        for h in holes { s.add_polyline(pl(&shift(h, dx, dy), &format!("{id} hole")), Some(&parts)); }
+        x += b[2] - b[0] + gap;
+        row_h = row_h.max(b[3] - b[1]);
+    }
+    let sheets = s.add_group("sheets");
+    let (mut x, y0) = (0.0, -(row_h + 4.0 * gap));
+    for (id, outer, holes) in &sheet_items {
+        let b = bbox(outer);
+        let (dx, dy) = (x - b[0], y0 - b[3]);
+        s.add_polyline(pl(&shift(outer, dx, dy), id), Some(&sheets));
+        for h in holes { s.add_polyline(pl(&shift(h, dx, dy), &format!("{id} keep-out")), Some(&sheets)); }
+        x += b[2] - b[0] + gap;
     }
     let mut settings = serde_json::Map::new();
     for k in ["spacing", "margin", "params", "limits"] {
